@@ -350,6 +350,7 @@ def test_empty_investigation_questions_block_before_pipeline_in_spanish(
         wizard.query_one(button, Button).press()
         error = wizard.query_one("#wiz-error", Static)
         await wait_for(pilot, lambda: "Preguntas que debe responder" in render(error))
+        await wait_for(pilot, lambda: app.focused is questions)
         assert current(wizard) == "confirm"
         assert "-invalid" in questions.classes
         assert app.focused is questions
