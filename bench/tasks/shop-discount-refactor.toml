@@ -1,0 +1,58 @@
+name = "shop-discount-refactor"
+suites = ["mini", "full"]
+fixture = "python_strong"
+prompt = "src/shop/pricing.py computes the same discount twice, in cart_total and invoice_total. Extract it into one function apply_discount(amount, percent) in the same module and use it in both places. Behaviour must not change."
+
+[request]
+type = "refactor"
+what = "Extract the duplicated discount maths into apply_discount(amount, percent)"
+why = "cart_total and invoice_total repeat the same rounding logic and drift apart on every change"
+where = "src/shop/pricing.py"
+tests = "cart_total and invoice_total return the same values as before; apply_discount exists"
+constraints = "cart_total and invoice_total return exactly the same values as before"
+out_of_scope = "the results of cart_total and invoice_total"
+
+[files]
+"src/shop/pricing.py" = '''
+def cart_total(prices: list[float], percent: float) -> float:
+    total = sum(prices)
+    return round(total - total * percent / 100, 2)
+
+
+def invoice_total(amount: float, percent: float, shipping: float) -> float:
+    discounted = round(amount - amount * percent / 100, 2)
+    return round(discounted + shipping, 2)
+'''
+
+[hidden]
+"tests/test_bench_pricing.py" = '''
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from shop.pricing import apply_discount, cart_total, invoice_total
+
+
+def test_behaviour_is_unchanged() -> None:
+    assert cart_total([10.0, 5.5], 10) == 13.95
+    assert invoice_total(100.0, 15, 4.99) == 89.99
+
+
+def test_helper() -> None:
+    assert apply_discount(200.0, 25) == 150.0
+'''
+
+[reference]
+"src/shop/pricing.py" = '''
+def apply_discount(amount: float, percent: float) -> float:
+    return round(amount - amount * percent / 100, 2)
+
+
+def cart_total(prices: list[float], percent: float) -> float:
+    return apply_discount(sum(prices), percent)
+
+
+def invoice_total(amount: float, percent: float, shipping: float) -> float:
+    return round(apply_discount(amount, percent) + shipping, 2)
+'''

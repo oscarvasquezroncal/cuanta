@@ -1,0 +1,13 @@
+{
+  "name": "claude-agent-forge",
+  "version": "0.4.0",
+  "description": "Bootstraps any repository with a wired code graph, a verified CLAUDE.md rulebook under a size ceiling, a 4-agent pipeline (architecture-analyst, senior, tester, docs-updater), and a loop specification written to what the repo can actually verify. Batched and resumable at any project size.",
+  "author": {
+    "name": "Oscar Vasquez Roncal",
+    "url": "https://github.com/oscarvasquezroncal"
+  },
+  "homepage": "https://github.com/oscarvasquezroncal/claude-agent-forge",
+  "repository": "https://github.com/oscarvasquezroncal/claude-agent-forge",
+  "license": "MIT",
+  "keywords": ["claude-code", "skill", "agents", "claude-md", "scaffolding", "developer-tools"]
+}

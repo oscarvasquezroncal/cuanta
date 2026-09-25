@@ -1,0 +1,23 @@
+#!/bin/sh
+message=${1-}
+[ -f "$message" ] || exit 0
+temporary=$(mktemp "${message}.cuanta.XXXXXX") || exit 0
+trap 'rm -f "$temporary"' 0
+if awk '
+    {
+        sub(/\r$/, "")
+        lower = tolower($0)
+        tool = "(^|[^[:alnum:]_])(claude|anthropic|codex|openai|chatgpt|opencode|copilot)([^[:alnum:]_]|$)"
+        if (lower ~ /^[[:space:]]*co-authored-by[[:space:]]*:/ && lower ~ tool) next
+        generator = "(^|[^[:alnum:]_])(ai|gemini|cursor|windsurf|aider|devin|codeium)([^[:alnum:]_]|$)"
+        if (lower ~ /generated[[:space:]]+with/ && (lower ~ tool || lower ~ generator)) next
+        if (lower ~ /^[[:space:]]*claude-session[[:space:]]*:/) next
+        if (lower ~ /claude\.ai\/code\/session_/) next
+        lines[++count] = $0
+        if ($0 !~ /^[[:space:]]*$/) last = count
+    }
+    END { for (i = 1; i <= last; i++) print lines[i] }
+' "$message" > "$temporary"; then
+    cat "$temporary" > "$message"
+fi
+exit 0

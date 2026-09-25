@@ -1,0 +1,18 @@
+cuanta
+every token, accounted for
+
+ /\_/\
+( ^.^ )
+ > ^ <
+Michi says meow
+version  0.2.0
+theme    dark
+brand: ginger
+accent: blush
+secondary: iris
+title: cream
+ok: catnip
+warn: amber
+err: hiss
+info: sky
+muted: fur

@@ -1,0 +1,9 @@
+version = 1
+
+[[package]]
+name = "fastapi"
+version = "0.115.2"
+
+[[package]]
+name = "pytest"
+version = "8.3.3"

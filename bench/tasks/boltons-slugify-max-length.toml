@@ -1,0 +1,59 @@
+name = "boltons-slugify-max-length"
+suites = ["full"]
+fixture = "boltons"
+prompt = "Add an optional max_length=None parameter to slugify() in boltons/strutils.py. When the slug is longer than max_length, cut it to at most max_length characters at a delimiter boundary: drop any partial word at the end and never end with the delimiter. If even the first word is longer than max_length, cut that word to max_length characters. Without max_length, slugify() must behave exactly as before."
+accept = "{python} -m pytest -q -p no:cacheprovider {hidden} tests/test_strutils.py"
+
+[source]
+url = "https://codeload.github.com/mahmoud/boltons/tar.gz/4e5faa3d7e4008d89e0d8bf1ea87b6d9a061a16d"
+sha256 = "f8d60b13dd49531d85a4e74736cdac4a46998f8480e6a37d6c2d8ce9c18a5951"
+
+[request]
+type = "feature"
+what = "Add max_length=None to boltons.strutils.slugify, cutting at a delimiter boundary"
+why = "Slugs end up in file names and URLs with length limits; callers truncate them by hand and leave half words and trailing delimiters"
+where = "boltons/strutils.py, slugify()"
+tests = "slugify('First post! Hi!!!!~1', max_length=12) == 'first_post'; tests/test_strutils.py still passes"
+out_of_scope = "every other function in strutils and the existing tests"
+
+[hidden]
+"tests/test_bench_slugify.py" = '''
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from boltons.strutils import slugify
+
+
+def test_default_is_unchanged() -> None:
+    assert slugify("First post! Hi!!!!~1    ") == "first_post_hi_1"
+    assert slugify("a b", max_length=100) == "a_b"
+
+
+def test_cut_at_a_delimiter_boundary() -> None:
+    assert slugify("First post! Hi!!!!~1", max_length=10) == "first_post"
+    assert slugify("First post! Hi!!!!~1", max_length=12) == "first_post"
+    assert slugify("First post! Hi!!!!~1", max_length=13) == "first_post_hi"
+    assert slugify("First post! Hi!!!!~1", max_length=11, delim="-") == "first-post"
+
+
+def test_long_first_word_is_cut() -> None:
+    assert slugify("Supercalifragilistic day", max_length=5) == "super"
+'''
+
+[[reference_edit]]
+path = "boltons/strutils.py"
+old = "def slugify(text, delim='_', lower=True, ascii=False):\n"
+new = "def slugify(text, delim='_', lower=True, ascii=False, max_length=None):\n"
+
+[[reference_edit]]
+path = "boltons/strutils.py"
+old = """    ret = delim.join(split_punct_ws(text)) or delim if text else ''
+    if ascii:"""
+new = """    ret = delim.join(split_punct_ws(text)) or delim if text else ''
+    if max_length is not None and len(ret) > max_length:
+        cut = ret[:max_length + 1]
+        head = cut.rsplit(delim, 1)[0] if delim in cut else ''
+        ret = head.rstrip(delim) or ret[:max_length]
+    if ascii:"""

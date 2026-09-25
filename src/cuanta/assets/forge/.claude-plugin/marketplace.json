@@ -1,0 +1,14 @@
+{
+  "name": "claude-agent-forge",
+  "owner": {
+    "name": "Oscar Vasquez Roncal",
+    "url": "https://github.com/oscarvasquezroncal"
+  },
+  "plugins": [
+    {
+      "name": "claude-agent-forge",
+      "source": "./",
+      "description": "Bootstraps any repo with a wired code graph, a verified CLAUDE.md rulebook under a size ceiling, a 4-agent pipeline (analyst, senior, tester, docs-updater), and a loop spec written to what the repo can actually verify. Batched and resumable at any project size."
+    }
+  ]
+}

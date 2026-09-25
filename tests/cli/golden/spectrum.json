@@ -1,0 +1,162 @@
+{
+  "audit": [],
+  "calibration": {},
+  "cost": {
+    "source": "reported by the engine",
+    "unpriced": [],
+    "value": 0.9
+  },
+  "imported": {},
+  "leaks": [
+    {
+      "agent": "tester",
+      "detail": "Bash result 60,000 bytes re-sent",
+      "kind": "amplification",
+      "subject": "pytest -vv",
+      "tokens": 15000
+    },
+    {
+      "agent": "tester",
+      "detail": "60,000 bytes of raw test output",
+      "kind": "test_output",
+      "subject": "pytest -vv",
+      "tokens": 14488
+    },
+    {
+      "agent": "main",
+      "detail": "Read result 16,000 bytes re-sent",
+      "kind": "amplification",
+      "subject": "src/app.py",
+      "tokens": 8000
+    },
+    {
+      "agent": "main",
+      "detail": "Read result 16,000 bytes re-sent",
+      "kind": "amplification",
+      "subject": "src/app.py",
+      "tokens": 4000
+    },
+    {
+      "agent": "main",
+      "detail": "read 2 times",
+      "kind": "repeated_read",
+      "subject": "src/app.py",
+      "tokens": 4000
+    }
+  ],
+  "overhead": {
+    "first_request_tokens": 27000,
+    "fixed_context_tokens": 27000,
+    "hooks": [],
+    "mcp_servers": [],
+    "plugins": [],
+    "startup": {
+      "first_request_ms": 0,
+      "first_request_output_tokens": 800,
+      "first_token_ms": null,
+      "prompt_to_request_ms": 0,
+      "session_setup_ms": 0,
+      "spawn_to_session_ms": null
+    },
+    "startup_ms": 0
+  },
+  "runs": [
+    "01KFIXTURERUN0000000000000"
+  ],
+  "selection": "run 01KFIXTURERUN0000000000000 \u00b7 mandate \u00b7 HU-007",
+  "source": "telemetry",
+  "suggestions": [
+    {
+      "action": "keep bulky output out of tester's context: route it through cuanta test / cuanta cat capsules",
+      "leak": "amplification"
+    },
+    {
+      "action": "use cuanta test: gateway output is bounded to one line per hairball",
+      "leak": "test_output"
+    },
+    {
+      "action": "keep bulky output out of main's context: route it through cuanta test / cuanta cat capsules",
+      "leak": "amplification"
+    },
+    {
+      "action": "reindex the graph (graphify update .) so main queries instead of re-reading src/app.py",
+      "leak": "repeated_read"
+    }
+  ],
+  "totals": {
+    "cache_read": 86000,
+    "cache_share": 0.8866,
+    "cache_write": 3500,
+    "cost_usd": 0.9,
+    "fresh_input": 7500,
+    "output": 1800,
+    "reasoning": 0,
+    "requests": 4,
+    "total": 98800
+  },
+  "tree": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [],
+                "label": "tool Read",
+                "share": 0.081,
+                "tokens": 8000
+              },
+              {
+                "children": [],
+                "label": "tool Edit",
+                "share": 0.0051,
+                "tokens": 500
+              },
+              {
+                "children": [],
+                "label": "file src/app.py",
+                "share": 0.086,
+                "tokens": 8500
+              }
+            ],
+            "label": "claude-opus",
+            "share": 0.8704,
+            "tokens": 86000
+          }
+        ],
+        "label": "main",
+        "share": 0.8704,
+        "tokens": 86000
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [],
+                "label": "tool Bash",
+                "share": 0.1518,
+                "tokens": 15000
+              }
+            ],
+            "label": "claude-sonnet",
+            "share": 0.1296,
+            "tokens": 12800
+          }
+        ],
+        "label": "tester",
+        "share": 0.1296,
+        "tokens": 12800
+      }
+    ],
+    "label": "run 01KFIXTURERUN0000000000000 \u00b7 mandate \u00b7 HU-007",
+    "share": 1.0,
+    "tokens": 98800
+  },
+  "utilization": {
+    "label": "heuristic v1",
+    "reason": "",
+    "useful_tokens": 23500,
+    "value": 0.2379
+  }
+}

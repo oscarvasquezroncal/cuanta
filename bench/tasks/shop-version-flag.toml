@@ -1,0 +1,44 @@
+name = "shop-version-flag"
+suites = ["mini", "full"]
+fixture = "python_strong"
+prompt = "The shop CLI in src/shop/cli.py only prints 'shop'. Change main so it accepts an optional argv list: with --version it prints 'shop 0.1.0' and returns 0; with no arguments it keeps printing 'shop' and returns 0."
+
+[request]
+type = "feature"
+what = "Add a --version flag to the shop CLI"
+why = "Support asks users for the version and there is no way to print it"
+where = "src/shop/cli.py"
+tests = "main(['--version']) prints 'shop 0.1.0'; main([]) still prints 'shop'"
+out_of_scope = "pyproject.toml and the package layout"
+
+[hidden]
+"tests/test_bench_version.py" = '''
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from shop.cli import main
+
+
+def test_version(capsys: pytest.CaptureFixture[str]) -> None:
+    main(["--version"])
+    assert capsys.readouterr().out.strip() == "shop 0.1.0"
+
+
+def test_default(capsys: pytest.CaptureFixture[str]) -> None:
+    main([])
+    assert capsys.readouterr().out.strip() == "shop"
+'''
+
+[reference]
+"src/shop/cli.py" = '''
+def main(argv: list[str] | None = None) -> int:
+    if argv and "--version" in argv:
+        print("shop 0.1.0")
+        return 0
+    print("shop")
+    return 0
+'''

@@ -1,0 +1,38 @@
+version = 1
+verified_on = "2026-09-23"
+sources = [
+    "https://code.claude.com/docs/en/model-config (aliases opus, sonnet, fable, haiku)",
+    "codex debug models --bundled, Codex CLI 0.156.1",
+    "opencode models --verbose, OpenCode 1.18.27",
+]
+note = "OpenCode models are placed by input price against these anchors; unknown models count as standard. Override any tier with cuanta models tier <model> <tier>."
+
+[tiers]
+frontier = ["fable", "gpt-6-astra"]
+premium = ["opus", "gpt-5.6-sol"]
+standard = ["sonnet", "gpt-5.6-terra"]
+economy = ["haiku", "gpt-5.6-luna"]
+
+[claude.models.fable]
+resolves = "claude-fable-5-1"
+display = "Fable 5.1"
+context = 1000000
+efforts = ["low", "medium", "high", "xhigh", "max"]
+
+[claude.models.opus]
+resolves = "claude-opus-5-5"
+display = "Opus 5.5"
+context = 1000000
+efforts = ["low", "medium", "high", "xhigh", "max"]
+
+[claude.models.sonnet]
+resolves = "claude-sonnet-5"
+display = "Sonnet 5"
+context = 1000000
+efforts = ["low", "medium", "high", "xhigh", "max"]
+
+[claude.models.haiku]
+resolves = "claude-haiku-4-5"
+display = "Haiku 4.5"
+context = 200000
+efforts = []

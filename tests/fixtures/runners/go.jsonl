@@ -1,0 +1,12 @@
+{"Time":"2026-01-01T00:00:00Z","Action":"start","Package":"github.com/acme/api/cart"}
+{"Time":"2026-01-01T00:00:00Z","Action":"run","Package":"github.com/acme/api/cart","Test":"TestTotal"}
+{"Time":"2026-01-01T00:00:00Z","Action":"output","Package":"github.com/acme/api/cart","Test":"TestTotal","Output":"=== RUN   TestTotal\n"}
+{"Time":"2026-01-01T00:00:00Z","Action":"output","Package":"github.com/acme/api/cart","Test":"TestTotal","Output":"    cart_test.go:14: expected 30, got 31\n"}
+{"Time":"2026-01-01T00:00:00Z","Action":"output","Package":"github.com/acme/api/cart","Test":"TestTotal","Output":"--- FAIL: TestTotal (0.00s)\n"}
+{"Time":"2026-01-01T00:00:00Z","Action":"fail","Package":"github.com/acme/api/cart","Test":"TestTotal","Elapsed":0}
+{"Time":"2026-01-01T00:00:00Z","Action":"run","Package":"github.com/acme/api/cart","Test":"TestEmpty"}
+{"Time":"2026-01-01T00:00:00Z","Action":"pass","Package":"github.com/acme/api/cart","Test":"TestEmpty","Elapsed":0}
+{"Time":"2026-01-01T00:00:00Z","Action":"run","Package":"github.com/acme/api/cart","Test":"TestSkip"}
+{"Time":"2026-01-01T00:00:00Z","Action":"skip","Package":"github.com/acme/api/cart","Test":"TestSkip","Elapsed":0}
+{"Time":"2026-01-01T00:00:00Z","Action":"fail","Package":"github.com/acme/api/cart","Elapsed":0.42}
+{"Time":"2026-01-01T00:00:00Z","Action":"pass","Package":"github.com/acme/api/user","Elapsed":0.1}

@@ -1,0 +1,33 @@
+selection    run 01KFIXTURERUN0000000000000 · mandate · HU-007
+total        98,800 tokens - 4 requests
+split        fresh 7.5K - cache read 86.0K - cache write 3.5K - output 1.8K - reasoning 0
+cost         $0.9000 API-equivalent (reported by the engine)
+cache share  88.7%
+utilization  23.8% (heuristic v1)
+source       telemetry
+
+== session overhead ==
+the first request carried 27,000 tokens of context
+
+run 01KFIXTURERUN0000000000000 · mandate · HU-007  98.8K · 100.0%
+  - main  86.0K · 87.0%
+    - claude-opus  86.0K · 87.0%
+      - tool Read  8.0K · 8.1%
+      - tool Edit  500 · 0.5%
+      - file src/app.py  8.5K · 8.6%
+  - tester  12.8K · 13.0%
+    - claude-sonnet  12.8K · 13.0%
+      - tool Bash  15.0K · 15.2%
+
+leaks
+kind           subject     agent   tokens
+-------------  ----------  ------  ------
+amplification  pytest -vv  tester   15.0K
+test_output    pytest -vv  tester   14.5K
+amplification  src/app.py  main      8.0K
+amplification  src/app.py  main      4.0K
+repeated_read  src/app.py  main      4.0K
+> keep bulky output out of tester's context: route it through cuanta test / cuanta cat capsules
+> use cuanta test: gateway output is bounded to one line per hairball
+> keep bulky output out of main's context: route it through cuanta test / cuanta cat capsules
+> reindex the graph (graphify update .) so main queries instead of re-reading src/app.py

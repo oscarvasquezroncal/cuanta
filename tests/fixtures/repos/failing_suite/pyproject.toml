@@ -1,0 +1,8 @@
+[project]
+name = "failing"
+version = "0.0.1"
+dependencies = ["pytest", "mypy"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
