@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +12,15 @@ import pytest
 from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
 from cuanta.adapters.system.process_runner import SubprocessRunner
 from cuanta.bootstrap import Container
+from cuanta.domain.graph_policy import GRAPHLESS_OVERRIDE, graphless_prompt
 from cuanta.domain.mandate import REQUEST_MARKER, extract_block
 from cuanta.ports.ledger import EventQuery
+from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner, copy_repo
 from tests.support import FIXTURES, invoke
 
 FAKE = FIXTURES / "fake_claude.py"
+pytestmark = pytest.mark.xdist_group("local-listener")
 TEMPLATE = (
     Path(__file__).parents[2]
     / "src/cuanta/assets/forge/skills/agent-system-init/templates/MANDATE_TEMPLATE.template.md"
@@ -27,13 +31,40 @@ def fake_bin() -> str:
     return f'"{sys.executable}" "{FAKE}"'
 
 
+@pytest.fixture(params=[True, False], ids=["graph-cli", "graph-none"])
+def graph_available(request: pytest.FixtureRequest) -> bool:
+    return bool(request.param)
+
+
 @pytest.fixture
-def env(monkeypatch: pytest.MonkeyPatch, fake_runner: FakeRunner) -> dict[str, str]:
+def env(
+    monkeypatch: pytest.MonkeyPatch, fake_runner: FakeRunner, graph_available: bool
+) -> dict[str, str]:
     original = Container.for_project
+    runner = SubprocessRunner()
+    original_run = runner.run
+
+    def which(name: str) -> str | None:
+        return "/fixture/graphify" if name == "graphify" and graph_available else None
+
+    def run(
+        args: Sequence[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> Completed:
+        if args and args[0] == "graphify":
+            assert graph_available
+            assert list(args) == ["graphify", "--help"]
+            return Completed(0, "Usage: graphify", "")
+        return original_run(args, cwd=cwd, env=env, timeout=timeout)
+
+    monkeypatch.setattr(runner, "which", which)
+    monkeypatch.setattr(runner, "run", run)
 
     def build(cls: type[Container], project: Path) -> Container:
         container = original(project)
-        container.runner = SubprocessRunner()
+        container.runner = runner
         return container
 
     monkeypatch.setattr(Container, "for_project", classmethod(build))
@@ -55,7 +86,14 @@ def _configure(root: Path) -> None:
     config.write_text(f'[test]\nrunner = "pytest"\ncommand = "{command}"\n', encoding="utf-8")
 
 
-def test_init_test_pounce_spectrum(tmp_path: Path, env: dict[str, str]) -> None:
+def _init(root: Path, env: dict[str, str]) -> None:
+    result = invoke(["init", str(root), "--yes", "--json"], env=env)
+    assert result.exit_code == 0, result.stdout + result.stderr
+
+
+def test_init_test_pounce_spectrum(
+    tmp_path: Path, env: dict[str, str], graph_available: bool
+) -> None:
     root = copy_repo("bugfix", tmp_path)
     project = ["--project", str(root)]
     init = invoke(["init", str(root), "--yes", "--json"], env=env)
@@ -71,7 +109,11 @@ def test_init_test_pounce_spectrum(tmp_path: Path, env: dict[str, str]) -> None:
     assert dry.exit_code == 0, dry.stdout
     composed = json.loads(dry.stdout)
     block = extract_block((root / "docs" / "MANDATE_TEMPLATE.md").read_text(encoding="utf-8"))
-    assert composed["prompt"].startswith(block[: block.index(REQUEST_MARKER)])
+    prefix = block[: block.index(REQUEST_MARKER)]
+    if not graph_available:
+        prefix = graphless_prompt(prefix)
+        assert "graphify" not in composed["prompt"].lower()
+    assert composed["prompt"].startswith(prefix)
     assert "cuanta cat cap:" in composed["prompt"]
     assert composed["command"][composed["command"].index("--allowedTools") + 1].startswith(
         "Read,Grep"
@@ -183,7 +225,7 @@ def test_a_200_kb_evidence_file_launches_through_stdin_and_a_capsule(
 ) -> None:
     root = copy_repo("bugfix", tmp_path)
     project = ["--project", str(root)]
-    assert invoke(["init", str(root), "--yes", "--json"], env=env).exit_code == 0
+    _init(root, env)
     log = tmp_path / "build.log"
     lines = [
         f"line {index:06d} ERROR something failed in module_{index % 97}" for index in range(4_500)
@@ -244,17 +286,24 @@ def _pounce(root: Path, env: dict[str, str], *extra: str) -> dict[str, Any]:
 
 
 def test_routed_mandate_passes_agents_by_file_and_audits_each_agent(
-    tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    graph_available: bool,
 ) -> None:
     root = copy_repo("bugfix", tmp_path)
-    assert invoke(["init", str(root), "--yes", "--json"], env=env).exit_code == 0
+    _init(root, env)
     sent = tmp_path / "agents.json"
     monkeypatch.setenv("FAKE_CLAUDE_AGENTS_OUT", str(sent))
     run = _pounce(root, {**env, "FAKE_CLAUDE_AGENTS_OUT": str(sent)})
     agents = json.loads(sent.read_text(encoding="utf-8"))
     assert set(agents) == {"architecture-analyst", "python-senior", "tester", "docs-updater"}
     installed = (root / ".claude" / "agents" / "tester.md").read_text(encoding="utf-8")
-    assert agents["tester"]["prompt"] in installed
+    tester_prompt = agents["tester"]["prompt"]
+    if not graph_available:
+        assert tester_prompt.startswith(GRAPHLESS_OVERRIDE + "\n\n")
+        tester_prompt = tester_prompt.removeprefix(GRAPHLESS_OVERRIDE + "\n\n")
+    assert tester_prompt in installed
     assert agents["python-senior"]["model"] == "claude-opus-5-5"
     assert agents["docs-updater"]["model"] == "claude-haiku-4-5"
     audit = {row["agent"]: row for row in run["audit"]}
@@ -270,7 +319,7 @@ def test_audit_explains_a_model_that_did_not_apply(
     tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = copy_repo("bugfix", tmp_path)
-    assert invoke(["init", str(root), "--yes", "--json"], env=env).exit_code == 0
+    _init(root, env)
     monkeypatch.setenv("FAKE_CLAUDE_AGENT_MODEL", "claude-haiku-4-5")
     monkeypatch.setenv("CLAUDE_CODE_SUBAGENT_MODEL", "haiku")
     run = _pounce(root, {**env, "FAKE_CLAUDE_AGENT_MODEL": "claude-haiku-4-5"})
@@ -281,7 +330,7 @@ def test_audit_explains_a_model_that_did_not_apply(
 
 def test_routing_off_sends_no_agents(tmp_path: Path, env: dict[str, str]) -> None:
     root = copy_repo("bugfix", tmp_path)
-    assert invoke(["init", str(root), "--yes", "--json"], env=env).exit_code == 0
+    _init(root, env)
     dry = invoke(
         [
             "pounce",
@@ -331,9 +380,11 @@ def test_routing_off_sends_no_agents(tmp_path: Path, env: dict[str, str]) -> Non
     assert any("senior" in line for line in routed["team"])
 
 
-def test_depth_caps_the_spend_and_states_a_read_budget(tmp_path: Path, env: dict[str, str]) -> None:
+def test_depth_caps_the_spend_and_states_a_read_budget(
+    tmp_path: Path, env: dict[str, str], graph_available: bool
+) -> None:
     root = copy_repo("bugfix", tmp_path)
-    assert invoke(["init", str(root), "--yes", "--json"], env=env).exit_code == 0
+    _init(root, env)
     dry = invoke(
         [
             "pounce",
@@ -366,7 +417,13 @@ def test_depth_caps_the_spend_and_states_a_read_budget(tmp_path: Path, env: dict
     assert "Agent,Task" in command
     assert "--agents" not in command
     assert "ONCE" not in prompt
-    assert "You are the codebase analyst for this repository" not in command
+    if graph_available:
+        assert "You are architecture-analyst." in command
+        assert "You are the codebase analyst for this repository" not in command
+    else:
+        assert "You are the codebase analyst for this repository" in command
+        assert "You are architecture-analyst." not in command
+        assert "graphify" not in command.lower()
     assert "Deliverable: a written report" in prompt
     assert "regression fixture" not in prompt
     bad = invoke(["pounce", "--depth", "huge", "--dry-run", "--project", str(root)], env=env)
@@ -387,7 +444,7 @@ def test_two_dry_runs_produce_byte_identical_launch_files(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     root = copy_repo("bugfix", tmp_path)
-    assert invoke(["init", str(root), "--yes", "--json"], env=env).exit_code == 0
+    _init(root, env)
     argv = [
         "pounce",
         "--type",
