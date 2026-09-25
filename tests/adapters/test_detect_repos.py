@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -117,8 +118,15 @@ def test_graph_mode_priority(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("returncode", [0, 1])
+@pytest.mark.parametrize(
+    ("platform", "separator"), [("win32", "; "), ("linux", " && "), ("darwin", " && ")]
+)
 def test_graphify_trampoline_is_broken_even_with_graph_directory(
-    tmp_path: Path, returncode: int
+    tmp_path: Path,
+    returncode: int,
+    platform: str,
+    separator: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = copy_repo("python_strong", tmp_path)
     (root / "graphify-out").mkdir()
@@ -133,11 +141,13 @@ def test_graphify_trampoline_is_broken_even_with_graph_directory(
     detection = _detector(root, runner).run(with_engines=False)
     assert detection.graph_mode is GraphMode.BROKEN
     assert runner.calls == [("graphify", "--help")]
+    monkeypatch.setattr(sys, "platform", platform)
     check = graph_check(detection)[0]
     assert check.status is Status.FAIL
-    assert "uv self update" in check.fix
-    assert "uv tool upgrade --all" in check.fix
-    assert "uv tool uninstall graphifyy; uv tool install graphifyy" in check.fix
+    assert check.fix == (
+        f"uv self update{separator}uv tool upgrade --all; or reinstall: "
+        f"uv tool uninstall graphifyy{separator}uv tool install graphifyy"
+    )
 
 
 def test_nonzero_graphify_help_is_broken(tmp_path: Path) -> None:
