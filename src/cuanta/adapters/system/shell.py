@@ -105,20 +105,29 @@ def _posix_table() -> dict[int, tuple[int, str]]:
     import subprocess
 
     try:
-        completed = subprocess.run(
+        with subprocess.Popen(
             ["ps", "-A", "-o", "pid=,ppid=,comm="],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        ) as probe:
+            try:
+                output, _ = probe.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                probe.kill()
+                probe.communicate()
+                return {}
+        if probe.returncode:
+            return {}
+    except OSError:
         return {}
     table: dict[int, tuple[int, str]] = {}
-    for line in completed.stdout.splitlines():
+    for line in output.splitlines():
         parts = line.split(None, 2)
         if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
-            table[int(parts[0])] = (int(parts[1]), Path(parts[2]).name)
+            pid = int(parts[0])
+            if pid != probe.pid:
+                table[pid] = (int(parts[1]), Path(parts[2]).name)
     return table
 
 
