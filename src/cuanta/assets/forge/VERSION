@@ -1,0 +1,5 @@
+version=0.4.0
+base=0.3.1
+commit=8b8a49037fc6a52bb09494196ca4b1c79e80c140
+source=https://github.com/oscarvasquezroncal/claude-agent-forge
+patch=cuanta v0.4 (cuanta handoff, gateway tester, bounded failure detail, RUN_LOG consumption line)

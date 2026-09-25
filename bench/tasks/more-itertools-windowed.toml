@@ -1,0 +1,52 @@
+name = "more-itertools-windowed"
+suites = ["full"]
+fixture = "more-itertools"
+prompt = "In this repo, list(windowed([1, 2, 3, 4, 5, 6, 7], 3, step=7)) in more_itertools/more.py returns [(1, 2, 3), (None, None, None)] instead of [(1, 2, 3)]: when step is larger than n, windowed() emits a window made only of fill values. Fix it without changing any other result of windowed()."
+accept = "{python} -m pytest -q -p no:cacheprovider {hidden} tests/test_more.py -k windowed"
+
+[source]
+url = "https://codeload.github.com/more-itertools/more-itertools/tar.gz/b5e3886a37209bb880f17d82fbf4ba00ece0e41e"
+sha256 = "1fe5788d36b4a5ff77565c9f96289b6f33581b0166add5ada5603789b17d65cf"
+
+[[edit]]
+path = "more_itertools/more.py"
+old = "    padding = (fillvalue,) * (n - 1 if step >= n else step - 1)\n"
+new = "    padding = (fillvalue,) * (step - 1)\n"
+
+[request]
+type = "bug"
+what = "Stop windowed() from yielding a window of only fill values when step > n"
+why = "list(windowed([1, 2, 3, 4, 5, 6, 7], 3, step=7)) returns [(1, 2, 3), (None, None, None)]; tests/test_more.py::WindowedTests::test_step fails"
+where = "more_itertools/more.py, windowed()"
+tests = "tests/test_more.py -k windowed passes"
+out_of_scope = "the tests and every other function"
+
+[hidden]
+"tests/test_bench_windowed.py" = '''
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from more_itertools import windowed
+
+
+def test_no_window_of_fill_values() -> None:
+    assert list(windowed([1, 2, 3, 4, 5, 6, 7], 3, step=7)) == [(1, 2, 3)]
+    assert list(windowed([1, 2, 3, 4, 5, 6, 7], 2, step=9)) == [(1, 2)]
+
+
+def test_other_results_are_unchanged() -> None:
+    assert list(windowed([1, 2, 3, 4, 5, 6, 7], 3, step=5)) == [(1, 2, 3), (6, 7, None)]
+    assert list(windowed([1, 2, 3, 4, 5, 6], 3, fillvalue="!", step=2)) == [
+        (1, 2, 3),
+        (3, 4, 5),
+        (5, 6, "!"),
+    ]
+    assert list(windowed([1, 2, 3], 4)) == [(1, 2, 3, None)]
+'''
+
+[[reference_edit]]
+path = "more_itertools/more.py"
+old = "    padding = (fillvalue,) * (step - 1)\n"
+new = "    padding = (fillvalue,) * (n - 1 if step >= n else step - 1)\n"

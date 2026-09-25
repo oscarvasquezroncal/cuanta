@@ -1,0 +1,47 @@
+name = "calc-divide"
+suites = ["mini", "full"]
+fixture = "bugfix"
+prompt = "In this repo, divide() in src/calc/ops.py crashes with ZeroDivisionError when the divisor is 0. Make divide(a, 0) raise ValueError with the message 'division by zero' instead, and keep every other result unchanged."
+
+[request]
+type = "bug"
+what = "Make divide() raise ValueError('division by zero') for a zero divisor"
+why = "divide(1, 0) raises ZeroDivisionError from deep inside ops.py; callers expect ValueError"
+where = "src/calc/ops.py"
+tests = "divide(1, 0) raises ValueError('division by zero'); divide(6, 3) is still 2.0"
+out_of_scope = "add() and the tests"
+
+[files]
+"src/calc/ops.py" = '''
+def divide(left: float, right: float) -> float:
+    return left / right
+'''
+
+[hidden]
+"tests/test_bench_divide.py" = '''
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from calc.ops import divide
+
+
+def test_zero_divisor() -> None:
+    with pytest.raises(ValueError, match="division by zero"):
+        divide(1, 0)
+
+
+def test_regular() -> None:
+    assert divide(6, 3) == 2.0
+'''
+
+[reference]
+"src/calc/ops.py" = '''
+def divide(left: float, right: float) -> float:
+    if right == 0:
+        raise ValueError("division by zero")
+    return left / right
+'''

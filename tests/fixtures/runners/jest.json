@@ -1,0 +1,14 @@
+{"numFailedTestSuites":1,"numFailedTests":3,"numPassedTestSuites":1,"numPassedTests":4,"numPendingTests":1,"numRuntimeErrorTestSuites":0,"numTodoTests":0,"numTotalTests":8,"success":false,
+"testResults":[
+ {"name":"/repo/src/sum.test.js","status":"failed","startTime":1000,"endTime":1450,"message":"",
+  "assertionResults":[
+   {"fullName":"sum adds 1 + 2","status":"failed","title":"adds 1 + 2","failureMessages":["Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 3\nReceived: 4\n    at Object.<anonymous> (/repo/src/sum.test.js:5:17)\n    at Promise.then.completed (/repo/node_modules/jest-circus/build/utils.js:298:28)"]},
+   {"fullName":"sum adds 2 + 2","status":"failed","title":"adds 2 + 2","failureMessages":["Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 4\nReceived: 5\n    at Object.<anonymous> (/repo/src/sum.test.js:9:17)"]},
+   {"fullName":"sum passes","status":"passed","title":"passes","failureMessages":[]}
+  ]},
+ {"name":"/repo/src/user.test.js","status":"failed","startTime":1000,"endTime":1200,"message":"",
+  "assertionResults":[
+   {"fullName":"user loads","status":"failed","title":"loads","failureMessages":["TypeError: Cannot read properties of undefined (reading 'id')\n    at loadUser (/repo/src/user.js:12:20)\n    at Object.<anonymous> (/repo/src/user.test.js:4:5)"]},
+   {"fullName":"user ok","status":"passed","title":"ok","failureMessages":[]}
+  ]}
+]}

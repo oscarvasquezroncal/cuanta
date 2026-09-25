@@ -1,0 +1,1009 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "cuanta.run_id",
+      "value": {
+       "stringValue": "01TESTRUN"
+      }
+     },
+     {
+      "key": "cuanta.project",
+      "value": {
+       "stringValue": "live"
+      }
+     },
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "amd64"
+      }
+     },
+     {
+      "key": "os.type",
+      "value": {
+       "stringValue": "windows"
+      }
+     },
+     {
+      "key": "os.version",
+      "value": {
+       "stringValue": "10.0.22631"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.280"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events",
+      "version": "2.1.280"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1790136945528000000",
+       "observedTimeUnixNano": "1790136945528000000",
+       "body": {
+        "stringValue": "claude_code.user_prompt"
+       },
+       "attributes": [
+        {
+         "key": "cuanta.run_id",
+         "value": {
+          "stringValue": "01TESTRUN"
+         }
+        },
+        {
+         "key": "cuanta.project",
+         "value": {
+          "stringValue": "live"
+         }
+        },
+        {
+         "key": "user.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "a6669b50-caa6-42f5-a686-3f853bb30cf4"
+         }
+        },
+        {
+         "key": "organization.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_uuid",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "mingw64"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "user_prompt"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-23T04:15:45.528Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 25
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "2d654909-e6a0-43e2-9ed3-8c137e496441"
+         }
+        },
+        {
+         "key": "prompt_length",
+         "value": {
+          "stringValue": "70"
+         }
+        },
+        {
+         "key": "prompt",
+         "value": {
+          "stringValue": "<REDACTED>"
+         }
+        },
+        {
+         "key": "message.uuid",
+         "value": {
+          "stringValue": "ef2134c3-6a4b-4052-9a6b-0fcc37d91dae"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 1,
+       "traceId": "0af7651916cd43dd8448eb211c80319c",
+       "spanId": "b7ad6b7169203331"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "cuanta.run_id",
+      "value": {
+       "stringValue": "01TESTRUN"
+      }
+     },
+     {
+      "key": "cuanta.project",
+      "value": {
+       "stringValue": "live"
+      }
+     },
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "amd64"
+      }
+     },
+     {
+      "key": "os.type",
+      "value": {
+       "stringValue": "windows"
+      }
+     },
+     {
+      "key": "os.version",
+      "value": {
+       "stringValue": "10.0.22631"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.280"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events",
+      "version": "2.1.280"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1790136949526000000",
+       "observedTimeUnixNano": "1790136949526000000",
+       "body": {
+        "stringValue": "claude_code.api_request"
+       },
+       "attributes": [
+        {
+         "key": "cuanta.run_id",
+         "value": {
+          "stringValue": "01TESTRUN"
+         }
+        },
+        {
+         "key": "cuanta.project",
+         "value": {
+          "stringValue": "live"
+         }
+        },
+        {
+         "key": "user.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "a6669b50-caa6-42f5-a686-3f853bb30cf4"
+         }
+        },
+        {
+         "key": "organization.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_uuid",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "mingw64"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "api_request"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-23T04:15:49.526Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 30
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "2d654909-e6a0-43e2-9ed3-8c137e496441"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-4-5-20251001"
+         }
+        },
+        {
+         "key": "input_tokens",
+         "value": {
+          "intValue": 10
+         }
+        },
+        {
+         "key": "output_tokens",
+         "value": {
+          "intValue": 264
+         }
+        },
+        {
+         "key": "cache_read_tokens",
+         "value": {
+          "intValue": 15034
+         }
+        },
+        {
+         "key": "cache_creation_tokens",
+         "value": {
+          "intValue": 10525
+         }
+        },
+        {
+         "key": "cost_usd",
+         "value": {
+          "doubleValue": 0.0238834
+         }
+        },
+        {
+         "key": "cost_usd_micros",
+         "value": {
+          "intValue": 23883
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "intValue": 3431
+         }
+        },
+        {
+         "key": "ttft_ms",
+         "value": {
+          "intValue": 819
+         }
+        },
+        {
+         "key": "request_id",
+         "value": {
+          "stringValue": "req_011CfKivbXqLFVn4ofXqyV71"
+         }
+        },
+        {
+         "key": "client_request_id",
+         "value": {
+          "stringValue": "0d2b4402-2a29-4663-96f1-56fe8f489ab1"
+         }
+        },
+        {
+         "key": "speed",
+         "value": {
+          "stringValue": "normal"
+         }
+        },
+        {
+         "key": "query_source",
+         "value": {
+          "stringValue": "sdk"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 1,
+       "traceId": "0af7651916cd43dd8448eb211c80319c",
+       "spanId": "b7ad6b7169203331"
+      },
+      {
+       "timeUnixNano": "1790136949862000000",
+       "observedTimeUnixNano": "1790136949862000000",
+       "body": {
+        "stringValue": "claude_code.tool_decision"
+       },
+       "attributes": [
+        {
+         "key": "cuanta.run_id",
+         "value": {
+          "stringValue": "01TESTRUN"
+         }
+        },
+        {
+         "key": "cuanta.project",
+         "value": {
+          "stringValue": "live"
+         }
+        },
+        {
+         "key": "user.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "a6669b50-caa6-42f5-a686-3f853bb30cf4"
+         }
+        },
+        {
+         "key": "organization.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_uuid",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "mingw64"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "tool_decision"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-23T04:15:49.862Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 32
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "2d654909-e6a0-43e2-9ed3-8c137e496441"
+         }
+        },
+        {
+         "key": "decision",
+         "value": {
+          "stringValue": "accept"
+         }
+        },
+        {
+         "key": "source",
+         "value": {
+          "stringValue": "config"
+         }
+        },
+        {
+         "key": "tool_name",
+         "value": {
+          "stringValue": "Read"
+         }
+        },
+        {
+         "key": "tool_use_id",
+         "value": {
+          "stringValue": "toolu_01TBD1Tv49gnuQqpdxDK5VE5"
+         }
+        },
+        {
+         "key": "tool_source",
+         "value": {
+          "stringValue": "builtin"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 1,
+       "traceId": "0af7651916cd43dd8448eb211c80319c",
+       "spanId": "b7ad6b7169203331"
+      },
+      {
+       "timeUnixNano": "1790136949867000000",
+       "observedTimeUnixNano": "1790136949867000000",
+       "body": {
+        "stringValue": "claude_code.tool_result"
+       },
+       "attributes": [
+        {
+         "key": "cuanta.run_id",
+         "value": {
+          "stringValue": "01TESTRUN"
+         }
+        },
+        {
+         "key": "cuanta.project",
+         "value": {
+          "stringValue": "live"
+         }
+        },
+        {
+         "key": "user.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "a6669b50-caa6-42f5-a686-3f853bb30cf4"
+         }
+        },
+        {
+         "key": "organization.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_uuid",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "mingw64"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "tool_result"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-23T04:15:49.867Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 33
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "2d654909-e6a0-43e2-9ed3-8c137e496441"
+         }
+        },
+        {
+         "key": "tool_name",
+         "value": {
+          "stringValue": "Read"
+         }
+        },
+        {
+         "key": "tool_use_id",
+         "value": {
+          "stringValue": "toolu_01TBD1Tv49gnuQqpdxDK5VE5"
+         }
+        },
+        {
+         "key": "success",
+         "value": {
+          "stringValue": "true"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "4"
+         }
+        },
+        {
+         "key": "tool_input",
+         "value": {
+          "stringValue": "{\"file_path\":\"/work/live/hello.txt\"}"
+         }
+        },
+        {
+         "key": "tool_input_size_bytes",
+         "value": {
+          "stringValue": "166"
+         }
+        },
+        {
+         "key": "tool_result_size_bytes",
+         "value": {
+          "stringValue": "22"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 1,
+       "traceId": "0af7651916cd43dd8448eb211c80319c",
+       "spanId": "b7ad6b7169203331"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "cuanta.run_id",
+      "value": {
+       "stringValue": "01TESTRUN"
+      }
+     },
+     {
+      "key": "cuanta.project",
+      "value": {
+       "stringValue": "live"
+      }
+     },
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "amd64"
+      }
+     },
+     {
+      "key": "os.type",
+      "value": {
+       "stringValue": "windows"
+      }
+     },
+     {
+      "key": "os.version",
+      "value": {
+       "stringValue": "10.0.22631"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.280"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events",
+      "version": "2.1.280"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1790136951826000000",
+       "observedTimeUnixNano": "1790136951826000000",
+       "body": {
+        "stringValue": "claude_code.api_request"
+       },
+       "attributes": [
+        {
+         "key": "cuanta.run_id",
+         "value": {
+          "stringValue": "01TESTRUN"
+         }
+        },
+        {
+         "key": "cuanta.project",
+         "value": {
+          "stringValue": "live"
+         }
+        },
+        {
+         "key": "user.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "a6669b50-caa6-42f5-a686-3f853bb30cf4"
+         }
+        },
+        {
+         "key": "organization.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_uuid",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "mingw64"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "api_request"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-23T04:15:51.826Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 36
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "2d654909-e6a0-43e2-9ed3-8c137e496441"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-4-5-20251001"
+         }
+        },
+        {
+         "key": "input_tokens",
+         "value": {
+          "intValue": 8
+         }
+        },
+        {
+         "key": "output_tokens",
+         "value": {
+          "intValue": 73
+         }
+        },
+        {
+         "key": "cache_read_tokens",
+         "value": {
+          "intValue": 25559
+         }
+        },
+        {
+         "key": "cache_creation_tokens",
+         "value": {
+          "intValue": 1155
+         }
+        },
+        {
+         "key": "cost_usd",
+         "value": {
+          "doubleValue": 0.0052388999999999995
+         }
+        },
+        {
+         "key": "cost_usd_micros",
+         "value": {
+          "intValue": 5239
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "intValue": 1543
+         }
+        },
+        {
+         "key": "ttft_ms",
+         "value": {
+          "intValue": 557
+         }
+        },
+        {
+         "key": "request_id",
+         "value": {
+          "stringValue": "req_011CfKivuMtPP2kCw3uRPfYx"
+         }
+        },
+        {
+         "key": "client_request_id",
+         "value": {
+          "stringValue": "a6a3ec1f-4a50-4edb-aaf2-9b9449327f98"
+         }
+        },
+        {
+         "key": "speed",
+         "value": {
+          "stringValue": "normal"
+         }
+        },
+        {
+         "key": "query_source",
+         "value": {
+          "stringValue": "sdk"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 1,
+       "traceId": "0af7651916cd43dd8448eb211c80319c",
+       "spanId": "b7ad6b7169203331"
+      },
+      {
+       "timeUnixNano": "1790136951826000000",
+       "observedTimeUnixNano": "1790136951826000000",
+       "body": {
+        "stringValue": "claude_code.assistant_response"
+       },
+       "attributes": [
+        {
+         "key": "cuanta.run_id",
+         "value": {
+          "stringValue": "01TESTRUN"
+         }
+        },
+        {
+         "key": "cuanta.project",
+         "value": {
+          "stringValue": "live"
+         }
+        },
+        {
+         "key": "user.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "a6669b50-caa6-42f5-a686-3f853bb30cf4"
+         }
+        },
+        {
+         "key": "organization.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_uuid",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "mingw64"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "assistant_response"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-23T04:15:51.826Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 37
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "2d654909-e6a0-43e2-9ed3-8c137e496441"
+         }
+        },
+        {
+         "key": "response_length",
+         "value": {
+          "intValue": 17
+         }
+        },
+        {
+         "key": "response",
+         "value": {
+          "stringValue": "<REDACTED>"
+         }
+        },
+        {
+         "key": "request_id",
+         "value": {
+          "stringValue": "req_011CfKivuMtPP2kCw3uRPfYx"
+         }
+        },
+        {
+         "key": "message.uuid",
+         "value": {
+          "stringValue": "44f322ad-b5c3-4205-8c3c-4d8d630320e1"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-4-5-20251001"
+         }
+        },
+        {
+         "key": "query_source",
+         "value": {
+          "stringValue": "sdk"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0,
+       "flags": 1,
+       "traceId": "0af7651916cd43dd8448eb211c80319c",
+       "spanId": "b7ad6b7169203331"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

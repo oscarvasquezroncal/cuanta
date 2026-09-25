@@ -1,0 +1,46 @@
+name = "calc-mean"
+suites = ["mini", "full"]
+fixture = "bugfix"
+prompt = "Add a function mean(values) to src/calc/__init__.py that returns the arithmetic mean of a list of numbers as a float and raises ValueError when the list is empty. Keep add() as it is apart from any obvious bug."
+
+[request]
+type = "feature"
+what = "Add mean(values: list[float]) -> float to the calc package"
+why = "Reports need the average of a list of numbers; there is no helper for it"
+where = "src/calc/__init__.py"
+tests = "mean([1, 2, 3]) == 2.0 and mean([]) raises ValueError"
+out_of_scope = "the existing tests"
+
+[hidden]
+"tests/test_bench_mean.py" = '''
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from calc import mean
+
+
+def test_mean() -> None:
+    assert mean([1, 2, 3]) == 2.0
+    assert mean([2.5]) == 2.5
+
+
+def test_empty() -> None:
+    with pytest.raises(ValueError):
+        mean([])
+'''
+
+[reference]
+"src/calc/__init__.py" = '''
+def add(left: int, right: int) -> int:
+    return left + right
+
+
+def mean(values: list[float]) -> float:
+    if not values:
+        raise ValueError("mean of an empty list")
+    return sum(values) / len(values)
+'''

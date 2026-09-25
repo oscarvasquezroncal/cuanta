@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest" errors="1" failures="1" skipped="1" tests="5" time="0.321">
+<testcase classname="tests.test_api" name="test_get" time="0.01"/>
+<testcase classname="tests.test_api" name="test_post" time="0.01"><failure message="assert 200 == 404">def test_post():
+&gt;       assert client.post().status == 404
+E       assert 200 == 404
+
+tests/test_api.py:9: AssertionError</failure></testcase>
+<testcase classname="tests.test_api" name="test_db" time="0.01"><error message="failed on setup with &quot;ConnectionError: refused at 0x7f3a2c&quot;">conftest.py:4: ConnectionError</error></testcase>
+<testcase classname="tests.test_api" name="test_skip" time="0.0"><skipped message="later"/></testcase>
+<testcase classname="tests.test_api" name="test_ok" time="0.01"/>
+</testsuite></testsuites>

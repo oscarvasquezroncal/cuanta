@@ -1,0 +1,1397 @@
+Screen {
+    background: $background;
+    color: $foreground;
+}
+
+#header {
+    height: 6;
+    padding: 0 1;
+    background: $surface;
+    border-bottom: solid $border;
+}
+
+#header-michi {
+    margin-right: 2;
+}
+
+#brand {
+    width: 30;
+    padding-top: 1;
+}
+
+#wordmark {
+    text-style: bold;
+}
+
+#facts {
+    width: 1fr;
+    height: 5;
+    padding-top: 1;
+}
+
+#chips {
+    width: 26;
+    height: 5;
+    padding-top: 1;
+}
+
+#engine-chips {
+    height: 3;
+}
+
+#listener-chip {
+    height: 1;
+}
+
+#listener-chip:hover {
+    background: $boost;
+}
+
+Screen.-short #header {
+    height: 5;
+}
+
+Screen.-icons #brand {
+    width: 10;
+}
+
+Screen.-icons #tagline {
+    display: none;
+}
+
+Screen.-short #header-michi {
+    display: none;
+}
+
+Screen.-short #brand, Screen.-short #facts, Screen.-short #chips {
+    padding-top: 0;
+}
+
+#body {
+    height: 1fr;
+}
+
+#sidebar {
+    width: 20;
+    padding: 1 1;
+    background: $surface;
+    border-right: solid $border;
+}
+
+.nav-item {
+    height: 1;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+.nav-item:hover {
+    background: $boost;
+}
+
+.nav-item:focus {
+    background: $primary 20%;
+    text-style: bold;
+}
+
+.nav-item.-active {
+    color: $primary;
+    text-style: bold;
+}
+
+.nav-icon {
+    width: 2;
+}
+
+.nav-label {
+    width: 1fr;
+}
+
+Screen.-icons #sidebar {
+    width: 6;
+}
+
+Screen.-icons .nav-label {
+    display: none;
+}
+
+Screen.-single #sidebar {
+    display: none;
+}
+
+#main {
+    width: 1fr;
+    height: 1fr;
+}
+
+.view {
+    padding: 1 2;
+}
+
+.card {
+    background: $surface;
+    border: none;
+    padding: 1 2;
+    height: auto;
+    margin-bottom: 1;
+}
+
+.card:focus-within {
+    background: $boost;
+}
+
+.card-title {
+    color: $primary;
+    text-style: bold;
+}
+
+.section-title {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#hero {
+    height: auto;
+}
+
+#home-michi {
+    margin: 1 3 1 1;
+}
+
+#project-card {
+    width: 1fr;
+}
+
+#next-card {
+    height: auto;
+    align: left middle;
+    padding: 0 2;
+}
+
+#next-title {
+    width: auto;
+    height: 3;
+    content-align: left middle;
+    margin-right: 2;
+}
+
+#next-text {
+    width: 1fr;
+    height: 3;
+    content-align: left middle;
+}
+
+#next-fix {
+    width: auto;
+    height: 3;
+    content-align: left middle;
+    margin: 0 2;
+}
+
+#next-run {
+    width: auto;
+}
+
+Screen.-short #home-michi, Screen.-icons #home-michi, Screen.-single #home-michi {
+    display: none;
+}
+
+#actions {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#actions {
+    margin-top: 1;
+}
+
+Screen.-icons #actions, Screen.-single #actions {
+    layout: grid;
+    grid-size: 3;
+    grid-gutter: 1 1;
+}
+
+Screen.-icons #actions Button, Screen.-single #actions Button {
+    width: 100%;
+    margin-right: 0;
+}
+
+Screen.-icons #hero, Screen.-single #hero {
+    layout: vertical;
+}
+
+
+Screen.-icons #week-card, Screen.-single #week-card {
+    width: 1fr;
+}
+
+
+#activity {
+    height: auto;
+}
+
+#runs-card {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#runs {
+    height: auto;
+    max-height: 12;
+}
+
+#week-card {
+    width: 32;
+}
+
+#week {
+    height: 3;
+}
+
+Screen.-single #activity, Screen.-icons #activity {
+    layout: vertical;
+}
+
+Screen.-single #runs-card, Screen.-icons #runs-card {
+    width: 1fr;
+    margin-right: 0;
+}
+
+Screen.-single #chips, Screen.-single #brand {
+    display: none;
+}
+
+.command {
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+* {
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
+    scrollbar-color: $border;
+    scrollbar-color-hover: $text-muted;
+    scrollbar-color-active: $primary;
+    scrollbar-background: $background;
+    scrollbar-background-hover: $background;
+    scrollbar-background-active: $background;
+}
+
+#tests-bar, #health-bar, #capsule-bar {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#tests-bar Button, #health-bar Button {
+    width: auto;
+    margin-right: 2;
+}
+
+#tests-summary, #health-summary {
+    width: 1fr;
+}
+
+#tests-card {
+    height: 1fr;
+}
+
+#hairballs {
+    height: 1fr;
+}
+
+#tests-hint {
+    margin-top: 1;
+}
+
+.check-row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.check-fix {
+    height: auto;
+    padding-left: 2;
+}
+
+.command-scroll {
+    width: 1fr;
+    height: auto;
+    scrollbar-size-horizontal: 1;
+}
+
+.command-scroll .command {
+    width: auto;
+}
+
+.fix-button {
+    width: auto;
+    margin-left: 2;
+}
+
+#capsule-screen {
+    padding: 1 2;
+}
+
+#capsule-head {
+    height: auto;
+}
+
+#capsule-search {
+    width: 1fr;
+}
+
+#capsule-matches {
+    width: auto;
+    padding: 1 2 0 2;
+}
+
+#capsule-bar Button {
+    width: auto;
+    margin: 1 0 0 2;
+}
+
+#capsule-tabs {
+    height: 1fr;
+}
+
+.capsule-scroll {
+    height: 1fr;
+}
+
+.capsule-body {
+    width: auto;
+}
+
+#project-facts {
+    height: 7;
+}
+
+#week-total, #health-summary {
+    height: 1;
+}
+
+#tests-summary {
+    height: 3;
+}
+
+.field {
+    width: 1fr;
+    height: auto;
+    margin-right: 1;
+}
+
+.field.narrow {
+    width: 20;
+    margin-right: 0;
+}
+
+.field-error {
+    height: 1;
+    color: $error;
+}
+
+Input.-invalid, TextArea.-invalid {
+    border: tall $error;
+}
+
+.button-row {
+    height: auto;
+    margin: 1 0;
+}
+
+FlowRow {
+    layout: grid;
+    grid-size: 4;
+    grid-gutter: 1 1;
+    height: auto;
+}
+
+FlowRow > Button {
+    width: 1fr;
+    margin: 0;
+}
+
+FlowRow.chips {
+    grid-columns: auto;
+    grid-gutter: 0 1;
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+FlowRow.chips > Button {
+    width: auto;
+}
+
+#preview-command {
+    height: 1;
+    margin-bottom: 1;
+}
+
+#preview-prompt {
+    height: 16;
+}
+
+#attach-screen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#attach-dialog {
+    width: 70;
+    max-width: 90%;
+    padding: 1 2;
+}
+
+#pipeline-screen {
+    padding: 1 2;
+}
+
+#pipeline-bar {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#pipeline-title {
+    width: 1fr;
+}
+
+#pipeline-elapsed {
+    width: auto;
+    height: 1;
+    margin-right: 2;
+}
+
+#pipeline-bar Button {
+    width: auto;
+    margin-left: 1;
+}
+
+#pipeline-result:focus {
+    outline: none;
+    background: $primary-lighten-1;
+}
+
+#agent-cards {
+    height: auto;
+}
+
+.agent-card {
+    width: 1fr;
+    margin-right: 1;
+}
+
+.agent-body {
+    height: 4;
+}
+
+.agent-card.-active {
+    border: round $primary;
+}
+
+.agent-card.-done {
+    border: round $success;
+}
+
+.agent-card.-failed {
+    border: round $error;
+}
+
+#pipeline-body {
+    height: 1fr;
+}
+
+#pipeline-lower {
+    height: 1fr;
+    min-height: 14;
+}
+
+#feed-card {
+    width: 2fr;
+    height: 1fr;
+    margin-right: 1;
+}
+
+#pipeline-feed {
+    height: 1fr;
+}
+
+#summary-card {
+    width: 1fr;
+    height: 1fr;
+}
+
+#pipeline-summary {
+    height: 1fr;
+}
+
+Screen.-single #agent-cards, Screen.-icons #agent-cards {
+    layout: grid;
+    grid-size: 2;
+    grid-gutter: 0 1;
+}
+
+#spectrum-bar, #ledger-filters {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#spectrum-run {
+    width: 50;
+    margin-right: 2;
+}
+
+#spectrum-bar Button {
+    width: auto;
+    margin: 1 0 0 2;
+}
+
+#spectrum-label, #ledger-count {
+    height: 1;
+    margin-bottom: 1;
+}
+
+#spectrum-empty {
+    height: 2;
+}
+
+#metrics {
+    height: auto;
+}
+
+.metric {
+    width: 1fr;
+    margin-right: 1;
+}
+
+.metric-title {
+    color: $text-muted;
+    height: 1;
+}
+
+.metric-value {
+    height: 1;
+}
+
+.metric-note {
+    height: 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+#spectrum-tabs {
+    height: auto;
+    min-height: 16;
+}
+
+.bars {
+    height: auto;
+    padding: 1 0;
+}
+
+#spectrum-tree {
+    height: 14;
+}
+
+#leaks {
+    height: auto;
+    max-height: 10;
+}
+
+#leak-suggestion {
+    height: 2;
+    margin-top: 1;
+}
+
+#ledger-filters .field {
+    width: 24;
+}
+
+#ledger-meta {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#ledger-meta #ledger-count {
+    width: 1fr;
+    margin: 0;
+}
+
+#ledger-meta Button {
+    width: auto;
+    margin-left: 2;
+}
+
+#ledger-body {
+    height: 1fr;
+}
+
+#ledger-table-card {
+    width: 1fr;
+    height: 1fr;
+    margin-right: 1;
+}
+
+#ledger-runs {
+    height: 1fr;
+}
+
+#ledger-detail {
+    width: 38;
+    height: 1fr;
+}
+
+#ledger-fields {
+    height: 10;
+}
+
+Screen.-single #ledger-detail, Screen.-icons #ledger-detail {
+    display: none;
+}
+
+Screen.-single #metrics, Screen.-icons #metrics {
+    layout: grid;
+    grid-size: 2;
+    grid-gutter: 0 1;
+}
+
+#export-screen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#export-dialog {
+    width: 70;
+    max-width: 90%;
+    padding: 1 2;
+}
+
+#init-form, #loop-form {
+    height: auto;
+}
+
+#init-form .field {
+    height: auto;
+}
+
+#init-lower {
+    height: auto;
+}
+
+#timeline {
+    width: 1fr;
+    margin-right: 1;
+}
+
+.stage-row {
+    height: 1;
+}
+
+#init-log, #loop-log {
+    height: 8;
+    margin-top: 1;
+}
+
+#init-results {
+    width: 1fr;
+}
+
+#init-summary {
+    height: auto;
+}
+
+#init-new-files {
+    height: auto;
+    max-height: 8;
+}
+
+#consent-screen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#consent-dialog {
+    width: 90;
+    max-width: 95%;
+    padding: 1 2;
+}
+
+#consent-body {
+    margin-bottom: 1;
+}
+
+#consent-files {
+    height: auto;
+}
+
+#diff-screen {
+    padding: 1 2;
+}
+
+#diff-bar {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#diff-title {
+    width: 1fr;
+}
+
+#diff-bar Button {
+    width: auto;
+    margin-left: 2;
+}
+
+#diff-panes {
+    height: 1fr;
+}
+
+.diff-pane {
+    width: 1fr;
+    height: 1fr;
+    margin-right: 1;
+}
+
+#telemetry-engines {
+    height: auto;
+}
+
+.telemetry-row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.telemetry-info {
+    width: 1fr;
+}
+
+.telemetry-toggle, #listener-toggle {
+    width: auto;
+    margin-left: 2;
+}
+
+#listener-row {
+    height: auto;
+}
+
+#listener-status {
+    width: 1fr;
+}
+
+#instinct-backends {
+    width: 1fr;
+    margin: 1 0;
+}
+
+#instinct-detail {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#probe-table, #decisions-table {
+    height: auto;
+    max-height: 12;
+}
+
+#settings-card Select, #settings-card Input {
+    width: 50;
+}
+
+#loop-gate {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#loop-summary {
+    height: auto;
+}
+
+#legacy-tip {
+    height: auto;
+    padding: 0 2;
+    background: $warning 15%;
+}
+
+#legacy-tip-text {
+    width: 1fr;
+}
+
+#legacy-tip Button {
+    width: auto;
+    margin-left: 2;
+}
+
+App.-transparent Screen, App.-transparent #header, App.-transparent #sidebar,
+App.-transparent .view, App.-transparent #main, App.-transparent #body {
+    background: ansi_default;
+}
+
+#spectrum-audit {
+    display: none;
+    height: auto;
+    padding: 0 1;
+}
+
+#models .card-head {
+    height: 1;
+}
+
+#models .card-head .card-title {
+    width: 1fr;
+}
+
+#catalog-meta {
+    height: 1;
+}
+
+#models-table {
+    height: auto;
+    max-height: 14;
+}
+
+#model-actions {
+    height: auto;
+}
+
+#model-actions Select {
+    width: 24;
+}
+
+#probe-note {
+    height: auto;
+}
+
+#models .field-row {
+    height: auto;
+}
+
+#role-rows {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.role-row {
+    height: auto;
+}
+
+.role-name {
+    width: 16;
+    padding: 1 0 0 0;
+}
+
+.role-row Select {
+    width: 24;
+}
+
+.switch-label {
+    width: 1fr;
+    padding: 1 0 0 1;
+}
+
+#engine-order {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.engine-row {
+    height: 1;
+}
+
+.engine-name {
+    width: 16;
+}
+
+#routing-stats {
+    height: auto;
+    max-height: 8;
+}
+
+#models .field.wide {
+    width: 2fr;
+}
+
+.engine-row Button {
+    width: 5;
+    min-width: 5;
+}
+
+#jev-card .card-head {
+    height: 1;
+}
+
+#jev-card .card-head .card-title {
+    width: 1fr;
+}
+
+#jev-facts, #jev-status, #preview-help, #preview-body {
+    height: auto;
+}
+
+#preview-body {
+    background: $boost;
+    padding: 0 1;
+}
+
+Screen.-short .nav-item {
+    margin-bottom: 0;
+}
+
+#wizard {
+    height: 1fr;
+}
+
+#wizard-steps {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#wiz-step-of {
+    width: auto;
+    margin-right: 2;
+}
+
+Button.chip.step-chip, Button.chip.step-chip:hover, Button.chip.step-chip:focus, Button.chip.step-chip:disabled {
+    margin-right: 1;
+    background: transparent;
+    background-tint: transparent;
+    color: $text-muted;
+    outline: none;
+    border: none;
+}
+
+Button.chip.step-chip:focus {
+    text-style: bold reverse;
+}
+
+Button.chip.step-chip.-current, Button.chip.step-chip.-current:hover, Button.chip.step-chip.-current:focus {
+    background: $primary;
+    color: $background;
+    text-style: bold;
+}
+
+Button.chip.step-chip.-done, Button.chip.step-chip.-done:hover {
+    color: $success;
+}
+
+Button.chip.depth-chip.-current, Button.chip.layout-chip.-current {
+    background: $primary;
+    color: $background;
+    text-style: bold;
+}
+
+.layout-chip {
+    margin-right: 1;
+}
+
+
+#mandate-mode {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#mandate-mode Button {
+    width: auto;
+    margin-right: 1;
+}
+
+#wizard-main {
+    height: 1fr;
+}
+
+#wizard-body {
+    width: 1fr;
+    height: 1fr;
+}
+
+.wiz-section {
+    height: auto;
+}
+
+#wiz-summary {
+    width: 32;
+    height: auto;
+    margin-left: 1;
+    padding: 1 2;
+}
+
+#summary-body {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#wiz-story {
+    height: auto;
+    min-height: 5;
+    max-height: 12;
+}
+
+#wiz-detected, #wiz-depth-note, #wiz-cap-note, #wiz-tell-help {
+    height: auto;
+}
+
+#wiz-cap-field, #cap-row, #summary-actions {
+    height: auto;
+}
+
+#cap-row Button, #cap-row Checkbox, #summary-actions Button {
+    width: auto;
+    margin-right: 1;
+}
+
+#wiz-cap-field Label {
+    width: auto;
+    margin-right: 1;
+    padding-top: 1;
+}
+
+#wiz-budget {
+    width: 18;
+}
+
+#missing-rows {
+    height: auto;
+}
+
+.gap-label {
+    height: auto;
+}
+
+#confirm-card {
+    width: 64;
+    max-width: 95%;
+    height: auto;
+    padding: 1 2;
+}
+
+#confirm-body {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#intent-cards {
+    height: auto;
+}
+
+.intent-card {
+    width: 1fr;
+    height: auto;
+    min-height: 5;
+    padding: 1 1;
+    margin: 0 1 0 0;
+    background: $surface;
+}
+
+.intent-card.-suggested {
+    background: $warning 15%;
+}
+
+.intent-card:hover {
+    background: $boost;
+}
+
+.intent-card.-chosen {
+    background: $primary 25%;
+}
+
+#wiz-what {
+    height: auto;
+    min-height: 3;
+    max-height: 8;
+}
+
+#wiz-why {
+    height: auto;
+    min-height: 4;
+    max-height: 12;
+}
+
+.chip-row {
+    height: auto;
+}
+
+.chip-row Button {
+    margin-right: 1;
+}
+
+#wiz-improve-note, #wiz-sent-body, #wiz-estimate {
+    height: auto;
+}
+
+#improve-actions {
+    height: auto;
+}
+
+#wiz-sent-body {
+    background: $boost;
+    padding: 0 1;
+}
+
+.team-card {
+    height: auto;
+}
+
+.team-body {
+    width: 1fr;
+    height: auto;
+}
+
+.team-card Select {
+    width: 30;
+}
+
+#wizard-nav {
+    height: auto;
+    align-horizontal: right;
+}
+
+#wizard-nav Button {
+    margin-left: 2;
+}
+
+#team-cards {
+    height: auto;
+}
+
+OnboardingScreen, HelpScreen, BenchScreen, ConfirmScreen, RunFileScreen {
+    align: center middle;
+}
+
+#onboarding-card {
+    width: 76;
+    max-width: 95%;
+    height: auto;
+    padding: 1 2;
+}
+
+#onboarding-body {
+    height: auto;
+    min-height: 8;
+}
+
+#panel-welcome, #panel-engines, #panel-preset {
+    height: auto;
+}
+
+#onboarding-nav {
+    height: auto;
+    align-horizontal: right;
+    margin-top: 1;
+}
+
+#onboarding-nav Button {
+    margin-left: 2;
+}
+
+#help-card {
+    width: 72;
+    max-width: 95%;
+    height: auto;
+    padding: 1 2;
+}
+
+#help-body {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#engine-chips:hover {
+    background: $boost;
+}
+
+Button.-primary:hover {
+    background: $primary-lighten-1;
+}
+
+Button.-textual-compact {
+    height: 3;
+    min-width: 8;
+    padding: 1 2;
+    background: $panel;
+    color: $text;
+}
+
+Button.-textual-compact:hover {
+    background: $primary 30%;
+}
+
+Button.-textual-compact.-primary {
+    background: $primary;
+    color: $background;
+    text-style: bold;
+}
+
+Button.-textual-compact.-primary:hover {
+    background: $primary-lighten-1;
+}
+
+Button.-textual-compact.-error {
+    background: $error;
+    color: $background;
+}
+
+Button:focus {
+    text-style: bold;
+    outline: round $accent;
+}
+
+.chip-row Button, Button.chip {
+    height: 1;
+    padding: 0 1;
+    min-width: 4;
+}
+
+.chip-row Button:focus, Button.chip:focus {
+    outline: none;
+    text-style: bold reverse;
+}
+
+#bench-card {
+    width: 110;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    padding: 1 2;
+}
+
+#bench-summary {
+    height: auto;
+    margin: 1 0;
+}
+
+#bench-runs {
+    height: auto;
+    max-height: 16;
+    margin-bottom: 1;
+}
+
+.result-screen {
+    padding: 1 2;
+}
+
+#result-bar {
+    height: auto;
+}
+
+#result-title {
+    width: 1fr;
+}
+
+#result-status {
+    width: auto;
+    margin-left: 1;
+}
+
+#result-bar Button {
+    width: auto;
+    margin-left: 1;
+}
+
+#result-facts, #result-split, #result-simple {
+    height: auto;
+}
+
+#result-split {
+    margin-bottom: 1;
+}
+
+#result-actions {
+    margin-bottom: 1;
+}
+
+#forge-gate-actions {
+    height: auto;
+    margin-top: 1;
+}
+
+#forge-gate-actions Button {
+    width: auto;
+    margin-bottom: 1;
+}
+
+#result-tabs {
+    height: 1fr;
+}
+
+#result-report-scroll, #result-consumption-scroll, #result-files-pane {
+    height: 1fr;
+}
+
+#result-files, #result-agents {
+    height: auto;
+    max-height: 20;
+}
+
+#run-file-card {
+    width: 110;
+    max-width: 95%;
+    height: 80%;
+    padding: 1 2;
+}
+
+#run-file-scroll {
+    height: 1fr;
+    margin: 1 0;
+}
+
+#run-file-body {
+    height: auto;
+}
+
+#confirm-actions {
+    height: auto;
+}
+
+#confirm-actions Button {
+    width: auto;
+    margin-right: 1;
+}
+
+#forge-gate {
+    height: auto;
+    margin-bottom: 1;
+    padding: 1 2;
+}
+
+#wiz-mode {
+    height: auto;
+}
+
+#ledger-result {
+    width: auto;
+    margin-top: 1;
+}
+
+#wiz-deliverable-field, #limits-constraints, #limits-tests {
+    height: auto;
+}
+
+Input:focus, TextArea:focus {
+    border: tall $accent;
+}
+
+DataTable:focus {
+    background-tint: $accent 8%;
+}
+
+Select:focus > SelectCurrent {
+    border: tall $accent;
+}
+
+Checkbox:focus, RadioButton:focus {
+    text-style: bold;
+    background: $boost;
+}
+
+Checkbox:hover, RadioButton:hover {
+    background: $boost;
+}
+
+.skeleton {
+    color: $text-muted 40%;
+}
+
+Screen.-icons #init-form, Screen.-single #init-form, Screen.-icons #loop-form, Screen.-single #loop-form {
+    layout: vertical;
+}
+
+#init-start {
+    width: 26;
+}

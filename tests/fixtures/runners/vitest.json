@@ -1,0 +1,6 @@
+{"numTotalTestSuites":2,"numPassedTestSuites":1,"numFailedTestSuites":1,"numTotalTests":3,"numPassedTests":2,"numFailedTests":1,"numPendingTests":0,"numTodoTests":0,"success":false,"startTime":1700000000000,
+"testResults":[{"name":"/repo/src/math.test.ts","status":"failed","startTime":1700000000000,"endTime":1700000000120,"message":"",
+ "assertionResults":[
+  {"ancestorTitles":["math"],"fullName":"math divides","status":"failed","title":"divides","duration":3,"failureMessages":["AssertionError: expected 0.5 to be 2 // Object.is equality\n    at /repo/src/math.test.ts:7:22"]},
+  {"ancestorTitles":["math"],"fullName":"math adds","status":"passed","title":"adds","duration":1,"failureMessages":[]}
+ ]}]}
