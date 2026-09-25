@@ -7,6 +7,7 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Added
+- Public agent instructions linking the project rules and guarded Git workflow.
 - Repository Git workflow on `main`: setup, guarded commit and user-only push scripts,
   a POSIX hook stripping AI attribution, a guard against committing ZIP archives,
   and temporary-repository integration tests.
@@ -87,6 +88,9 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   is confident, and the reason is shown.
 
 ### Fixed
+- POSIX process discovery excludes its own `ps` probe, preventing false orphan reports.
+- CI tests cover graph tooling present and absent without relying on host installations,
+  and verify repair commands for Windows, Linux and macOS explicitly.
 - Wizard Launch and Preview validate required fields before opening the pipeline;
   investigation questions are extracted from Spanish and English enumerations, with
   the story as a fallback.
