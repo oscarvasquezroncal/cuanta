@@ -189,7 +189,8 @@ def _probe(session: Session) -> "Document":
                     question[:52],
                     answer,
                     str(receipt.latency_ms),
-                    f"${receipt.cost_usd:.4f} · {receipt.backend}",
+                    (f"${receipt.cost_usd:.4f}" if receipt.cost_usd is not None else "n/a")
+                    + f" · {receipt.backend}",
                 )
             )
     finally:

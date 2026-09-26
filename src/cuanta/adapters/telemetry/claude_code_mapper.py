@@ -4,7 +4,7 @@ import json
 
 from cuanta.adapters.telemetry.mapping import (
     as_bool,
-    as_float,
+    as_cost,
     as_int,
     as_text,
     first,
@@ -64,7 +64,7 @@ def map_log(record: LogRecord, keep_prompts: bool = False) -> LedgerEvent:
             first(attrs, "cache_creation_tokens", "cache_creation_input_tokens")
         ),
         reasoning_tokens=as_int(first(attrs, "reasoning_tokens")),
-        cost_usd=as_float(first(attrs, "cost_usd")),
+        cost_usd=as_cost(first(attrs, "cost_usd")),
         tool_name=tool_name,
         tool_use_id=as_text(first(attrs, "tool_use_id")),
         tool_result_bytes=as_int(first(attrs, "tool_result_size_bytes")),

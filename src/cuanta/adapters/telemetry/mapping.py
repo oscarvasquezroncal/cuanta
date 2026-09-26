@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from cuanta.domain.redaction import redact_for_storage
@@ -30,6 +31,16 @@ def as_float(value: Any) -> float:
         except ValueError:
             return 0.0
     return 0.0
+
+
+def as_cost(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        amount = float(value)
+    except ValueError:
+        return None
+    return amount if math.isfinite(amount) and amount >= 0 else None
 
 
 def as_bool(value: Any) -> bool | None:

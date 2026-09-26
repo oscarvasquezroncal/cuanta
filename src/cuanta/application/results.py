@@ -116,6 +116,8 @@ def stored_shape(meta: Mapping[str, object], run: Run, task_type: str) -> tuple[
 def run_markdown(view: ResultView) -> str:
     run = view.run
     cost = "n/a" if run.cost_usd is None else f"${run.cost_usd:,.2f}"
+    if run.cost_usd is not None and run.cost_source == "estimated":
+        cost += " (estimated)"
     duration = "n/a" if view.duration_s is None else f"{view.duration_s:,.0f} s"
     mode = "unknown shape"
     if view.shape_known:

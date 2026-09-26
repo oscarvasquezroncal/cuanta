@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from cuanta.application.instinct import DecisionMaker
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.instinct import SCOPES, Choice
 from cuanta.domain.ledger import RoutingDecision
 from cuanta.domain.messages import english, msg
@@ -239,7 +240,7 @@ class RoleStats:
     tier: str
     samples: int
     green: int
-    cost_usd: float
+    cost_usd: float | None
     priced: int
 
     @property
@@ -248,7 +249,7 @@ class RoleStats:
 
     @property
     def average_cost(self) -> float | None:
-        return self.cost_usd / self.priced if self.priced else None
+        return self.cost_usd / self.samples if self.samples and self.cost_usd is not None else None
 
 
 def role_stats(decisions: Sequence[RoutingDecision]) -> tuple[RoleStats, ...]:
@@ -267,7 +268,7 @@ def role_stats(decisions: Sequence[RoutingDecision]) -> tuple[RoleStats, ...]:
                 tier,
                 len(items),
                 sum(1 for item in items if item.outcome == GREEN),
-                sum(priced),
+                sum_costs(item.cost_usd for item in items),
                 len(priced),
             )
         )

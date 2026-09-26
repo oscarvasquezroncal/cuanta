@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from html import escape
 
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.routing import percentile
 
@@ -100,7 +101,7 @@ class ConditionSummary:
     accepted: int
     tokens_per_accepted: Spread
     cost: Spread
-    spent_usd: float
+    spent_usd: float | None
     wall: Spread
     session: str = LEAN_SESSION
     context: Spread = field(default_factory=lambda: Spread(None, None, None))
@@ -191,8 +192,8 @@ def _summary(
         runs=len(runs),
         accepted=len(accepted),
         tokens_per_accepted=spread([float(item.total_tokens) for item in accepted]),
-        cost=spread(costs),
-        spent_usd=sum(costs),
+        cost=spread(costs) if len(costs) == len(runs) else Spread(None, None, None),
+        spent_usd=sum_costs(item.cost_usd for item in runs),
         wall=spread([item.wall_s for item in runs]),
         session=session,
         context=spread(contexts),
@@ -273,7 +274,7 @@ def charts(summary: Sequence[ConditionSummary]) -> dict[str, str]:
 def report_markdown(
     meta: BenchMeta, summary: Sequence[ConditionSummary], metrics: Sequence[RunMetrics]
 ) -> str:
-    spent = sum(item.cost_usd or 0.0 for item in metrics)
+    spent = sum_costs(item.cost_usd for item in metrics)
     lines = [
         f"# cuanta bench · {meta.suite}",
         "",
@@ -364,7 +365,7 @@ README_END = "<!-- cuanta-bench:end -->"
 
 
 def readme_section(
-    meta: BenchMeta, summary: Sequence[ConditionSummary], spent: float, charts_dir: str
+    meta: BenchMeta, summary: Sequence[ConditionSummary], spent: float | None, charts_dir: str
 ) -> str:
     lines = [
         README_START,

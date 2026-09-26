@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.instinct import (
     TRIAGE,
     Answer,
@@ -237,12 +238,12 @@ class DecisionMaker:
             return backend.ask_many(asks, context)
         answers: dict[str, Answer] = {}
         latency = 0
-        cost = 0.0
+        cost: float | None = 0.0
         for ask in asks:
             answer, receipt = single_answer(backend, ask, merged(context, ask))
             answers[ask.key] = answer
             latency += receipt.latency_ms
-            cost += receipt.cost_usd
+            cost = sum_costs((cost, receipt.cost_usd))
         return answers, Receipt(backend.name, latency, cost)
 
     def record_outcome(self, decision_id: int, outcome: str) -> None:

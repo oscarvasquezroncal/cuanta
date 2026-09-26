@@ -13,6 +13,7 @@ from cuanta.domain.cache_probe import (
     decide,
     probe_prompt,
 )
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.engine import EngineEvent, SessionStarted, StepUsage
 from cuanta.domain.messages import msg
 from cuanta.domain.pricing import Price
@@ -111,7 +112,7 @@ class CacheTtlProbe:
 
     def run(self, options: CacheProbeOptions, progress: ProgressSink) -> CacheTtlResult:
         seed, previous_start = self._once(options, 0, None, options.budget_usd)
-        spent = seed.cost_usd or 0.0
+        spent = seed.cost_usd
         charged = seed.cost_usd if seed.cost_usd is not None else options.per_run_usd
         progress.publish(
             note(
@@ -147,7 +148,7 @@ class CacheTtlProbe:
                     options, index, previous_start, options.budget_usd - charged
                 )
                 readings.append(reading)
-                spent += reading.cost_usd or 0.0
+                spent = sum_costs((spent, reading.cost_usd))
                 charged += reading.cost_usd if reading.cost_usd is not None else options.per_run_usd
                 result = decide(
                     seed,

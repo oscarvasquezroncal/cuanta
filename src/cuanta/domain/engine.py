@@ -7,6 +7,8 @@ SUBAGENT_TOOLS = frozenset({"Agent", "Task"})
 PHASE_MARKER = re.compile(r"\bPhase\s+(0\.5|2\.5|2A|2B|[0-6])\b", re.IGNORECASE)
 PIPELINE_AGENTS = ("architecture-analyst", "senior", "tester", "docs-updater")
 TURN_LIMIT_SUBTYPE = "error_max_turns"
+BUDGET_LIMIT_SUBTYPE = "error_max_budget_usd"
+COST_UNKNOWN_SUBTYPE = "error_cost_unknown"
 
 
 COMMAND_LINE_LIMIT = 30_000
@@ -24,7 +26,7 @@ class ModelUsage:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     reasoning_tokens: int = 0
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
 
     @property
     def total(self) -> int:
@@ -124,6 +126,8 @@ class EngineRequest:
     max_turns: int = 0
     stable_prefix: bool = False
     persist_session: bool = True
+    read_only: bool = False
+    temporary_copy: bool = False
 
 
 @dataclass(frozen=True, slots=True)

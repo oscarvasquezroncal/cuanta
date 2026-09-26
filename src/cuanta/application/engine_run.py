@@ -11,13 +11,15 @@ from cuanta.domain.engine import (
     EngineEvent,
     EngineOutcome,
     EngineRequest,
+    RunResult,
     cut_by_turns,
 )
 from cuanta.domain.ids import trace_id_of, traceparent
 from cuanta.domain.ledger import LedgerEvent, Run
+from cuanta.domain.messages import msg
 from cuanta.domain.overhead import spawn_event
 from cuanta.domain.plugins import FULL, LEAN
-from cuanta.domain.pricing import PriceTable, estimate_cost
+from cuanta.domain.pricing import CostEstimate, PriceTable, estimate, estimate_cost
 from cuanta.domain.telemetry import claude_env, run_env
 from cuanta.ports.engine import Engine
 from cuanta.ports.ledger import Ledger
@@ -51,6 +53,8 @@ class LaunchSpec:
     max_turns: int = 0
     stable_prefix: bool = False
     persist_session: bool = True
+    read_only: bool = False
+    temporary_copy: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,13 +92,13 @@ class EngineLauncher:
         self._listener = listener
         self._prices = prices
 
-    def _cost(self, outcome: EngineOutcome | None, usage: list[LedgerEvent]) -> float | None:
+    def _cost(self, outcome: EngineOutcome | None, usage: list[LedgerEvent]) -> CostEstimate:
         reported = _reported(outcome)
         if reported is not None:
-            return reported
+            return estimate(reported, msg("cost.engine"), kind="reported")
         if not usage:
-            return None
-        return estimate_cost(usage, self._prices).value
+            return estimate(None, msg("cost.missing_usage"))
+        return estimate_cost(usage, self._prices)
 
     @property
     def engine(self) -> Engine:
@@ -128,6 +132,8 @@ class EngineLauncher:
             max_turns=spec.max_turns,
             stable_prefix=spec.stable_prefix,
             persist_session=spec.persist_session,
+            read_only=spec.read_only,
+            temporary_copy=spec.temporary_copy,
         )
 
     @contextmanager
@@ -168,15 +174,39 @@ class EngineLauncher:
             before(run_id)
         outcome: EngineOutcome | None = None
         spawned: LedgerEvent | None = None
+
+        def stream_event(event: EngineEvent) -> None:
+            if not isinstance(event, RunResult):
+                on_event(event)
+
         try:
             with self._telemetry() as status:
                 port = status.port if status is not None and status.running else None
                 request = self.request(spec, run_id, parent, port)
                 spawned = spawn_event(run_id, run.trace_id, self._clock.now_ms())
-                outcome = self._engine.run(request, on_event)
+                outcome = self._engine.run(request, stream_event)
         finally:
             if spawned is not None:
                 self._ledger.add_events([spawned])
+            usage = _usage_events(run, outcome, self._engine.name) if outcome else []
+            cost = self._cost(outcome, usage)
+            if (
+                outcome is not None
+                and outcome.result is not None
+                and spec.max_budget_usd > 0
+                and cost.value is not None
+                and cost.value > spec.max_budget_usd
+                and outcome.ok
+            ):
+                outcome = replace(
+                    outcome,
+                    result=replace(
+                        outcome.result,
+                        ok=False,
+                        subtype="error_max_budget_usd",
+                        terminal_reason="budget_exhausted",
+                    ),
+                )
             status_text = "interrupted" if outcome is None else ("ok" if outcome.ok else "failed")
             result = outcome.result if outcome is not None else None
             end_reason = "" if result is None else result.subtype
@@ -191,13 +221,15 @@ class EngineLauncher:
                 end_reason=end_reason,
             )
             usage = _usage_events(finished, outcome, self._engine.name) if outcome else []
-            finished = replace(finished, cost_usd=self._cost(outcome, usage))
+            finished = replace(finished, cost_usd=cost.value, cost_source=cost.kind)
             self._ledger.update_run(finished)
             if usage:
                 self._ledger.add_events(usage)
             text = outcome.result.text if outcome and outcome.result else ""
             if text and self._reports is not None:
                 self._reports.save_report(run_id, text)
+            if result is not None:
+                on_event(result)
         return Launch(run=finished, outcome=outcome)
 
 

@@ -69,7 +69,7 @@ class CacheTtlResult:
     readings: tuple[CacheReading, ...]
     warmth: tuple[Warmth, ...]
     skipped_gaps_s: tuple[int, ...]
-    spent_usd: float
+    spent_usd: float | None
     auth: Access
     api_key_source: str
     engine_version: str
@@ -160,13 +160,13 @@ def decide(
     seed: CacheReading,
     readings: tuple[CacheReading, ...],
     skipped_gaps_s: tuple[int, ...],
-    spent_usd: float,
+    spent_usd: float | None,
     model: str,
     measured_on: str,
     tools: tuple[str, ...],
 ) -> CacheTtlResult:
     declared = declared_ttl(seed)
-    warmth: tuple[Warmth, ...] = ()
+    warmth = tuple(Warmth.UNKNOWN for _ in readings)
     lower = 0
     upper: int | None = None
     verdict = Verdict.INCONCLUSIVE

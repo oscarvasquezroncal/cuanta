@@ -316,7 +316,8 @@ class Container:
 
         backend = JevInstinct()
         since = (datetime.now(UTC) - timedelta(days=WEEK_DAYS)).isoformat(timespec="seconds")
-        spend, count = 0.0, 0
+        spend: float | None = 0.0
+        count = 0
         if (self.cuanta_dir() / "ledger.db").is_file():
             ledger = self.ledger()
             try:
@@ -531,6 +532,7 @@ class Container:
         depth: str = "",
         scope: Choice | None = None,
         risk: float | None = None,
+        engine: str = "",
     ) -> tuple[RoutePlan, CostRange]:
         from cuanta.application.estimate import similar_costs
         from cuanta.application.routing import RouteInputs, with_overrides
@@ -539,6 +541,8 @@ class Container:
         from cuanta.domain.routing import cost_range, depth_capped, roles_that_run
 
         policy = with_overrides(self.routing_policy(), route, preset, role_models)
+        if engine:
+            policy = replace(policy, engines=(engine,))
         if depth:
             policy = depth_capped(policy, profile(parse_depth(depth), task_type).tier_cap)
         if scope is None:
@@ -663,7 +667,9 @@ class Container:
         diff = changes(request, proposal) if proposal is not None else ()
         return Improvement(estimate, chosen.key, proposal, diff, launch.run.cost_usd, True)
 
-    def cross_engine(self, ledger: Ledger, budget_usd: float) -> CrossEnginePipeline:
+    def cross_engine(
+        self, ledger: Ledger, budget_usd: float, max_turns: int = 0
+    ) -> CrossEnginePipeline:
         from cuanta.application.cross_engine import CrossEnginePipeline
 
         def launcher(name: str) -> EngineLauncher | None:
@@ -678,6 +684,7 @@ class Container:
             capsules=self.capsule_store(),
             cwd=str(self.project),
             budget_usd=budget_usd,
+            max_turns=max_turns if max_turns > 0 else self.config.max_turns,
         )
 
     def bench_runner(
@@ -789,6 +796,7 @@ class Container:
                     model=model,
                     max_budget_usd=cap,
                     session=session,
+                    temporary_copy=True,
                 )
                 launch = sub.launcher(engine, ledger, telemetry=True).launch(spec, lambda _: None)
                 run = launch.run
@@ -803,6 +811,7 @@ class Container:
                     budget_usd=cap,
                     route=RouteOptions(mode=mode),
                     session=session,
+                    temporary_copy=True,
                 )
                 report = flow.run(flow.prepare(task.request, 0, options), RecordingSink())
                 run = report.run

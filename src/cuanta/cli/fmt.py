@@ -22,10 +22,11 @@ def percent(share: float) -> str:
     return f"{share * 100:.1f}%"
 
 
-def usd(value: float | None) -> str:
+def usd(value: float | None, source: str = "") -> str:
     if value is None:
         return "n/a"
-    return f"${value:,.4f}" if value < 1 else f"${value:,.2f}"
+    text = f"${value:,.4f}" if value < 1 else f"${value:,.2f}"
+    return f"{text} (estimated)" if source == "estimated" else text
 
 
 def duration(seconds: float) -> str:

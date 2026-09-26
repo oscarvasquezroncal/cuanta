@@ -42,7 +42,7 @@ class Understanding:
     gaps: tuple[tuple[str, tuple[str, ...]], ...]
     places: tuple[str, ...]
     backend: str
-    cost_usd: float
+    cost_usd: float | None
     needs_confirm: bool
     fallback_error: str = ""
     fallback_from: str = ""

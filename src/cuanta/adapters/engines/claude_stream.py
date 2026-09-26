@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from cuanta.adapters.engines.base import reported_cost
 from cuanta.domain.engine import (
     AssistantText,
     EngineEvent,
@@ -16,10 +17,6 @@ from cuanta.domain.engine import (
 
 def _int(value: Any) -> int:
     return int(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0
-
-
-def _float(value: Any) -> float:
-    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0.0
 
 
 def _models(data: dict[str, Any]) -> tuple[ModelUsage, ...]:
@@ -38,7 +35,7 @@ def _models(data: dict[str, Any]) -> tuple[ModelUsage, ...]:
                 cache_read_tokens=_int(values.get("cacheReadInputTokens")),
                 cache_write_tokens=_int(values.get("cacheCreationInputTokens")),
                 reasoning_tokens=_int(values.get("thinkingTokens")),
-                cost_usd=_float(values.get("costUSD")),
+                cost_usd=reported_cost(values.get("costUSD")),
             )
         )
     return tuple(models)
@@ -130,7 +127,7 @@ def parse_line(line: str) -> list[EngineEvent]:
             RunResult(
                 ok=not bool(data.get("is_error")) and data.get("subtype") == "success",
                 subtype=str(data.get("subtype") or ""),
-                cost_usd=_float(data.get("total_cost_usd")),
+                cost_usd=reported_cost(data.get("total_cost_usd")),
                 num_turns=_int(data.get("num_turns")),
                 session_id=str(data.get("session_id") or ""),
                 models=_models(data),

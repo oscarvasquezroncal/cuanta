@@ -20,6 +20,7 @@ from cuanta.domain.depth import (
 from cuanta.domain.detection import GraphMode, Stack
 from cuanta.domain.engine import EngineEvent
 from cuanta.domain.errors import CuantaError, DomainFailure, NotAvailable
+from cuanta.domain.guarantees import readonly_unavailable
 from cuanta.domain.mandate import (
     INVESTIGATION,
     MandateRequest,
@@ -59,6 +60,7 @@ class MandateOptions:
     shape: str = ""
     intake_scope: str = ""
     max_turns: int = 0
+    temporary_copy: bool = False
 
 
 def resolve_budget(options: MandateOptions, task_type: str, default: float) -> float:
@@ -188,6 +190,9 @@ class MandateFlow:
         if engine is None:
             raise DomainFailure(f"unknown engine {engine_name}", "use claude, codex or opencode")
         investigation = request.type == INVESTIGATION
+        refusal = readonly_unavailable(engine_name) if investigation else None
+        if refusal is not None:
+            raise DomainFailure(english(refusal))
         shape = parse_shape(options.shape)
         single = single_context(request.type, options.simple, shape)
         claude = engine_name == "claude"
@@ -241,6 +246,8 @@ class MandateFlow:
             session=options.session,
             task_type=request.type,
             depth=options.depth,
+            read_only=investigation,
+            temporary_copy=options.temporary_copy,
         )
 
         def command(prompt: str) -> list[str]:

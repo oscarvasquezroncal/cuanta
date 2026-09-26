@@ -307,6 +307,7 @@ def report_payload(report: MandateReport) -> dict[str, object]:
         "started_at": run.started_at,
         "ended_at": run.ended_at,
         "cost_usd": run.cost_usd,
+        "cost_source": run.cost_source,
         "changed_files": list(report.changed_files),
         "tests": report.tests,
         "tokens_by_agent": report.tokens_by_agent,

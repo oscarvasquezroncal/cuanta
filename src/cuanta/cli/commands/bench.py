@@ -191,9 +191,10 @@ def _summary(result: "BenchResult") -> "tuple[Block, ...]":
     from cuanta.cli.document import Column, Line, Table
     from cuanta.cli.fmt import usd
     from cuanta.domain.bench import summarize
+    from cuanta.domain.costs import sum_costs
 
     rows = summarize(result.metrics)
-    spent = sum(item.cost_usd or 0.0 for item in result.metrics)
+    spent = sum_costs(item.cost_usd for item in result.metrics)
     table = Table(
         "per condition",
         (
@@ -223,13 +224,14 @@ def _payload(result: "BenchResult") -> dict[str, object]:
     from dataclasses import asdict
 
     from cuanta.domain.bench import summarize
+    from cuanta.domain.costs import sum_costs
 
     return {
         "ran": True,
         "bench_id": result.meta.bench_id,
         "folder": result.folder,
         "stopped_early": result.stopped_early,
-        "spent_usd": sum(item.cost_usd or 0.0 for item in result.metrics),
+        "spent_usd": sum_costs(item.cost_usd for item in result.metrics),
         "conditions": [
             {
                 "condition": row.condition.value,

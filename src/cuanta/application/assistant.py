@@ -19,6 +19,7 @@ from cuanta.domain.assistant import (
     nearby_tests,
     where_suggestions,
 )
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import english, msg
 
@@ -69,14 +70,14 @@ class PromptAssistant:
             return self._cache[key]
         base = assistant_state(request)
         prior = heuristic_gaps(request)
-        cost = 0.0
+        cost: float | None = 0.0
         score, decided = self._decisions.score(
             english(msg("question.clarity")),
             CLARITY_LOW,
             CLARITY_HIGH,
             {**base, "heuristic_score": heuristic_clarity(request)},
         )
-        cost += decided.receipt.cost_usd
+        cost = sum_costs((cost, decided.receipt.cost_usd))
         missing: dict[Gap, float] = {}
         for gap, question in GAP_KEYS.items():
             present_prior = prior[gap] if gap is Gap.SPLIT else 1.0 - prior[gap]
@@ -84,7 +85,7 @@ class PromptAssistant:
                 english(msg(question)),
                 {**base, "kind": "gap", "gap": gap.value, "prior": present_prior},
             )
-            cost += decided.receipt.cost_usd
+            cost = sum_costs((cost, decided.receipt.cost_usd))
             missing[gap] = answer.p_yes if gap is Gap.SPLIT else 1.0 - answer.p_yes
         clarity = Clarity(
             min(max(score.value, CLARITY_LOW), CLARITY_HIGH),

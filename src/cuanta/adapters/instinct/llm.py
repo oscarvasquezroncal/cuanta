@@ -64,9 +64,7 @@ class LlmInstinct:
         latency = int((time.perf_counter() - started) * 1000)
         if outcome.result is None or not outcome.ok:
             raise EnvironmentFailure("llm instinct run failed")
-        return _extract_json(outcome.result.text), Receipt(
-            self.name, latency, outcome.cost_usd or 0.0
-        )
+        return _extract_json(outcome.result.text), Receipt(self.name, latency, outcome.cost_usd)
 
     def choose(
         self, question: str, options: Sequence[str], context: Context

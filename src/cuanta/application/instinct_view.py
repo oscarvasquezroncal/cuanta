@@ -9,6 +9,7 @@ from cuanta.application.instinct import (
     probe_questions,
     redact_context,
 )
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.instinct import Primitive
 from cuanta.domain.ledger import Decision
 from cuanta.domain.messages import Message, keyed, msg, option_message, question_message
@@ -33,7 +34,7 @@ class ProbeRow:
     question: str
     answer: Message
     latency_ms: int
-    cost_usd: float
+    cost_usd: float | None
     backend: str
 
 
@@ -83,7 +84,7 @@ class JevCard:
     endpoint: str
     model: str
     latency_ms: int | None
-    spend_week: float
+    spend_week: float | None
     decisions_week: int
     status: Message | None = None
     ok: bool | None = None
@@ -109,9 +110,11 @@ def sentence(decision: Decision) -> Message:
     )
 
 
-def week_spend(decisions: tuple[Decision, ...], backend: str, since: str) -> tuple[float, int]:
+def week_spend(
+    decisions: tuple[Decision, ...], backend: str, since: str
+) -> tuple[float | None, int]:
     recent = [item for item in decisions if item.backend == backend and item.created_at >= since]
-    return sum(item.cost_usd for item in recent), len(recent)
+    return sum_costs(item.cost_usd for item in recent), len(recent)
 
 
 def preview_state(what: str, where: str, task_type: str) -> str:

@@ -38,6 +38,50 @@ def render(template: str, values: Mapping[str, str]) -> str:
 
 
 ENGLISH: dict[str, str] = {
+    "engine.cost_unknown": (
+        "Stopped because the engine did not report the step cost needed to enforce the budget."
+    ),
+    "engine.budget_stopped": "Stopped at the spend cap or recorded an over-cap result.",
+    "guarantee.row": "{name}: {status} · {detail}",
+    "guarantee.spend": "Spend cap",
+    "guarantee.turns": "Turn limit",
+    "guarantee.readonly": "Read-only",
+    "guarantee.telemetry": "Telemetry",
+    "guarantee.enforced": "enforced",
+    "guarantee.checked": "checked after the run",
+    "guarantee.unavailable": "not available",
+    "guarantee.claude_spend": "native budget limit",
+    "guarantee.claude_turns": "native turn limit",
+    "guarantee.claude_readonly": "write tools denied; file changes checked, no verified OS sandbox",
+    "guarantee.claude_readonly_unchecked": (
+        "write tools denied; no filesystem check between cross-engine roles"
+    ),
+    "guarantee.claude_telemetry": "reported tokens and cost; missing values stay n/a",
+    "guarantee.codex_spend": "token-priced estimate; no native spend limit",
+    "guarantee.codex_turns": "no supported turn limit",
+    "guarantee.codex_readonly": "explicit sandbox for investigations and analyst roles",
+    "guarantee.codex_telemetry": "JSONL tokens; cost is estimated when prices are known",
+    "guarantee.opencode_spend": "stop at reported step boundaries; a step can exceed the cap",
+    "guarantee.opencode_turns": "no supported turn limit",
+    "guarantee.opencode_readonly": "investigations and analyst roles refused",
+    "guarantee.opencode_telemetry": "step tokens and cost; missing values stay n/a",
+    "guarantee.unknown_spend": "engine has no verified spend guarantee",
+    "guarantee.unknown_turns": "engine has no verified turn guarantee",
+    "guarantee.unknown_readonly": "engine has no verified read-only guarantee",
+    "guarantee.unknown_telemetry": "engine has no verified telemetry guarantee",
+    "guarantee.cap_warning": (
+        "{engine} cannot enforce the spend cap. Cost is checked after the run; "
+        "the run may exceed the cap."
+    ),
+    "guarantee.step_cap_warning": (
+        "OpenCode stops when reported step cost reaches the cap. "
+        "An in-flight step can exceed it; missing step cost stops the run."
+    ),
+    "guarantee.opencode_refused": (
+        "OpenCode investigations and analyst roles are unavailable: this integration cannot "
+        "enforce read-only access while allowing graphify shell commands. "
+        "Choose Codex or Claude for this role."
+    ),
     "mandate.missing_fields": "Missing required fields: {fields}.",
     "mandate.fill_fields": "Fill them in and try again.",
     "mandate.field_type": "What do you want to do?",
@@ -251,6 +295,7 @@ ENGLISH: dict[str, str] = {
     "cost.engine": "reported by the engine",
     "cost.no_table": "no price table",
     "cost.unknown_price": "unknown model price",
+    "cost.missing_usage": "cost unavailable: the engine did not report complete usage",
     "cost.table": "{table}",
     "spectrum.tool": "tool {name}",
     "spectrum.file": "file {name}",
@@ -366,6 +411,10 @@ ENGLISH: dict[str, str] = {
     "cross.done": "run {run}",
     "cross.skipped": "{role}: no model routed, skipped",
     "cross.budget": "the cross-engine budget is spent",
+    "cross.cost_unknown": (
+        "the next role cannot start because a previous cost is unknown "
+        "and the remaining budget cannot be calculated"
+    ),
     "cross.no_engine": "{engine} is not available",
     "cross.failed": "{role} failed: the pipeline stopped",
     "route.low_clarity": "request unclear (clarity {clarity} of 2): capped at {tier}",
@@ -408,6 +457,10 @@ ENGLISH: dict[str, str] = {
         "{path}: {bytes} bytes · share of the fixed context unavailable: no first-request data yet"
     ),
     "bench.budget": "bench budget reached after ${spent}: remaining runs skipped",
+    "bench.cost_unknown": (
+        "the next run cannot start because a previous cost is unknown "
+        "and the remaining budget cannot be calculated"
+    ),
     "bench.run": "{order}/{total} {task} · {condition} · rep {rep}",
     "bench.accepted": "accepted",
     "bench.rejected": "not accepted",

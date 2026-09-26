@@ -59,7 +59,13 @@ def _csv_text(rows: list[dict[str, Any]]) -> str:
     if rows:
         writer = csv.DictWriter(buffer, fieldnames=list(rows[0]), lineterminator="\r\n")
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(
+            {
+                key: "n/a" if key == "cost_usd" and value is None else value
+                for key, value in row.items()
+            }
+            for row in rows
+        )
     return buffer.getvalue()
 
 

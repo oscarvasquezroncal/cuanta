@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pricing import CostEstimate, PriceTable, estimate_cost
@@ -45,7 +46,7 @@ class Totals:
     cache_write: int = 0
     output: int = 0
     reasoning: int = 0
-    cost_usd: float = 0.0
+    cost_usd: float | None = 0.0
     requests: int = 0
 
     @property
@@ -64,7 +65,7 @@ class Totals:
             cache_write=self.cache_write + event.cache_write_tokens,
             output=self.output + event.output_tokens,
             reasoning=self.reasoning + event.reasoning_tokens,
-            cost_usd=self.cost_usd + event.cost_usd,
+            cost_usd=sum_costs((self.cost_usd, event.cost_usd)),
             requests=self.requests + 1,
         )
 
@@ -503,19 +504,20 @@ class Row:
     tokens: int
     share: float
     count: int
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
 
 
 def grouped(view: View, usage: Sequence[LedgerEvent], tools: Sequence[LedgerEvent]) -> list[Row]:
     whole = sum(event.total_tokens for event in usage)
-    buckets: dict[str, list[int | float]] = defaultdict(lambda: [0, 0, 0.0])
+    buckets: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    costs: dict[str, list[float | None]] = defaultdict(list)
     if view in {View.AGENT, View.MODEL}:
         for event in usage:
             key = (event.agent or "main") if view is View.AGENT else (event.model or "unknown")
             bucket = buckets[key]
             bucket[0] += event.total_tokens
             bucket[1] += 1
-            bucket[2] += event.cost_usd
+            costs[key].append(event.cost_usd)
     else:
         for event in tools:
             key = (event.tool_name or "tool") if view is View.TOOL else event.file_path
@@ -525,7 +527,13 @@ def grouped(view: View, usage: Sequence[LedgerEvent], tools: Sequence[LedgerEven
             bucket[0] += estimated_tokens(event.tool_result_bytes or event.tool_input_bytes)
             bucket[1] += 1
     rows = [
-        Row(key, int(values[0]), _share(int(values[0]), whole), int(values[1]), float(values[2]))
+        Row(
+            key,
+            values[0],
+            _share(values[0], whole),
+            values[1],
+            sum_costs(costs[key]) if key in costs else None,
+        )
         for key, values in buckets.items()
     ]
     rows.sort(key=lambda row: row.tokens, reverse=True)

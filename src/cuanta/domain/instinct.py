@@ -36,7 +36,7 @@ class Noul:
 class Receipt:
     backend: str
     latency_ms: int
-    cost_usd: float
+    cost_usd: float | None
 
 
 Context = Mapping[str, object]
@@ -69,7 +69,7 @@ def answer_text(answer: Answer) -> tuple[str, float]:
 
 
 def split_receipt(receipt: Receipt, parts: int) -> Receipt:
-    share = receipt.cost_usd / parts if parts else receipt.cost_usd
+    share = receipt.cost_usd / parts if parts and receipt.cost_usd is not None else receipt.cost_usd
     return Receipt(receipt.backend, receipt.latency_ms, share)
 
 
