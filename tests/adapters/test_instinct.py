@@ -145,7 +145,7 @@ def test_openrouter_without_reported_cost_never_applies_the_typesafe_list_price(
             200, json=openrouter_answer({"type": "noul", "noul": 0.1}, None)
         )
     )
-    assert backend.noul("x", {})[1].cost_usd == 0.0
+    assert backend.noul("x", {})[1].cost_usd is None
 
 
 def test_connection_check_asks_one_noul_and_ignores_the_model_catalog(

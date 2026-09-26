@@ -79,8 +79,8 @@ def test_summarize_reports_medians_ranges_and_success() -> None:
     assert baseline.accepted == 2
     assert baseline.tokens_per_accepted.low == 100
     assert baseline.tokens_per_accepted.high == 300
-    assert baseline.cost.median is not None
-    assert baseline.spent_usd == 2.0
+    assert baseline.cost.median is None
+    assert baseline.spent_usd is None
     assert cuanta.tokens_per_accepted.median is None
     assert cuanta.success == 0.0
 
@@ -212,3 +212,22 @@ def test_both_sessions_double_the_plan_and_label_the_summary() -> None:
     assert "Session profile **both**" in report
     assert "| baseline · full | 1 |" in report
     assert "| t1 | baseline | full | 1 | yes |" in report
+
+
+def test_runner_stops_before_next_paid_run_when_cost_is_unknown(tmp_path: Path) -> None:
+    def execute(
+        task: BenchTask, condition: Condition, rep: int, cap: float, session: str
+    ) -> RunMetrics:
+        return _metrics(condition, False, 10, None, rep)
+
+    runner = BenchRunner(execute, LocalWorkspace(tmp_path))
+    sink = RecordingSink()
+    result = runner.run(_meta(budget=7.0), [TASK, OTHER], CONDITIONS, sink)
+    assert len(result.metrics) == 1 and result.stopped_early
+    assert any(
+        isinstance(event, Note)
+        and event.message is not None
+        and event.message.key == "bench.cost_unknown"
+        for event in sink.events
+    )
+    assert "n/a spent" in runner.report(result)

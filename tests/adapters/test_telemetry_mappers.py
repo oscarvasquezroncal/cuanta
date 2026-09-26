@@ -42,7 +42,7 @@ def test_claude_live_capture_maps_api_request_and_tools() -> None:
         and event.input_tokens == 8
         for event in events
     )
-    assert api.cost_usd > 0
+    assert api.cost_usd is not None and api.cost_usd > 0
     assert api.run_id == "01TESTRUN"
     assert api.trace_id == "0af7651916cd43dd8448eb211c80319c"
     assert api.agent == "main"
