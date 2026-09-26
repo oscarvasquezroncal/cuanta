@@ -53,6 +53,55 @@ This repository's ignored `.claude/settings.local.json` uses
 locally on each checkout; it is a first defense alongside the hook and scripts.
 Cuanta's application never executes Git in the user's projects.
 
+## Releases
+
+Only the user publishes release tags. Prepare the release on `main`: synchronize the version
+in `pyproject.toml`, `src/cuanta/__init__.py` and `uv.lock`, and add the matching dated entry
+to `CHANGELOG.md`. Run the required gates, commit through `scripts/git/commit.cmd`, publish
+main through `scripts/git/push.cmd`, and wait for every CI job on that exact commit to pass.
+
+For the first PyPI release, the repository owner must create a pending Trusted Publisher in
+their PyPI account with these values:
+
+| Field | Value |
+| --- | --- |
+| PyPI project | `cuanta` |
+| GitHub owner | `oscarvasquezroncal` |
+| GitHub repository | `cuanta` |
+| Workflow filename | `release.yml` |
+| Environment | `pypi` |
+
+Create the matching `pypi` environment in the GitHub repository settings. The release uses
+Trusted Publishing; no PyPI API token is stored in the repository or GitHub secrets. A pending
+publisher does not reserve the package name before the first successful publication.
+
+After setup and exact-commit CI are complete, the user runs:
+
+```cmd
+scripts\git\push.cmd --tag
+```
+
+The tag path requires a clean, attached `main` whose HEAD matches remote main, a valid release
+version with a dated changelog entry, successful current-attempt CI for that exact SHA, and
+no existing local or remote version tag. It creates an annotated `vX.Y.Z` tag at the checked
+commit and pushes only that tag. It does not fast-forward the checkout or push main as part
+of tagging. Unknown arguments are rejected.
+
+If the tag push fails after local creation, the script retains the local tag and reports its
+name and checked SHA. Inspect local and remote state before any recovery; a subsequent
+`--tag` invocation refuses the existing tag. Never force, move or recreate a published tag.
+
+The `release.yml` workflow runs the reusable CI gates and installed-wheel smoke checks,
+builds the distributions, publishes from the `pypi` environment, and installs that exact
+published version on Windows, Linux and macOS. Each published-package smoke job runs
+`cuanta --plain meow` and `cuanta --plain doctor` without a local wheel fallback. Only the
+publish job receives `id-token: write`.
+
+Watch the release with `gh run list --workflow release.yml`, then `gh run watch <run-id>`.
+A release is complete only when publication and all three published-package smoke jobs pass.
+If a post-publication check fails, diagnose it without rewriting the tag or republishing the
+same version.
+
 ## Verification and handoff
 
 Use focused tests during development. At milestone close:

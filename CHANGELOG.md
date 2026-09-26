@@ -6,7 +6,21 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-26
+
+Engine guarantees, honest cost reporting, cache and turn limits, and the first PyPI release workflow.
+
 ### Added
+- Engine guarantees in Team and CLI: spend caps, turn limits, read-only behavior and telemetry
+  are identified as enforced, checked after the run or unavailable. Cross-engine launches show
+  each role's guarantees and warn before launching an engine that cannot enforce the cap.
+- A tag-triggered PyPI Trusted Publisher workflow with separate verification, build and publish
+  jobs, followed by installation of the published version on Windows, Linux and macOS.
+- User-only `scripts\git\push.cmd --tag` checks the release version and changelog, a clean
+  `main` matching the remote, successful CI for that exact commit, and absent local/remote tags
+  before creating and publishing an annotated version tag.
+- PyPI installation instructions, a security reporting policy, and bug, feature and pull request
+  templates linked to the contribution workflow.
 - `docs/CONTRACTS.md` records external contracts with their version, status, date and evidence.
 - Claude mandates have a depth-based turn limit, configurable through `CUANTA_MAX_TURNS`,
   `runs.max_turns` or `--max-turns`; the ledger records the limit and turns used.
@@ -58,7 +72,7 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 - Instinct decisions carry the run they belong to; decisions made while typing or previewing
   are flagged as previews, repeated ones are deduplicated, and outcomes are recorded on the
   run's decisions (ledger schema v5).
-- A real investigation mode: read-only (Read, Grep, Glob and graphify; Write and Edit are
+- Claude investigation mode: read-only (Read, Grep, Glob and graphify; Write and Edit are
   denied), one architecture-analyst run or one agent in simple mode, and a structured report —
   summary, findings with `file:line`, risks, open questions, suggested next step. The vendored
   Forge mandate template gains the same investigation variant. Investigations route the
@@ -71,8 +85,8 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 - Lean sessions (`runs.session = lean`, the default; `--session lean|full` per run): runs cuanta
   launches on Claude Code get only the MCP servers they need (none) through a generated
   `--mcp-config` with `--strict-mcp-config`, and a `--settings` file with `disableAllHooks` and
-  every installed plugin disabled. Credentials are never touched. Codex and OpenCode have no
-  equivalent and run as they are.
+  every installed plugin disabled. Credentials are never touched. Codex and OpenCode keep
+  their configured plugins and MCP servers; their sandbox and permission guarantees differ.
 - The fixed session overhead — the first request's context, the plugins, MCP servers and hooks
   that loaded, a server that failed to connect, the startup time — shows on the Result screen,
   in Spectrum and in `cuanta spectrum`. Health warns about MCP servers that fail to connect, a
@@ -89,6 +103,18 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   you ask for `--include-raw` (a checkbox in the app); `cuanta ledger export --all`.
 
 ### Changed
+- Codex investigations and analyst roles explicitly use `read-only`; editing runs and roles
+  use `workspace-write`, with no extra writable roots or writable temporary directories.
+  Only temporary copies owned by cuanta skip Codex's Git repository check.
+- OpenCode investigations and read-only analyst roles are refused with a reason: the verified
+  permission profile permits shell write bypasses when graphify is allowed.
+- Missing costs remain `n/a` in the ledger, Result and totals, and `null` in JSON exports.
+  Known token prices produce labelled estimates; capped cross-engine, benchmark and retry
+  flows stop before more work when remaining spend cannot be calculated. Historical ledger
+  values are preserved because old zeroes lack enough provenance to reinterpret safely.
+- OpenCode runs stop when reported step costs reach the cap, or a capped step omits cost,
+  retaining the ending reason and reported usage. A step can exceed the cap before reporting.
+- CI and release actions use verified Node 24 implementations and immutable action pins.
 - Investigation prompts request the report in the request's language, and displayed reports
   begin at their first heading while the raw report stays available. New runs store whether
   the shape was a single context or a pipeline; ambiguous older runs display unknown.
@@ -104,6 +130,16 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   is confident, and the reason is shown.
 
 ### Fixed
+- Codex usage retains the requested model for pricing. Catalog models have standard price
+  rows; cumulative token totals and cache/reasoning subsets are counted once. Missing rates
+  stay unavailable, and estimates are not presented as actual subscription billing.
+- Team previews route within the selected engine, matching the launched model plan.
+- CLI help defers output setup until command execution; the app applies its responsive
+  classes before mounting, avoiding a redundant first-frame layout pass.
+- Windows descendant discovery excludes terminated process objects whose handles remain
+  open while preserving live descendants. SQLite migration tests close their connections.
+- TUI tests await deferred focus and mounting work before shutdown, and process tests wait
+  for children to finish, keeping exact assertions and timing budgets unchanged.
 - POSIX process discovery excludes its own `ps` probe, preventing false orphan reports.
 - CI tests cover graph tooling present and absent without relying on host installations,
   and verify repair commands for Windows, Linux and macOS explicitly.

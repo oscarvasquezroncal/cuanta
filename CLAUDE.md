@@ -139,5 +139,6 @@ Things that look like defects and are not. Filled only by pipeline runs (tester
 
 ## 10. Deploy state
 
-Published as 0.2.0 (wheel via `uv build`). Treat CLI surface and entry points as public.
-Deploy/release target beyond the wheel: [UNVERIFIED].
+Release metadata lives in `pyproject.toml`; `uv build` produces the wheel and source archive.
+The PyPI release workflow and user-only tag command are documented in `CONTRIBUTING.md`.
+Treat CLI surface and entry points as public. A built artifact does not prove PyPI publication.
