@@ -5,7 +5,7 @@ every token, accounted for
 ( ^.^ )
  > ^ <
 Michi says meow
-version  0.2.0
+version  0.3.0
 theme    dark
 
 ## ginger  ## blush  ## iris  ## cream  ## catnip  ## amber  ## hiss  ## sky  ## fur
