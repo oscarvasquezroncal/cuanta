@@ -180,12 +180,13 @@ flowchart LR
 ```
 
 1. **Intake.** A deterministic extractor pulls questions, error lines, file mentions and out-of-scope phrases from your text, at zero tokens. Instinct classifies the task type, the depth and what's missing, in one batched call.
-2. **Mandate.** cuanta fills your project's mandate template, picks the shape (single context or pipeline), plans a model tier per role and applies the spend cap. You can preview the exact prompt and command before launching.
+2. **Mandate.** cuanta fills your project's mandate template, picks the shape (single context or pipeline), plans a model tier per role and shows the engine's spend guarantees. You can preview the exact prompt and command before launching.
 3. **Lean launch.** The engine CLI runs headless:
    - on Claude Code, with lean settings, per-agent models (`--agents`) for pipelines, effort (`--effort`) and the analyst's instructions (`--append-system-prompt`) for single investigations;
-   - on Codex and OpenCode, with one model per run;
-   - with built-in write tools denied for investigations.
-4. **Telemetry.** Engines report to a local OTLP listener on `127.0.0.1`, and past sessions can be imported from transcripts. Everything lands in `.cuanta/ledger.db`.
+   - on Codex, with one model and an explicit read-only or workspace-write sandbox;
+   - on OpenCode, with one model for editing runs; investigations are refused because the integration cannot safely allow graphify shell commands while enforcing read-only access;
+   - on Claude, with built-in write tools denied for investigations and file changes checked afterward.
+4. **Telemetry.** cuanta reads engine JSON streams and, when configured, a local OTLP listener on `127.0.0.1`. Past supported sessions can be imported from transcripts. Usage lands in `.cuanta/ledger.db`; missing costs stay unavailable.
 5. **Result.** The report, the files that changed, the consumption, and a check of planned vs. actual models.
 
 **Every mandate is a fresh session.** Continuity comes from what's written down, not from chat history: the report's NEXT STEP (the **Continue** button fills the next mandate with it), Forge's docs, and the stored results.
@@ -220,7 +221,7 @@ flowchart LR
 | Docs | economy | Haiku 4.5 · GPT-5.6 Luna |
 
 - **The tiers** ship in `src/cuanta/assets/model_tiers.toml`, and you can change them in the **Models** screen.
-- **cuanta only picks models your engines report as available.** It never goes above the caps you set.
+- **cuanta only picks models your engines report as available.** Model tiers constrain routing. Spend enforcement depends on the engine; the Team step warns about limits before launch.
 - **Frontier models are opt-in.**
 - **After each run, the audit** compares the planned model with the one the telemetry saw.
 - **Claude turn limits** follow the selected depth. `cuanta mandate --max-turns` or `CUANTA_MAX_TURNS` overrides the depth limit; `--no-cap` removes only the spend cap.
@@ -233,12 +234,21 @@ flowchart LR
 | | Claude Code | Codex CLI | OpenCode |
 |---|---|---|---|
 | Launch, report, ledger | ✓ | ✓ | ✓ |
-| Live telemetry | OTLP | OTLP, after `cuanta telemetry on --engine codex` | JSON event stream |
+| Spend cap | **enforced** · native budget limit | **checked after the run** · token-priced estimate; no native spend limit | **enforced** · stop at reported step boundaries; a step can exceed the cap |
+| Turn limit | **enforced** · native turn limit | **not available** · no supported turn limit | **not available** · no supported turn limit |
+| Read-only | **checked after the run** · write tools denied; file changes checked, no verified OS sandbox | **enforced** · explicit sandbox for investigations and analyst roles | **not available** · investigations and analyst roles refused |
+| Telemetry | **checked after the run** · reported tokens and cost; missing values stay n/a | **checked after the run** · JSONL tokens; cost is estimated when prices are known | **checked after the run** · step tokens and cost; missing values stay n/a |
 | Per-agent models | ✓ via `--agents` | single model per run | single model per run |
 | Lean sessions | ✓ | — | — |
 | Import past sessions | ✓ | ✓ | — |
 
 `--cross-engine` (experimental) runs each pipeline role in its own session on the engine its routing picks, passing a JSON handoff between roles.
+
+For Claude roles in this experimental path, read-only is **not available**: write tools are denied, but there is no filesystem check between cross-engine roles. The **checked after the run** entry above applies to ordinary mandates, which compare file snapshots. Codex sandbox enforcement and the OpenCode read-only refusal apply in both paths.
+
+Each role shows its engine guarantees before launch. Codex costs use the requested model's published standard price row and are labelled **estimated**, not actual subscription billing. Missing prices or incomplete usage show **n/a** (JSON `null`). A capped cross-engine run stops before its next role when remaining spend cannot be calculated. An OpenCode step can overshoot its cap before reporting cost; cuanta records the reported overshoot and budget termination. A capped OpenCode run also stops when a step omits cost, with an explicit reason. Failed attempts and retries count toward totals and cost per accepted change.
+
+New ledger records distinguish reported zero from missing cost and retain cost provenance. Migration preserves historical numeric values; older zero values without provenance cannot be reliably classified retroactively.
 
 Engine flags, telemetry fields, pricing rows and their verification status are tracked in [`docs/CONTRACTS.md`](docs/CONTRACTS.md).
 
@@ -338,9 +348,10 @@ The full list lives in [`docs/FLAGS.md`](docs/FLAGS.md).
 - **Local first.** The ledger, reports and capsules live in `.cuanta/` inside your project, which is git-ignored. The telemetry listener only binds to `127.0.0.1`.
 - **Authentication and local config.** Engine runs use the official CLIs' sign-in. For Jev, cuanta reads `TYPESAFE_API_KEY` from the environment and sends it as a bearer token. It also reads Claude settings `env` values for routing; telemetry setup backs up existing engine config locally, so protect those backups as you would the originals.
 - **Consent before config changes.** Wiring telemetry edits an engine's config only after you agree, and keeps a backup. `cuanta telemetry off` restores it.
-- **Prompts are not stored by default.** Reports are, because they're your deliverable.
+- **Local records and engine storage.** cuanta stores reports, snapshots and usage locally. OpenCode's temporary prompt attachment is removed after a run. The official engine CLIs can retain their own sessions, prompts and operational state under their settings; cuanta's ledger policy does not disable that storage or their configured plugins and MCP servers.
 - **Instinct is offline by default.** With Jev, it sends the redacted request text and, only if you enable it, file paths and symbol names. It never sends code, and **See what is sent** shows the exact payload.
-- **Investigations deny built-in write tools.** cuanta never runs git in your projects.
+- **Engine-specific read-only behavior.** Codex investigations and analyst roles use an explicit read-only sandbox; editing roles use workspace-write with no extra writable roots or writable temp directories. cuanta never requests full-access mode. Claude investigations deny write tools and check file changes afterward; this is not a verified OS filesystem boundary. OpenCode investigations and analyst roles are refused because shell permission rules on the verified version admit write bypasses. See the engine table and contracts for the limits of each guarantee.
+- **Git boundary.** cuanta never runs git in your projects. Codex's repository check is skipped only for temporary copies owned by cuanta, never for ordinary user directories.
 
 ---
 
