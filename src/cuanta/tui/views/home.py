@@ -13,7 +13,7 @@ from cuanta.domain.progress import Status
 from cuanta.domain.voice import Mood
 from cuanta.tui.cache_text import prefix_content
 from cuanta.tui.commands import HEALTH, INIT, MANDATES, SPECTRUM, TESTS
-from cuanta.tui.fmt import compact, glyph, grouped, money, status_style
+from cuanta.tui.fmt import compact, glyph, grouped, run_money, status_style
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.widgets.facts import Facts
 from cuanta.tui.widgets.flow import FlowRow
@@ -166,7 +166,7 @@ class HomeView(VerticalScroll):
                 Text(t.keyed("run_kind", run.kind)),
                 Text(run.engine or "–"),
                 Text(f"{glyph(_run_status(run.status))} {t.keyed('run_status', run.status)}"),
-                Text(money(run.cost_usd, t("spectrum.na")) if run.engine else "–", justify="right"),
+                Text(run_money(run, t) if run.engine else "–", justify="right"),
                 Text(run.started_at[5:16].replace("T", " ")),
                 key=run.id,
             )

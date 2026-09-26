@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from cuanta.domain.ledger import Run
 from cuanta.domain.progress import Status
+from cuanta.tui.i18n import Catalog
 
 UNITS = ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "k"))
 GLYPHS = {
@@ -30,6 +32,13 @@ def money(value: float | None, unknown: str = "–") -> str:
     if value is None:
         return unknown
     return f"${value:,.2f}"
+
+
+def run_money(run: Run, catalog: Catalog) -> str:
+    value = money(run.cost_usd, catalog("spectrum.na"))
+    if run.cost_usd is not None and run.cost_source == "estimated":
+        return catalog("cost.estimated", cost=value)
+    return value
 
 
 def glyph(status: Status) -> str:

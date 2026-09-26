@@ -12,6 +12,7 @@ from textual.widgets import Button, DataTable, Static
 
 from cuanta.application.bench import BenchResult
 from cuanta.domain.bench import summarize
+from cuanta.domain.costs import sum_costs
 from cuanta.tui.commands import BENCH_COMMAND
 from cuanta.tui.fmt import money
 from cuanta.tui.i18n import Catalog
@@ -47,7 +48,7 @@ class BenchScreen(ModalScreen[None]):
 
     def _meta(self, result: BenchResult) -> str:
         meta = result.meta
-        spent = sum(item.cost_usd or 0.0 for item in result.metrics)
+        spent = sum_costs(item.cost_usd for item in result.metrics)
         return self._t(
             "bench.meta",
             suite=meta.suite,
@@ -55,7 +56,7 @@ class BenchScreen(ModalScreen[None]):
             reps=meta.reps,
             engine=f"{meta.engine} {meta.engine_version}",
             model=meta.model,
-            spent=money(spent),
+            spent=money(spent, self._t("spectrum.na")),
             started=meta.started_at[:16].replace("T", " "),
         )
 
@@ -76,8 +77,8 @@ class BenchScreen(ModalScreen[None]):
                 row.condition.value,
                 f"{row.accepted}/{row.runs}",
                 "–" if median is None else f"{median:,.0f}",
-                money(row.cost.median),
-                money(row.spent_usd),
+                money(row.cost.median, t("spectrum.na")),
+                money(row.spent_usd, t("spectrum.na")),
             )
         runs = self.query_one("#bench-runs", DataTable)
         for key in RUN_COLUMNS:
@@ -93,7 +94,7 @@ class BenchScreen(ModalScreen[None]):
                 str(item.rep),
                 t(f"bench.{verdict}"),
                 f"{item.total_tokens:,}",
-                money(item.cost_usd),
+                money(item.cost_usd, t("spectrum.na")),
                 str(item.retries),
             )
 

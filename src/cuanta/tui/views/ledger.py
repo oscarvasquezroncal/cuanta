@@ -13,7 +13,7 @@ from textual.widgets import Button, DataTable, Input, Label, Select, Static
 
 from cuanta.application.ledger_view import RunFilter, facets, filter_runs
 from cuanta.domain.ledger import Run
-from cuanta.tui.fmt import money
+from cuanta.tui.fmt import run_money
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.services import Services
 from cuanta.tui.widgets.facts import Facts
@@ -129,7 +129,7 @@ class LedgerView(Vertical):
                 Text(t.keyed("run_kind", run.kind)),
                 Text(run.engine or "–"),
                 Text(t.keyed("run_status", run.status)),
-                Text(money(run.cost_usd, t("spectrum.na")) if run.engine else "–", justify="right"),
+                Text(run_money(run, t) if run.engine else "–", justify="right"),
                 key=run.id,
             )
         t = self._t
@@ -179,7 +179,7 @@ class LedgerView(Vertical):
             (t("ledger.field_status"), t.keyed("run_status", run.status)),
             (t("ledger.field_started"), run.started_at or "–"),
             (t("ledger.field_ended"), run.ended_at or "–"),
-            (t("ledger.field_cost"), money(run.cost_usd, t("spectrum.na"))),
+            (t("ledger.field_cost"), run_money(run, t)),
             (t("ledger.field_story"), run.hu_ref or "–"),
             (t("ledger.field_scope"), run.scope or "–"),
         ]

@@ -627,6 +627,7 @@ class ContainerServices:
                 depth=options.depth,
                 scope=route.scope,
                 risk=route.risk,
+                engine=options.engine or container.config.engine,
             )
             cap = resolve_budget(options, request.type, container.config.budget_usd)
             return plan, container.team_estimate(plan, request.type, options.depth, cap)
