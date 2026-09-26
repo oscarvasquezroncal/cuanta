@@ -170,6 +170,8 @@ class StreamingEngine:
         stopped = ""
         closed = False
         self._active = stream
+        if self.cancelled:
+            stream.terminate()
         try:
             for line in stream.lines():
                 if self.cancelled:
