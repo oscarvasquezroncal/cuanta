@@ -1,6 +1,6 @@
 # Agent instructions
 
-Read [CLAUDE.md](CLAUDE.md) for project rules and [CONTRIBUTING.md](CONTRIBUTING.md)
+Read [CLAUDE.md](CLAUDE.md) for project rules and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 for the Git workflow and verification commands before changing this repository.
 
 - Preserve the hexagonal layers, strict typing, and English/Spanish catalogs.

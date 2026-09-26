@@ -25,8 +25,7 @@ It measures what your coding agents spend, explains why, and runs them in a lean
 [Quick start](#quick-start) ·
 [How it works](#how-it-works) ·
 [Commands](#commands) ·
-[Privacy](#privacy-and-safety) ·
-[Contributing](#contributing)
+[Privacy](#privacy-and-safety)
 
 </div>
 
@@ -123,7 +122,8 @@ cuanta meow
 
 For web mode, use `uv tool install cuanta --with textual-serve`, then `cuanta ui --web`.
 To install a source checkout instead, run `uv tool install .` from the folder containing
-`pyproject.toml`. See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release steps.
+`pyproject.toml`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for development and
+release steps.
 
 **Optional extras:**
 - [graphify](https://github.com/Graphify-Labs/graphify) for a code graph agents can query instead of reading files.
@@ -390,26 +390,12 @@ _Results will appear here after the first public run of `cuanta bench report --r
 
 ---
 
-## Contributing
+## Maintenance
 
-From the repository root:
-
-```bash
-uv sync --extra web
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy --strict
-uv run pytest -n auto --cov --cov-report=term
-```
-
-House rules, enforced by tests:
-- The hexagonal layers.
-- `mypy --strict`.
-- No comments or docstrings in `src/` and `tests/`: names and tests carry the meaning.
-- Every visible string in both the English and Spanish catalogs.
-- Snapshot tests for every screen.
-
-Commits follow [Conventional Commits](https://www.conventionalcommits.org). See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and [SECURITY.md](SECURITY.md) for security reporting and supported versions.
+cuanta is maintained by its author and does not accept issues or pull requests.
+Maintainer notes on the Git workflow, verification gates and releases are in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Security reports follow [SECURITY.md](SECURITY.md),
+which also lists the supported versions.
 
 ### The palette
 

@@ -6,6 +6,17 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
+### Changed
+- The maintainer's Git workflow, verification gates and release steps move from
+  `CONTRIBUTING.md` to `docs/DEVELOPMENT.md`, and the README's Contributing section becomes
+  Maintenance.
+- `SECURITY.md` directs vulnerability reports to GitHub private vulnerability reporting
+  instead of a public issue requesting a private channel.
+
+### Removed
+- cuanta no longer accepts contributions: `CONTRIBUTING.md` and the bug report, feature
+  request and pull request templates are removed.
+
 ## [0.3.0] - 2026-09-26
 
 Engine guarantees, honest cost reporting, cache and turn limits, and the first PyPI release workflow.

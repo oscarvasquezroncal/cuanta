@@ -89,7 +89,7 @@ floor. Preserve performance assertions, measured startup work and budgets.
 - Repository workflow: work only on `main`; commit only through `scripts/git/commit.cmd`
   after the gates; only the user runs `scripts/git/push.cmd`. No AI attribution, force,
   rebase, stash, clean or rewriting published commits. At session start, fetch and
-  pull with `--ff-only` if a remote exists; stop on divergence. See `CONTRIBUTING.md`.
+  pull with `--ff-only` if a remote exists; stop on divergence. See `docs/DEVELOPMENT.md`.
 - The private session plan, when present, lives in `.cuanta/NEXT_SESSIONS.md` and stays
   untracked. Follow its milestone order. Full gate (both pytest phases) once at close,
   twice consecutively for TUI lifecycle, process management, timing changes and V2 M9.
@@ -147,5 +147,5 @@ Things that look like defects and are not. Filled only by pipeline runs (tester
 ## 10. Deploy state
 
 Release metadata lives in `pyproject.toml`; `uv build` produces the wheel and source archive.
-The PyPI release workflow and user-only tag command are documented in `CONTRIBUTING.md`.
+The PyPI release workflow and user-only tag command are documented in `docs/DEVELOPMENT.md`.
 Treat CLI surface and entry points as public. A built artifact does not prove PyPI publication.
