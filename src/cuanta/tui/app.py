@@ -133,6 +133,18 @@ class CuantaApp(App[None]):
         self.bind("ctrl+q", "quit", description=t("keys.quit"))
         self.bind("question_mark", "help", description=t("keys.help"), show=False)
 
+    def get_default_screen(self) -> Screen[object]:
+        screen = super().get_default_screen()
+        for dimension, breakpoints in (
+            (self.size.width, self.HORIZONTAL_BREAKPOINTS),
+            (self.size.height, self.VERTICAL_BREAKPOINTS),
+        ):
+            for boundary, name in sorted(breakpoints, reverse=True):
+                if dimension >= boundary:
+                    screen.add_class(name, update=False)
+                    break
+        return screen
+
     def compose(self) -> ComposeResult:
         yield AppHeader(self.catalog, self.motion)
         if self.legacy and not self.settings.terminal_tip_dismissed:
