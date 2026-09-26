@@ -12,7 +12,11 @@ from pathlib import Path
 
 import httpx
 
-from cuanta.adapters.telemetry.otlp_receiver import build_listener, next_free_port
+from cuanta.adapters.telemetry.otlp_receiver import (
+    bind_listener,
+    build_listener,
+    next_free_port,
+)
 from cuanta.domain.errors import EnvironmentFailure
 from cuanta.domain.telemetry import endpoint
 from cuanta.ports.ledger import Ledger
@@ -175,9 +179,7 @@ class LocalListenerControl:
             yield current
             return
         token = secrets.token_hex(16)
-        listener = build_listener(
-            self.free_port(port), self._ledger_factory, self._keep_prompts, token
-        )
+        listener = bind_listener(port, self._ledger_factory, self._keep_prompts, token)
         listener.start()
         self._write_record(listener.port, os.getpid(), token)
         try:
