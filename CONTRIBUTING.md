@@ -110,12 +110,20 @@ Use focused tests during development. At milestone close:
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy --strict
-uv run pytest -n auto --cov --cov-report=term
+uv run pytest -n auto -m "not live and not perf" --cov --cov-report=term
+uv run python scripts/tests/performance.py
 ```
+
+The full test gate requires both pytest phases, in that order, from the same workspace.
+The parallel phase starts fresh coverage data. The performance helper discovers every
+non-live performance case, then executes those exact node IDs serially in a fresh process
+and appends coverage. Empty discovery or a selection mismatch fails the gate. Each execution
+phase enforces the configured coverage floor. This keeps unrelated collected test modules
+out of performance measurements. Keep the assertions and budgets unchanged.
 
 `loadgroup` scheduling keeps tests sharing `xdist_group` serial within their
 group; fixed-port listener tests share one group. Use `--maxprocesses=4` when
-local resources require a worker limit. Run the full suite once, or twice
+local resources require a worker limit for the parallel phase. Run the full gate once, or twice
 consecutively when changing TUI lifecycle, process management or timing-sensitive
 code, and at V2 M9. Do not lower the coverage floor. No comments or docstrings;
 keep strict types, hexagonal layers and both es/en catalogs.

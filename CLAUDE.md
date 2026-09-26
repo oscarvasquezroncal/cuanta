@@ -70,12 +70,19 @@ uv sync --extra web                 # install (dev group is default)
 uv run ruff check                   # lint
 uv run ruff format --check          # format gate
 uv run mypy                         # strict typecheck (files from pyproject)
-uv run pytest -n auto --cov --cov-report=term   # tests + coverage floor
+uv run pytest -n auto -m "not live and not perf" --cov --cov-report=term
+uv run python scripts/tests/performance.py
 uv run pytest -m live               # opt-in: real agent binaries + network
 uv build && cuanta --plain doctor   # install smoke (CI install-smoke job)
 ```
 
 Counts are never written here: `uv run pytest --collect-only -q | tail -1`.
+
+The full test gate is both pytest phases, in order, in the same workspace. The parallel phase
+starts fresh coverage; the performance helper discovers every non-live performance case,
+then executes those exact node IDs serially in a fresh process and appends coverage. A
+selection mismatch or empty discovery fails. Both phases enforce the configured coverage
+floor. Preserve performance assertions, measured startup work and budgets.
 
 ## 6. Do not break
 
@@ -84,7 +91,7 @@ Counts are never written here: `uv run pytest --collect-only -q | tail -1`.
   rebase, stash, clean or rewriting published commits. At session start, fetch and
   pull with `--ff-only` if a remote exists; stop on divergence. See `CONTRIBUTING.md`.
 - The private session plan, when present, lives in `.cuanta/NEXT_SESSIONS.md` and stays
-  untracked. Follow its milestone order. Full suite once at close,
+  untracked. Follow its milestone order. Full gate (both pytest phases) once at close,
   twice consecutively for TUI lifecycle, process management, timing changes and V2 M9.
 
 - The layer `ALLOWED` map and the no-I/O-in-domain check (`tests/architecture/test_layers.py`).

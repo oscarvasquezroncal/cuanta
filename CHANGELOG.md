@@ -115,6 +115,8 @@ Engine guarantees, honest cost reporting, cache and turn limits, and the first P
 - OpenCode runs stop when reported step costs reach the cap, or a capped step omits cost,
   retaining the ending reason and reported usage. A step can exceed the cap before reporting.
 - CI and release actions use verified Node 24 implementations and immutable action pins.
+- Performance tests run in a dedicated process after discovery and parallel tests, with
+  unchanged timing budgets and coverage accumulated across both required gate phases.
 - Investigation prompts request the report in the request's language, and displayed reports
   begin at their first heading while the raw report stays available. New runs store whether
   the shape was a single context or a pipeline; ambiguous older runs display unknown.
@@ -136,6 +138,8 @@ Engine guarantees, honest cost reporting, cache and turn limits, and the first P
 - Team previews route within the selected engine, matching the launched model plan.
 - CLI help defers output setup until command execution; the app applies its responsive
   classes before mounting, avoiding a redundant first-frame layout pass.
+- Home table headings use plain text, avoiding an unnecessary emoji dictionary import during
+  cold startup while preserving the English and Spanish labels.
 - Windows descendant discovery excludes terminated process objects whose handles remain
   open while preserving live descendants. SQLite migration tests close their connections.
 - TUI tests await deferred focus and mounting work before shutdown, and process tests wait
