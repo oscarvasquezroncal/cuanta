@@ -49,7 +49,8 @@ def test_posix_probe_failure_returns_no_processes(monkeypatch: pytest.MonkeyPatc
 
 def test_live_descendants_find_real_children_without_the_probe() -> None:
     with subprocess.Popen(
-        [sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(60)"],
+        [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.readline()"],
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
     ) as child:
@@ -58,8 +59,8 @@ def test_live_descendants_find_real_children_without_the_probe() -> None:
             assert child.stdout.readline().strip() == "ready"
             assert shell.descendants(os.getpid()) == {child.pid, *shell.descendants(child.pid)}
         finally:
-            child.kill()
-            child.wait(timeout=5)
+            child.communicate("\n", timeout=5)
+    assert child.returncode == 0
     assert shell.descendants(os.getpid()) == set()
 
 
