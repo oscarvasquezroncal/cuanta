@@ -34,7 +34,10 @@ jobs:
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run mypy
-      - run: uv run pytest -n auto --cov --cov-report=term
+      - name: Run parallel tests
+        run: uv run pytest -n auto -m "not live and not perf" --cov --cov-report=term
+      - name: Discover and run performance tests in a dedicated process
+        run: uv run python scripts/tests/performance.py
 
   install-smoke:
     needs: gates

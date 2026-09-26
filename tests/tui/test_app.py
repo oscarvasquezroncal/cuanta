@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import patch
 
+import pytest
 from textual.pilot import Pilot
 from textual.widgets import Button, ContentSwitcher, DataTable, Select, Static
 from textual.worker import WorkerCancelled
@@ -273,6 +274,7 @@ def test_terminal_background_is_transparent() -> None:
     drive(app, scenario)
 
 
+@pytest.mark.perf
 def test_first_paint_is_fast() -> None:
     timings: list[float] = []
 

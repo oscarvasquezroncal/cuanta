@@ -96,7 +96,7 @@ ignore = ["PLR0913", "PLR2004", "PLR0911", "PLR0912", "PLR0917", "PLC0415", "RUF
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["src", "tests", "scripts/git"]
+files = ["src", "tests", "scripts/git", "scripts/tests"]
 exclude = ["src/cuanta/assets/", "tests/fixtures/"]
 warn_unreachable = true
 
