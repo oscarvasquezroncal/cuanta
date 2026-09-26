@@ -138,9 +138,10 @@ out of performance measurements. Keep the assertions and budgets unchanged.
 
 `loadgroup` scheduling keeps tests sharing `xdist_group` serial within their
 group; fixed-port listener tests share one group. Use `--maxprocesses=4` when
-local resources require a worker limit for the parallel phase. Run the full gate once, or twice
-consecutively when changing TUI lifecycle, process management or timing-sensitive
-code, and at V2 M9. Do not lower the coverage floor.
+local resources require a worker limit for the parallel phase. While working, run focused
+tests only. At a milestone close, run the full gate once; run it twice consecutively only when
+the milestone changes process management, and at V2 M9. Do not lower the coverage floor or move
+speed budgets.
 Tests have a 120-second timeout; tests whose own bounds require more time use
 `@pytest.mark.timeout(300)`, while opted-in live tests have no timeout.
 

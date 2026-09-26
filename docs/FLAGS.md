@@ -36,6 +36,10 @@ What does NOT belong here: rules about how to use a flag (rulebook), history of 
 | `CUANTA_NO_ANIMATION` | `src/cuanta/cli/commands/ui.py` | disable TUI launch animation | no |
 | `NO_COLOR` | `src/cuanta/cli/runtime.py`, `cli/app.py` | standard no-color; also suppresses auto-launch of the TUI | yes |
 | `runs.session` (`.cuanta/config.toml`), `--session` | `src/cuanta/domain/config.py`, `application/engine_run.py` | runs cuanta launches are `lean` (no user plugins, hooks or MCP servers) or `full` | yes |
+| `cuanta mandate --sandbox` / `--keep` | `src/cuanta/cli/commands/mandate.py`, `application/sandbox.py`, `adapters/system/sandbox.py` | run in an isolated copy of the project; the patch and after-images land in `.cuanta/trials/<run-id>/`, and the copy is deleted unless `--keep` | yes |
+| `CUANTA_STATE_ROOT` | `src/cuanta/bootstrap.py`, `domain/sandbox.py` | set by cuanta for engines running in an isolated copy, so `cuanta test` and `cuanta cat` inside the copy use the original project's ledger and capsules | yes |
+| `git.workflow` (`config.toml`) | `src/cuanta/domain/config.py`, `domain/handoff.py`, `cli/commands/runs.py`, `tui/services.py` | `branches` suggests a branch per change type, `trunk` a commit on the current branch; cuanta only prints the git commands | yes |
+| `cuanta runs apply` / `discard` / `branch` | `src/cuanta/cli/commands/runs.py`, `application/trials.py`, `domain/handoff.py` | apply an isolated-copy run after a drift check, reject it, or print the git hand-off for the configured workflow | no |
 | `CUANTA_HELP_BUDGET_S` / `CUANTA_PAINT_BUDGET_S` | perf tests; set in `.github/workflows/ci.yml` | loosen perf budgets | yes |
 | `cuanta probe cache-ttl` / `--gaps` / `--long` / `--budget-usd` / `--per-run-usd` / `--tools` / `--model` / `--keep` / `--no-save` / `--yes` | `src/cuanta/cli/commands/probe.py`, `application/cache_probe.py` | measure Claude cache expiry in a temporary project within a spend cap; without `--yes`, show the plan without spending | yes |
 | pytest `addopts -m "not live"` | `pyproject.toml` | live tests excluded by default | yes |

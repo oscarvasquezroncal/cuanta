@@ -79,6 +79,57 @@ Empty — nothing external was harvested at init (no prior docs existed). Fills 
   the installed client. Source:
   https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle — 2026-09-25.
 
+## Isolated copies: Next.js, NTFS links and git — 2026-09-26
+
+- Next.js 16.2.11 takes as its root the directory of the outermost lockfile found while walking
+  up from the project, unless `turbopack.root` or `outputFileTracingRoot` is set —
+  `next/dist/lib/find-root.js` (`findRootDirAndLockFiles`) in the installed package — 2026-09-26.
+- Turbopack in Next.js 16.2.11 refuses a `node_modules` junction that resolves outside its root:
+  `Symlink [project]/node_modules is invalid, it points out of the filesystem root`. A copy whose
+  `node_modules` is a real folder of hard links builds (`npm run build` exit 0) and leaves the
+  original `node_modules` unchanged — local probe on a production Next.js landing page,
+  Windows 11 — 2026-09-26.
+- NTFS hard links share data and attributes, but a directory entry's size and attributes are
+  updated only at the link used for the change; to restore read-only after deleting a link, set
+  it from a remaining link — https://learn.microsoft.com/en-us/windows/win32/fileio/hard-links-and-junctions
+  — 2026-09-26. `os.scandir` stat data comes from directory entries, so the node_modules check
+  uses `os.stat` per file — `tests/adapters/test_sandbox_copy.py`
+  (`test_in_place_write_through_a_hard_link_is_detected`) — 2026-09-26.
+- `_winapi.CreateJunction(target, link)` accepts an extended-length link path and fails with
+  `FileNotFoundError` when the target does not exist yet, so links found in a project are
+  recreated after the copy walk — `src/cuanta/adapters/system/sandbox.py` — 2026-09-26.
+- `git add` and `git commit` accept `--pathspec-from-file` with `--pathspec-file-nul` (git 2.25
+  or later), and `--literal-pathspecs` disables pathspec magic —
+  https://git-scm.com/docs/git-add, https://git-scm.com/docs/git — 2026-09-26.
+- `git apply` needs an `index <old>..<new>` line with full 40-character blob ids to apply a
+  `GIT binary patch` hunk; the hunk is a zlib stream in git's base85 lines, and Python's
+  `base64.b85encode` uses the same alphabet — `tests/unit/test_patch.py`
+  (`test_patch_round_trips_through_git_apply`) — 2026-09-26.
+- The git index (`.git/index`, versions 2 to 4) lists each staged path with its blob id; a file
+  whose content hashes to a different blob has changes that are not staged —
+  https://git-scm.com/docs/index-format — 2026-09-26.
+- Each index entry also caches the working file's size and mtime; with `core.autocrlf=true`
+  (the Git for Windows default) the working tree holds CRLF while the index blob has LF, so a
+  clean file only matches its blob after CRLF is turned into LF — `tests/unit/test_sandbox_runs.py`
+  (`test_handoff_flags_untracked_edits_but_not_crlf_checkouts`) — 2026-09-26.
+- `GIT_CEILING_DIRECTORIES` stops repository discovery from walking above the listed folders —
+  https://git-scm.com/docs/git#Documentation/git.txt-GITCEILINGDIRECTORIES — 2026-09-26.
+- Git reads its user settings from `$XDG_CONFIG_HOME/git/config` and then `~/.gitconfig`, then
+  the repository's `.git/config`; `core.excludesFile` defaults to `$XDG_CONFIG_HOME/git/ignore`
+  (`~/.config/git/ignore`), and `core.ignorecase` makes ignore patterns match without case —
+  https://git-scm.com/docs/git-config#FILES, https://git-scm.com/docs/gitignore — 2026-09-26.
+- Git patches record a mode-only change as `old mode`/`new mode` lines with no hunk, and a
+  deleted file keeps its own mode in `deleted file mode`; `git apply` sets the executable bit on
+  POSIX — `tests/unit/test_patch.py` (`test_mode_patches_apply_with_git`, run under WSL Linux) —
+  2026-09-26.
+- On Windows, `os.replace` onto a read-only file and `os.unlink` of a read-only file raise
+  `PermissionError` until the read-only attribute is cleared —
+  `tests/adapters/test_workspace_bytes.py` — 2026-09-26.
+- `socket.bind` on Windows fails with WinError 10048 when another socket already holds the
+  port, so probing a port and binding it later races with parallel processes; the listener now
+  binds and moves to the next port on failure — `tests/adapters/test_listener.py`
+  (`test_scoped_listener_moves_on_when_a_free_looking_port_is_taken`) — 2026-09-26.
+
 ## Test timeout tooling — 2026-09-25
 
 - pytest-timeout 2.4.0 accepts a config `timeout`, `PYTEST_TIMEOUT`, `--timeout`, and per-test
