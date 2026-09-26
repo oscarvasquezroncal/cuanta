@@ -2,7 +2,12 @@ name: ci
 
 on:
   push:
+    branches: ["**"]
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   gates:
@@ -18,10 +23,13 @@ jobs:
       CUANTA_PAINT_BUDGET_S: "1.5"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - name: Check out source (checkout 7.0.1)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up uv (setup-uv 10.2.0)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           python-version: ${{ matrix.python }}
+          prune-cache: true
       - run: uv sync --python ${{ matrix.python }} --extra web
       - run: uv run ruff check
       - run: uv run ruff format --check
@@ -37,10 +45,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - name: Check out source (checkout 7.0.1)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up uv (setup-uv 10.2.0)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           python-version: "3.12"
+          prune-cache: true
       - run: uv build
       - shell: bash
         run: uv tool install dist/*.whl
