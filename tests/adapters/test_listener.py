@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import socket
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -10,6 +11,7 @@ import httpx
 import pytest
 
 from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
+from cuanta.adapters.telemetry import otlp_receiver
 from cuanta.adapters.telemetry.listener_control import LocalListenerControl
 from cuanta.adapters.telemetry.otlp_receiver import RunningListener, build_listener, next_free_port
 from cuanta.domain.ledger import Run
@@ -144,6 +146,23 @@ def test_scoped_listener_starts_and_stops(tmp_path: Path) -> None:
         assert status.owned
         assert control.status().running
     assert not control.status().running
+    assert not control.pidfile.exists()
+
+
+def test_scoped_listener_moves_on_when_a_free_looking_port_is_taken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control = LocalListenerControl(
+        tmp_path / ".cuanta", tmp_path, lambda: SqliteLedger(tmp_path / "l.db"), linger_s=0.0
+    )
+    taken = next_free_port(47200)
+    monkeypatch.setattr(otlp_receiver, "port_is_free", lambda port: True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as holder:
+        holder.bind(("127.0.0.1", taken))
+        holder.listen()
+        with control.scoped(taken) as status:
+            assert status.running
+            assert status.port != taken
     assert not control.pidfile.exists()
 
 
