@@ -10,6 +10,8 @@ from cuanta.domain.shells import Shell, shell_from_name
 
 SNAPSHOT_PROCESS = 0x00000002
 QUERY_LIMITED_INFORMATION = 0x1000
+SYNCHRONIZE = 0x00100000
+ERROR_INVALID_PARAMETER = 87
 MAX_DEPTH = 12
 PASS_THROUGH = frozenset(
     {"python.exe", "pythonw.exe", "py.exe", "uv.exe", "uvx.exe", "cuanta.exe", "conhost.exe"}
@@ -88,6 +90,21 @@ if sys.platform == "win32":
             return None
         return (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)
 
+    def _process_exited(pid: int) -> bool:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel.OpenProcess(SYNCHRONIZE, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == ERROR_INVALID_PARAMETER
+        try:
+            return bool(kernel.WaitForSingleObject(handle, 0) == 0)
+        finally:
+            kernel.CloseHandle(handle)
+
 else:
 
     def _native_table() -> dict[int, tuple[int, str]]:
@@ -95,6 +112,9 @@ else:
 
     def _creation_time(pid: int) -> int | None:
         raise OSError(f"creation time of process {pid} is only probed on Windows")
+
+    def _process_exited(pid: int) -> bool:
+        raise OSError(f"termination of process {pid} is only probed on Windows")
 
 
 def process_table() -> dict[int, tuple[int, str]]:
@@ -155,7 +175,7 @@ def descendants(pid: int, table: dict[int, tuple[int, str]] | None = None) -> se
                 continue
             found.add(child)
             frontier.append(child)
-    return found
+    return {child for child in found if not _process_exited(child)} if verify else found
 
 
 def _born_after(child: int | None, parent: int | None) -> bool:
