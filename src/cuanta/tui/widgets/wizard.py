@@ -21,7 +21,8 @@ from cuanta.application.intake import Understanding
 from cuanta.application.mandate_flow import MandateOptions, MandatePreview
 from cuanta.application.route_apply import RouteOptions
 from cuanta.application.routing import RoutePlan
-from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile
+from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
+from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile, turn_limit
 from cuanta.domain.drafts import Draft
 from cuanta.domain.intake import GAP_ANSWERS, GAP_FIELD
 from cuanta.domain.mandate import (
@@ -36,6 +37,7 @@ from cuanta.domain.mandate import (
 )
 from cuanta.domain.messages import msg
 from cuanta.domain.routing import ENGINE_ORDER
+from cuanta.tui.cache_text import prefix_content
 from cuanta.tui.fmt import money
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.screens.confirm import ConfirmScreen
@@ -117,6 +119,7 @@ class MandateWizard(Vertical):
         self.engine = ""
         self.engines: tuple[str, ...] = ()
         self.budget = 0.0
+        self.max_turns = 0
         self.depth = DEFAULT_DEPTH.value
         self.custom_cap = False
         self.no_cap = False
@@ -266,6 +269,7 @@ class MandateWizard(Vertical):
                 )
         yield Static("", id="wiz-depth-note")
         yield Static("", id="wiz-estimate")
+        yield Static("", id="wiz-prefix")
         yield Static("", id="wiz-cap-note")
         with Horizontal(id="cap-row"):
             yield Button(t("wizard.cap_custom"), id="wiz-custom-cap", classes="chip", compact=True)
@@ -310,6 +314,7 @@ class MandateWizard(Vertical):
         engines: tuple[tuple[str, bool], ...],
         forge_ready: bool = True,
         init_estimate: float | None = None,
+        max_turns: int = 0,
     ) -> None:
         ready = {name for name, installed in engines if installed}
         self.engines = tuple(name for name in ENGINE_ORDER if name in ready)
@@ -320,6 +325,7 @@ class MandateWizard(Vertical):
         if self.engine:
             selector.value = self.engine
         self.budget = budget
+        self.max_turns = max_turns
         self.forge_ready = forge_ready
         self.init_estimate = init_estimate
         label = (
@@ -427,6 +433,7 @@ class MandateWizard(Vertical):
             ),
             simple=self.simple,
             depth=self.depth,
+            max_turns=self.max_turns,
             no_cap=self.no_cap,
             intake_scope=understood.intake_scope if understood is not None else "",
         )
@@ -489,6 +496,9 @@ class MandateWizard(Vertical):
             note = t("wizard.cap_note", cap=money(value)) if value else t("wizard.bad_cap")
         else:
             note = t("wizard.cap_depth", cap=money(chosen.cost_cap_usd))
+        limit = turn_limit(chosen, self.max_turns)
+        if self.engine == "claude" and limit > 0:
+            note = f"{note}  ·  {t('wizard.turn_limit', turns=limit)}"
         self.query_one("#wiz-cap-note", Static).update(Content.styled(note, "$text-muted"))
         self.query_one("#wiz-cap-field").display = self.custom_cap and not self.no_cap
 
@@ -598,11 +608,29 @@ class MandateWizard(Vertical):
         self.estimate = None
         self.query_one("#team-cards").display = False
         self.query_one("#wiz-estimate", Static).update("")
+        self.query_one("#wiz-prefix", Static).update(prefix_content(self._t, UNKNOWN_PREFIX))
         self._paint_summary()
         if self.simple:
             self.show_simple_team()
         elif self.kind:
             self.load_team()
+        self.load_prefix()
+
+    @work(thread=True, exclusive=True, group="prefix", exit_on_error=False)
+    def load_prefix(self) -> None:
+        engine = self.engine
+        revision = self._team_revision
+        try:
+            window = self._services.prefix_window(engine)
+        except Exception:
+            window = UNKNOWN_PREFIX
+        self._call(self.show_prefix, window, engine, revision)
+
+    def show_prefix(self, window: PrefixWindow, engine: str, revision: int) -> None:
+        if engine != self.engine or revision != self._team_revision:
+            return
+        with suppress(NoMatches):
+            self.query_one("#wiz-prefix", Static).update(prefix_content(self._t, window))
 
     def advance(self) -> None:
         if self.step == 0:
@@ -694,6 +722,7 @@ class MandateWizard(Vertical):
         if event.value not in self.engines or event.value == self.engine:
             return
         self.engine = event.value
+        self._paint_depth()
         if self.kind and (self.one_page or STEPS[self.step] == "team"):
             self.refresh_team()
         else:

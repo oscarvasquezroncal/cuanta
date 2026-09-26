@@ -25,9 +25,11 @@ from cuanta.domain.mandate import (
     evidence_from_failure,
     extract_block,
     fill_request,
+    single_context,
 )
 from cuanta.domain.messages import english, msg
 from cuanta.domain.progress import Status, note
+from cuanta.domain.report import strip_preamble
 from cuanta.domain.testing import GatewayStatus
 from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.ledger import Ledger
@@ -68,6 +70,7 @@ class Composed:
     request: MandateRequest
     command: tuple[str, ...]
     simple: bool = False
+    single: bool = False
 
 
 @dataclass
@@ -111,6 +114,7 @@ class MandateReport:
     report_path: str = ""
     task_type: str = ""
     simple: bool = False
+    single: bool = False
     prompt_chars: int = 0
 
 
@@ -205,7 +209,13 @@ class MandateService:
             hint = f"{hint}\n{extra}"
         prompt = fill_request(block, request, hint)
         return Composed(
-            prompt, choice, decided.decision_id, request, tuple(command(prompt)), simple
+            prompt,
+            choice,
+            decided.decision_id,
+            request,
+            tuple(command(prompt)),
+            simple,
+            simple or single_context(request.type, simple, shape),
         )
 
     def link_decisions(self, request_hash: str, run_id: str) -> int:
@@ -255,8 +265,9 @@ class MandateService:
         tests_text = tests[0].status if tests else "not run"
         by_agent, utilization = summarize(run.id)
         result = view.result or launch.outcome.result
-        text = result.text if result is not None else ""
-        report_path = self._reports.save_report(run.id, text) if text else ""
+        raw_text = result.text if result is not None else ""
+        report_path = self._reports.save_report(run.id, raw_text) if raw_text else ""
+        text = strip_preamble(raw_text)
         outcome = "ok" if launch.outcome.ok else "failed"
         self._decisions.record_outcome(composed.decision_id, outcome)
         report = MandateReport(
@@ -274,6 +285,7 @@ class MandateService:
             report_path=report_path,
             task_type=composed.request.type,
             simple=composed.simple,
+            single=composed.single,
             prompt_chars=len(composed.prompt),
         )
         self.save_meta(report)
@@ -304,6 +316,10 @@ def report_payload(report: MandateReport) -> dict[str, object]:
         "spectrum": f"cuanta spectrum {run.id}",
         "task_type": report.task_type,
         "simple": report.simple,
+        "shape": (Shape.SINGLE if report.single else Shape.PIPELINE).value,
+        "max_turns": run.max_turns,
+        "turns": run.turns,
+        "end_reason": run.end_reason,
         "prompt_chars": report.prompt_chars,
         "report": report.report_path,
         "audit": [

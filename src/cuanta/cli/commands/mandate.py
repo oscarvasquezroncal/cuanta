@@ -40,6 +40,7 @@ class MandateArgs:
     simple: bool = False
     session: str = ""
     depth: str = ""
+    max_turns: int = 0
     shape: str = ""
 
 
@@ -106,6 +107,10 @@ def mandate_command(
             "--depth", help="quick, normal or deep: tier cap, read budget and default spend cap."
         ),
     ] = "",
+    max_turns: Annotated[
+        int,
+        typer.Option("--max-turns", help="Turn limit for claude runs; 0 uses the depth default."),
+    ] = 0,
     shape: Annotated[
         str,
         typer.Option(
@@ -138,6 +143,7 @@ def mandate_command(
         simple=simple,
         session=session,
         depth=depth,
+        max_turns=max_turns,
         shape=shape,
     )
     execute(ctx, lambda cli: run_mandate(cli, args))
@@ -234,6 +240,7 @@ def _options(args: MandateArgs) -> "MandateOptions":
         simple=args.simple,
         session=args.session,
         depth=args.depth,
+        max_turns=args.max_turns,
         shape=args.shape,
     )
 
@@ -409,6 +416,7 @@ def _final(report: "MandateReport") -> "Document":
     from cuanta.application.mandate import report_payload
     from cuanta.cli.document import Document, Hint, KeyValues, MarkdownText, MascotBlock, Panel
     from cuanta.cli.fmt import compact, percent, usd
+    from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
     from cuanta.domain.voice import Mood
 
     run = report.run
@@ -416,6 +424,11 @@ def _final(report: "MandateReport") -> "Document":
         f"{name} {compact(tokens)}" for name, tokens in report.tokens_by_agent.items()
     )
     index = "n/a" if report.utilization is None else percent(report.utilization)
+    turn_rows: tuple[tuple[str, str], ...] = ()
+    if run.max_turns > 0 or run.end_reason == TURN_LIMIT_SUBTYPE:
+        count = f"{run.turns}/{run.max_turns}" if run.max_turns > 0 else str(run.turns)
+        cut = " · cut by turn limit" if run.end_reason == TURN_LIMIT_SUBTYPE else ""
+        turn_rows = (("turns", f"{count}{cut}"),)
     rows = (
         ("run", run.id),
         ("status", run.status),
@@ -424,6 +437,7 @@ def _final(report: "MandateReport") -> "Document":
         ("tests", report.tests),
         ("tokens by agent", agents or "-"),
         ("cost", usd(run.cost_usd)),
+        *turn_rows,
         ("utilization", f"{index} (heuristic v1)"),
         *audit_rows(report),
     )

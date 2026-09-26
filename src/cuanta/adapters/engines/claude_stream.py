@@ -50,6 +50,8 @@ def _step_usage(message: object, parent: str) -> StepUsage | None:
     usage = message.get("usage")
     if not isinstance(usage, dict):
         return None
+    creation = usage.get("cache_creation")
+    split = creation if isinstance(creation, dict) else {}
     return StepUsage(
         ModelUsage(
             model=str(message.get("model") or ""),
@@ -60,6 +62,8 @@ def _step_usage(message: object, parent: str) -> StepUsage | None:
         ),
         parent,
         str(message.get("id") or ""),
+        _int(split.get("ephemeral_5m_input_tokens")),
+        _int(split.get("ephemeral_1h_input_tokens")),
     )
 
 
@@ -90,7 +94,14 @@ def parse_line(line: str) -> list[EngineEvent]:
     kind = data.get("type")
     parent = str(data.get("parent_tool_use_id") or "")
     if kind == "system" and data.get("subtype") == "init":
-        return [SessionStarted(str(data.get("session_id") or ""), str(data.get("model") or ""))]
+        return [
+            SessionStarted(
+                str(data.get("session_id") or ""),
+                str(data.get("model") or ""),
+                str(data.get("apiKeySource") or ""),
+                str(data.get("claude_code_version") or ""),
+            )
+        ]
     if kind == "assistant":
         message = data.get("message")
         content = message.get("content") if isinstance(message, dict) else None
@@ -126,6 +137,7 @@ def parse_line(line: str) -> list[EngineEvent]:
                 text=str(data.get("result") or ""),
                 duration_ms=_int(data.get("duration_ms")),
                 denials=_denials(data.get("permission_denials")),
+                terminal_reason=str(data.get("terminal_reason") or ""),
             )
         ]
     return []

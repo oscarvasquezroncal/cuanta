@@ -14,6 +14,9 @@ class SystemClock:
     def monotonic(self) -> float:
         return time.monotonic()
 
+    def sleep(self, seconds: float) -> None:
+        time.sleep(max(0.0, seconds))
+
 
 class FixedClock:
     def __init__(self, iso: str = "2026-01-01T00:00:00Z", ms: int = 1_767_225_600_000) -> None:
@@ -30,3 +33,6 @@ class FixedClock:
     def monotonic(self) -> float:
         self._tick += 0.5
         return self._tick
+
+    def sleep(self, seconds: float) -> None:
+        self._tick += max(0.0, seconds)

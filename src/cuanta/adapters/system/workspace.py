@@ -171,3 +171,10 @@ class LocalHome:
 
     def path(self, relative: str) -> Path:
         return self._home / relative
+
+    def size_bytes(self, relative: str) -> int | None:
+        target = self._home / relative
+        try:
+            return target.stat().st_size if target.is_file() else None
+        except OSError:
+            return None

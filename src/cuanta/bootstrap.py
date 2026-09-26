@@ -6,6 +6,7 @@ import os
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -73,6 +74,8 @@ if TYPE_CHECKING:
     from cuanta.application.affected import AffectedGateway
     from cuanta.application.assistant import Improvement, PromptAssistant
     from cuanta.application.bench import Attempt, BenchResult, BenchRunner
+    from cuanta.application.cache_probe import CacheProbeReport
+    from cuanta.application.cache_state import PrefixQuery
     from cuanta.application.cat_capsule import CatCapsule
     from cuanta.application.cross_engine import CrossEnginePipeline
     from cuanta.application.detect import DetectProject
@@ -380,6 +383,108 @@ class Container:
         if ok:
             service.mark_probed(entry)
         return ProbeOutcome(entry, estimate, ok, launch.run.cost_usd)
+
+    def probe_cache_ttl(
+        self,
+        gaps_text: str,
+        budget_usd: float,
+        per_run_usd: float,
+        tools: tuple[str, ...],
+        model: str,
+        spend: bool,
+        keep: bool,
+        save: bool,
+        progress: ProgressSink,
+    ) -> CacheProbeReport:
+        from cuanta.adapters.engines.claude_code import PROBE_FLAGS, ClaudeCodeEngine
+        from cuanta.adapters.system.prices import load_prices
+        from cuanta.adapters.system.scratch import discard_scratch, scratch_project
+        from cuanta.application.cache_probe import (
+            CacheProbeOptions,
+            CacheProbeReport,
+            CacheTtlProbe,
+        )
+        from cuanta.domain.cache_probe import parse_gaps, plan_ceiling
+        from cuanta.domain.errors import DomainFailure, NotAvailable
+        from cuanta.domain.models import Tier, find
+        from cuanta.domain.routing import candidates
+
+        gaps = parse_gaps(gaps_text)
+        if budget_usd <= 0 or per_run_usd <= 0 or per_run_usd > budget_usd:
+            raise DomainFailure("the per-run cap must be positive and no larger than the total cap")
+        root = scratch_project()
+        sub = replace(
+            Container.for_project(root), runner=self.runner, clock=self.clock, home=self.home
+        )
+        try:
+            entries = sub.model_service().view().entries
+            if model:
+                chosen = find(entries, model)
+                if chosen is None or chosen.engine != "claude":
+                    raise DomainFailure(f"unknown Claude model {model}", "run cuanta models list")
+            else:
+                matches = candidates(entries, ("claude",), Tier.ECONOMY)
+                if not matches:
+                    raise NotAvailable(
+                        "no Claude economy model in the catalog", "run cuanta models refresh"
+                    )
+                chosen = matches[0]
+            resolved = chosen.resolved or chosen.id
+            price = load_prices().lookup(resolved)
+            plan = plan_ceiling(price, gaps, budget_usd, per_run_usd)
+            expected_auth = "api" if os.environ.get("ANTHROPIC_API_KEY") else "unknown"
+            if not spend:
+                return CacheProbeReport(plan=plan, model=resolved, expected_auth=expected_auth)
+            engine = sub.engine("claude")
+            if engine is None or not engine.available():
+                raise NotAvailable("claude not found on PATH", "install Claude Code first")
+            if isinstance(engine, ClaudeCodeEngine):
+                missing = [flag for flag in PROBE_FLAGS if flag not in engine.help_text()]
+                if missing:
+                    raise NotAvailable(
+                        f"Claude Code lacks {', '.join(missing)}", "upgrade Claude Code"
+                    )
+            ledger = sub.ledger()
+            probe = CacheTtlProbe(
+                sub.launcher(engine, ledger, telemetry=False),
+                str(root),
+                self.clock,
+                lambda: date.today().isoformat(),
+                secrets.token_hex(6),
+                price,
+            )
+            result = probe.run(
+                CacheProbeOptions(resolved, gaps, budget_usd, per_run_usd, tools), progress
+            )
+            saved = save and result.saveable
+            if saved:
+                values: dict[str, object] = {
+                    "cache.ttl_s": result.ttl_s,
+                    "cache.auth": result.auth.value,
+                    "cache.engine_version": result.engine_version,
+                    "cache.measured_on": result.measured_on,
+                    "cache.model": result.model,
+                    "cache.ttl_lower_s": result.lower_s,
+                    "cache.ttl_upper_s": result.upper_s or 0,
+                    "cache.verdict": result.verdict.value,
+                    "cache.api_key_source": result.api_key_source,
+                    "cache.engine": "claude",
+                    "cache.tools": ",".join(result.tools),
+                }
+                for key, value in values.items():
+                    self.set_global_value(key, value)
+            return CacheProbeReport(
+                plan=plan,
+                model=resolved,
+                expected_auth=expected_auth,
+                result=result,
+                saved=saved,
+                scratch_path=str(root) if keep else "",
+            )
+        finally:
+            sub.close()
+            if not keep or not spend:
+                discard_scratch(root)
 
     def decisions(self, ledger: Ledger) -> DecisionMaker:
         from cuanta.adapters.instinct.heuristic import HeuristicInstinct
@@ -764,6 +869,7 @@ class Container:
             cwd=str(self.project),
             default_engine=self.config.engine,
             default_budget=self.config.budget_usd,
+            default_max_turns=self.config.max_turns,
             final_suite=lambda run_id: self.final_suite(ledger, run_id),
             routing=self.mandate_routing(ledger),
             has_agents=self.has_forge_agents,
@@ -1083,6 +1189,21 @@ class Container:
             (self.cuanta_dir() / "ledger.db").is_file,
             kit.vendored_version,
             date.today,
+            self.prefix_query(),
+            self.config.engine,
+        )
+
+    def prefix_query(self) -> PrefixQuery:
+        from cuanta.application.cache_state import PrefixQuery
+
+        return PrefixQuery(
+            self.ledger,
+            (self.cuanta_dir() / "ledger.db").is_file,
+            self.config.cache_ttl_s,
+            self.clock.now_ms,
+            self.config.cache_auth,
+            lambda: bool(os.environ.get("ANTHROPIC_API_KEY")),
+            self.config.cache_model,
         )
 
     def doctor(self) -> Doctor:
@@ -1107,6 +1228,9 @@ class Container:
                     lambda: installed_plugins(self.home), self.forge_kit().vendored_version
                 ),
                 doctor.session_check(self.ledger, (self.cuanta_dir() / "ledger.db").is_file),
+                doctor.agents_md_check(
+                    self.home_reader(), self.ledger, (self.cuanta_dir() / "ledger.db").is_file
+                ),
                 doctor.instinct_check(
                     self.config.instinct,
                     jev.available,

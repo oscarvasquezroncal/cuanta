@@ -5,9 +5,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from cuanta.domain.cache import FirstRequestCache, cache_message, cache_payload, first_request_cache
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, msg
-from cuanta.domain.report import ContextSplit, context_split
+from cuanta.domain.report import CHARS_PER_TOKEN, ContextSplit, context_split
 
 HOOK_KINDS = frozenset({"hook_execution_complete", "hook_execution"})
 PLUGIN_KINDS = frozenset({"plugin_loaded"})
@@ -20,6 +21,7 @@ NOT_SESSION = frozenset({SPAWN_KIND, "result_usage"})
 METRIC_PREFIX = "metric:"
 LIST_LIMIT = 6
 FAILED_STATES = frozenset({"failed", "error", "failure", "disconnected", "timeout"})
+HOME_AGENTS_MD = ("AGENTS.md", ".claude/AGENTS.md")
 
 PLUGIN_NAME = ("plugin.name", "plugin_name", "plugin", "name")
 PLUGIN_VERSION = ("plugin.version", "plugin_version", "version")
@@ -81,6 +83,7 @@ class SessionOverhead:
     servers: tuple[ServerConnection, ...]
     hooks: tuple[HookRun, ...]
     startup: Startup | None
+    cache: FirstRequestCache | None = None
 
     @property
     def startup_ms(self) -> int | None:
@@ -231,6 +234,39 @@ def prompt_length(events: Sequence[LedgerEvent]) -> int:
     return 0
 
 
+def first_request_split(events: Sequence[LedgerEvent]) -> ContextSplit | None:
+    return context_split(events, prompt_length(events))
+
+
+def agents_md_tokens(size_bytes: int) -> int:
+    return size_bytes // CHARS_PER_TOKEN
+
+
+def agents_md_share(size_bytes: int, split: ContextSplit | None) -> float | None:
+    if split is None or split.fixed <= 0:
+        return None
+    return min(1.0, agents_md_tokens(size_bytes) / split.fixed)
+
+
+def agents_md_message(
+    size_bytes: int | None, split: ContextSplit | None, path: str = "~/AGENTS.md"
+) -> Message:
+    if size_bytes is None:
+        return msg("doctor.absent")
+    share = agents_md_share(size_bytes, split)
+    if share is None or split is None:
+        return msg("doctor.agents_md.unavailable", path=path, bytes=f"{size_bytes:,}")
+    return msg(
+        "doctor.agents_md.share",
+        path=path,
+        bytes=f"{size_bytes:,}",
+        tokens=f"{agents_md_tokens(size_bytes):,}",
+        share=f"{share:.1%}",
+        fixed=f"{split.fixed:,}",
+        per_token=CHARS_PER_TOKEN,
+    )
+
+
 def session_overhead(events: Sequence[LedgerEvent], prompt_chars: int) -> SessionOverhead:
     prompt_chars = prompt_chars or prompt_length(events)
     plugins: dict[str, str] = {}
@@ -259,6 +295,7 @@ def session_overhead(events: Sequence[LedgerEvent], prompt_chars: int) -> Sessio
         servers=tuple(servers.values()),
         hooks=tuple(hooks),
         startup=startup_of(events),
+        cache=first_request_cache(events),
     )
 
 
@@ -282,6 +319,8 @@ def overhead_messages(overhead: SessionOverhead) -> tuple[Message, ...]:
         )
     elif split is not None:
         lines.append(msg("overhead.context_total", total=f"{split.first_request:,}"))
+    if overhead.cache is not None:
+        lines.append(cache_message(overhead.cache))
     if overhead.plugins:
         lines.append(
             msg("overhead.plugins", count=len(overhead.plugins), names=_names(overhead.plugins))
@@ -347,6 +386,7 @@ def overhead_payload(overhead: SessionOverhead) -> dict[str, object]:
     return {
         "first_request_tokens": split.first_request if split is not None else None,
         "fixed_context_tokens": split.fixed if split is not None else None,
+        "first_request_cache": cache_payload(overhead.cache),
         "plugins": list(overhead.plugins),
         "mcp_servers": [
             {"name": server.name, "ok": server.ok, "error": server.error or None}

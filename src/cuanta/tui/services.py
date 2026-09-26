@@ -40,6 +40,7 @@ from cuanta.application.routing import RoleStats, RoutePlan, role_stats
 from cuanta.application.spectrum import ALL_SESSIONS, Selection, SpectrumResult
 from cuanta.application.tests_view import TestsSummary, from_report
 from cuanta.domain.assistant import Clarity, Suggestions, content_key
+from cuanta.domain.cache import PrefixWindow
 from cuanta.domain.capsules import Level
 from cuanta.domain.config import Config
 from cuanta.domain.drafts import Draft
@@ -89,6 +90,8 @@ class Services(Protocol):
     def project(self) -> Path: ...
 
     def home(self) -> HomeSnapshot: ...
+
+    def prefix_window(self, engine: str) -> PrefixWindow: ...
 
     def latest_tests(self) -> TestsSummary | None: ...
 
@@ -258,6 +261,13 @@ class ContainerServices:
         finally:
             container.close()
 
+    def prefix_window(self, engine: str) -> PrefixWindow:
+        container = self._container()
+        try:
+            return container.prefix_query().run(engine or container.config.engine)
+        finally:
+            container.close()
+
     def latest_tests(self) -> TestsSummary | None:
         container = self._container()
         try:
@@ -328,6 +338,7 @@ class ContainerServices:
                 container.config.budget_usd,
                 container.has_forge_agents(),
                 container.init_estimate(),
+                container.config.max_turns,
             )
         finally:
             container.close()

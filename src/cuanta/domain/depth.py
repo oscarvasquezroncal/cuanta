@@ -32,6 +32,7 @@ class DepthProfile:
     pack_tokens: int
     read_budget: int
     cost_cap_usd: float
+    max_turns: int
 
 
 INVESTIGATION_CAPS = {Depth.QUICK: 0.25, Depth.NORMAL: 0.60, Depth.DEEP: 1.50}
@@ -40,6 +41,7 @@ TIER_CAPS = {Depth.QUICK: Tier.STANDARD, Depth.NORMAL: Tier.PREMIUM, Depth.DEEP:
 EFFORTS = {Depth.QUICK: "low", Depth.NORMAL: "medium", Depth.DEEP: "high"}
 PACK_TOKENS = {Depth.QUICK: 2_000, Depth.NORMAL: 4_000, Depth.DEEP: 6_000}
 READ_BUDGETS = {Depth.QUICK: 8, Depth.NORMAL: 20, Depth.DEEP: 40}
+MAX_TURNS = {Depth.QUICK: 20, Depth.NORMAL: 40, Depth.DEEP: 80}
 
 
 def parse_depth(text: str) -> Depth:
@@ -58,7 +60,14 @@ def profile(depth: Depth, task_type: str) -> DepthProfile:
         pack_tokens=PACK_TOKENS[depth],
         read_budget=READ_BUDGETS[depth],
         cost_cap_usd=caps[depth],
+        max_turns=MAX_TURNS[depth],
     )
+
+
+def turn_limit(chosen: DepthProfile | None, override: int = 0) -> int:
+    if override > 0:
+        return override
+    return chosen.max_turns if chosen is not None else 0
 
 
 def read_budget_line(chosen: DepthProfile, graph_available: bool = True) -> str:

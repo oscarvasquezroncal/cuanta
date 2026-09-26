@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 SUBAGENT_TOOLS = frozenset({"Agent", "Task"})
 PHASE_MARKER = re.compile(r"\bPhase\s+(0\.5|2\.5|2A|2B|[0-6])\b", re.IGNORECASE)
 PIPELINE_AGENTS = ("architecture-analyst", "senior", "tester", "docs-updater")
+TURN_LIMIT_SUBTYPE = "error_max_turns"
 
 
 COMMAND_LINE_LIMIT = 30_000
@@ -40,6 +41,8 @@ class ModelUsage:
 class SessionStarted:
     session_id: str
     model: str
+    api_key_source: str = ""
+    engine_version: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +71,8 @@ class StepUsage:
     usage: ModelUsage
     parent_tool_use_id: str = ""
     message_id: str = ""
+    write_5m_tokens: int = 0
+    write_1h_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +86,11 @@ class RunResult:
     text: str = ""
     duration_ms: int = 0
     denials: tuple[str, ...] = ()
+    terminal_reason: str = ""
+
+
+def cut_by_turns(subtype: str, terminal_reason: str = "") -> bool:
+    return subtype == TURN_LIMIT_SUBTYPE or terminal_reason == "max_turns"
 
 
 EngineEvent = SessionStarted | ToolCall | AssistantText | StepUsage | RunResult
@@ -110,6 +120,10 @@ class EngineRequest:
     unset_env: tuple[str, ...] = ()
     mcp_config: str = ""
     settings_file: str = ""
+    tools: tuple[str, ...] | None = None
+    max_turns: int = 0
+    stable_prefix: bool = False
+    persist_session: bool = True
 
 
 @dataclass(frozen=True, slots=True)

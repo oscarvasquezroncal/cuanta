@@ -21,6 +21,7 @@ from cuanta.domain.overhead import overhead_messages
 from cuanta.domain.progress import Status
 from cuanta.domain.spectrum import Branch, Leak, LeakKind, View, Window
 from cuanta.tui.bars import bar_lines
+from cuanta.tui.cache_text import first_request_text
 from cuanta.tui.fmt import compact, glyph, money, status_style
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.services import ALL_IMPORTED, Services
@@ -202,7 +203,8 @@ class SpectrumView(VerticalScroll):
         audit.update(self._audit(result))
         audit.display = bool(result.audits)
         overhead = self.query_one("#spectrum-overhead", Static)
-        lines = overhead_messages(result.overhead)
+        session = result.overhead
+        lines = overhead_messages(session)
         overhead.update(
             Content("\n").join(
                 [
@@ -217,7 +219,7 @@ class SpectrumView(VerticalScroll):
         self._metric(
             "tokens", compact(totals.total), t("spectrum.requests", count=f"{totals.requests:,}")
         )
-        self._metric("cache", f"{totals.cache_share:.0%}", "")
+        self._metric("cache", f"{totals.cache_share:.0%}", first_request_text(t, session.cache))
         cost = report.cost
         value = money(cost.value) if cost.value is not None else t("spectrum.na")
         self._metric("cost", value, t.message(cost.message, cost.source))

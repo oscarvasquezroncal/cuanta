@@ -4,7 +4,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 
+from cuanta.application.cache_state import PrefixQuery
 from cuanta.application.doctor import CheckResult, Doctor, DoctorReport, result
+from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.consumption import daily_tokens, window_start
 from cuanta.domain.detection import ForgeState
 from cuanta.domain.ledger import Run
@@ -23,6 +25,7 @@ class HomeSnapshot:
     daily: tuple[int, ...]
     next_step: CheckResult | None
     forge_version: str
+    prefix: PrefixWindow = UNKNOWN_PREFIX
 
     @property
     def initialized(self) -> bool:
@@ -56,12 +59,16 @@ class HomeQuery:
         has_ledger: Callable[[], bool],
         forge_version: Callable[[], str],
         today: Callable[[], date],
+        prefix: PrefixQuery,
+        engine: str,
     ) -> None:
         self._doctor = doctor
         self._ledger_factory = ledger_factory
         self._has_ledger = has_ledger
         self._forge_version = forge_version
         self._today = today
+        self._prefix = prefix
+        self._engine = engine
 
     def run(self) -> HomeSnapshot:
         report = self._doctor.run()
@@ -76,4 +83,11 @@ class HomeQuery:
                 daily = daily_tokens(ledger.events(EventQuery(since=since)), today)
             finally:
                 ledger.close()
-        return HomeSnapshot(report, runs, daily, next_step(report), self._forge_version())
+        return HomeSnapshot(
+            report,
+            runs,
+            daily,
+            next_step(report),
+            self._forge_version(),
+            self._prefix.run(self._engine),
+        )

@@ -6,7 +6,13 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 
 from cuanta.application.run_reports import RunReports
-from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest
+from cuanta.domain.engine import (
+    TURN_LIMIT_SUBTYPE,
+    EngineEvent,
+    EngineOutcome,
+    EngineRequest,
+    cut_by_turns,
+)
 from cuanta.domain.ids import trace_id_of, traceparent
 from cuanta.domain.ledger import LedgerEvent, Run
 from cuanta.domain.overhead import spawn_event
@@ -41,6 +47,10 @@ class LaunchSpec:
     session: str = ""
     task_type: str = ""
     depth: str = ""
+    tools: tuple[str, ...] | None = None
+    max_turns: int = 0
+    stable_prefix: bool = False
+    persist_session: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +124,10 @@ class EngineLauncher:
             unset_env=spec.unset_env,
             mcp_config=mcp_config,
             settings_file=settings_file,
+            tools=spec.tools,
+            max_turns=spec.max_turns,
+            stable_prefix=spec.stable_prefix,
+            persist_session=spec.persist_session,
         )
 
     @contextmanager
@@ -147,6 +161,7 @@ class EngineLauncher:
             parent_id=spec.parent_id,
             task_type=spec.task_type,
             depth=spec.depth,
+            max_turns=spec.max_turns,
         )
         self._ledger.add_run(run)
         if before is not None:
@@ -163,11 +178,17 @@ class EngineLauncher:
             if spawned is not None:
                 self._ledger.add_events([spawned])
             status_text = "interrupted" if outcome is None else ("ok" if outcome.ok else "failed")
+            result = outcome.result if outcome is not None else None
+            end_reason = "" if result is None else result.subtype
+            if result is not None and cut_by_turns(result.subtype, result.terminal_reason):
+                end_reason = TURN_LIMIT_SUBTYPE
             finished = replace(
                 run,
                 ended_at=self._clock.now_iso(),
                 status=status_text,
                 model=_main_model(outcome) or run.model,
+                turns=result.num_turns if result is not None else 0,
+                end_reason=end_reason,
             )
             usage = _usage_events(finished, outcome, self._engine.name) if outcome else []
             finished = replace(finished, cost_usd=self._cost(outcome, usage))
