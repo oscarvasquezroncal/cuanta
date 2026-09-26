@@ -2,13 +2,15 @@ import os
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from cuanta.cli.output import GlobalOptions
 from cuanta.cli.runtime import FORCE_TTY_ENV, global_options
 from cuanta.cli.theme import ThemeName
+
+if TYPE_CHECKING:
+    from cuanta.cli.output import GlobalOptions
 
 UI_THEMES = ("calico-dark", "calico-light", "auto", "ansi")
 GLOBAL_TO_UI = {ThemeName.DARK: "calico-dark", ThemeName.LIGHT: "calico-light"}
@@ -25,7 +27,7 @@ def interactive_terminal(environ: Mapping[str, str] | None = None) -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def ui_theme(options: GlobalOptions, requested: str, configured: str) -> str:
+def ui_theme(options: "GlobalOptions", requested: str, configured: str) -> str:
     if requested in UI_THEMES:
         return requested
     if options.theme in GLOBAL_TO_UI:
@@ -50,7 +52,7 @@ def ui_command(
 
 
 def launch(
-    options: GlobalOptions,
+    options: "GlobalOptions",
     web: bool = False,
     lang: str = "",
     theme: str = "",

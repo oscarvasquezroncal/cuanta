@@ -9,18 +9,11 @@ from typing import TYPE_CHECKING
 
 import typer
 
-from cuanta.cli.output import (
-    Environment,
-    GlobalOptions,
-    OutputMode,
-    OutputSettings,
-    resolve_output,
-)
 from cuanta.cli.theme import ThemeName
-from cuanta.domain.errors import CuantaError, ExitCode
 
 if TYPE_CHECKING:
     from cuanta.cli.document import Document
+    from cuanta.cli.output import Environment, GlobalOptions, OutputSettings
     from cuanta.cli.presenters.base import Presenter
 
 FORCE_TTY_ENV = "CUANTA_FORCE_TTY"
@@ -35,10 +28,14 @@ class Session:
 
     @property
     def interactive(self) -> bool:
+        from cuanta.cli.output import OutputMode
+
         return self.settings.mode is OutputMode.PRETTY and not self.options.yes
 
 
 def detect_environment() -> Environment:
+    from cuanta.cli.output import Environment
+
     forced = os.environ.get(FORCE_TTY_ENV) == "1"
     stream = sys.stdout
     is_tty = forced or (hasattr(stream, "isatty") and stream.isatty())
@@ -51,6 +48,8 @@ def detect_environment() -> Environment:
 
 
 def global_options(ctx: typer.Context) -> GlobalOptions:
+    from cuanta.cli.output import GlobalOptions
+
     root = ctx.find_root()
     value = root.obj
     return value if isinstance(value, GlobalOptions) else GlobalOptions()
@@ -65,6 +64,8 @@ def _config_defaults(project: Path) -> tuple[ThemeName | None, bool]:
 
 
 def build_presenter(settings: OutputSettings) -> Presenter:
+    from cuanta.cli.output import OutputMode
+
     if settings.mode is OutputMode.JSON:
         from cuanta.cli.presenters.json_presenter import JsonPresenter
 
@@ -82,6 +83,8 @@ def build_presenter(settings: OutputSettings) -> Presenter:
 
 
 def open_session(ctx: typer.Context) -> Session:
+    from cuanta.cli.output import resolve_output
+
     options = global_options(ctx)
     project = (options.project or Path.cwd()).resolve()
     theme_default, emoji_default = _config_defaults(project)
@@ -90,6 +93,8 @@ def open_session(ctx: typer.Context) -> Session:
 
 
 def execute(ctx: typer.Context, action: Callable[[Session], Document]) -> None:
+    from cuanta.domain.errors import CuantaError, ExitCode
+
     session = open_session(ctx)
     code = ExitCode.OK
     try:
