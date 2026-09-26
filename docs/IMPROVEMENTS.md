@@ -14,7 +14,9 @@ deleted here. What does NOT belong here: detail (changelog), stories (`HISTORIAS
 
 ---
 
-Starts empty — `VERIFY_TIER=strong`, so no missing-runner entry is seeded. Fills from the
-pipeline's own findings.
+Initialized empty — `VERIFY_TIER=strong`, so no missing-runner entry was seeded. Findings below
+come from the M0 verification pass.
+
+- [ ] IMP-001 — Codex CLI runs without a reported cost can retain the generic model label `codex`, so the price lookup misses — src/cuanta/adapters/engines/codex.py:105 — found 2026-09-25 in init — severity: med
 
 ## Deferred

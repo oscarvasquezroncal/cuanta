@@ -1,13 +1,14 @@
 # CLAUDE.md — cuanta
 
 Rulebook: judgment only. Structure lives in the graph (`graphify-out/`); external derivations in
-`docs/GROUND_TRUTH.md`; narrative in `docs/CHANGELOG_INTERNAL.md`; full flag registry in
-`docs/FLAGS.md`.
+`docs/GROUND_TRUTH.md`; external contract status in `docs/CONTRACTS.md`; narrative in
+`docs/CHANGELOG_INTERNAL.md`; full flag registry in `docs/FLAGS.md`.
 
 **Budget rules for this file (survive the skill that wrote them):**
 1. 300-line ceiling. Over it, move content out (structure → delete, narrative → changelog, flags →
-   `docs/FLAGS.md`, external facts → `docs/GROUND_TRUTH.md`, one-directory rules → that
-   directory's `CLAUDE.md`); still over → write anyway with a ⚠ line under the title.
+   `docs/FLAGS.md`, external facts → `docs/GROUND_TRUTH.md`, contract status →
+   `docs/CONTRACTS.md`, one-directory rules → that directory's `CLAUDE.md`); still over → write
+   anyway with a ⚠ line under the title.
 2. Zero drifting numbers. Write the command that asks the code, never the count.
 3. Per-directory `CLAUDE.md` files hold local rules only — never inventories.
 
@@ -57,6 +58,10 @@ instinct backends) are discovered through `[project.entry-points."cuanta.*"]` in
   matching `cuanta.*` entry-point group. Never hard-wire it in `bootstrap.py` alone
   [UNVERIFIED: whether bootstrap also lists them].
 - TUI user-visible text comes from the i18n catalog (see `src/cuanta/tui/CLAUDE.md`).
+- Before relying on an engine flag, settings key, hook, telemetry field, price row or protocol
+  version, check `docs/CONTRACTS.md`. Update its status, version, date and evidence when a change
+  verifies, probes or starts relying on the contract. Keep help-omitted flags out of
+  `REQUIRED_FLAGS`, because the capability check reads the installed help text.
 
 ## 5. Commands
 
@@ -98,6 +103,15 @@ Counts are never written here: `uv run pytest --collect-only -q | tail -1`.
 - pytest `addopts` excludes `-m live` by default: a green local run never touched real engines.
 - `CUANTA_HELP_BUDGET_S` / `CUANTA_PAINT_BUDGET_S` loosen perf budgets in CI; locally the
   stricter defaults apply.
+- `runs.session` defaults to lean for Claude launches; full restores user plugins, hooks and MCP.
+- `CUANTA_MAX_TURNS`, `runs.max_turns` and `cuanta mandate --max-turns` set the Claude turn rail;
+  zero uses the depth limit, and `--no-cap` does not remove that rail.
+- `cache.ttl_s` is a measured or conservative cache window tied to auth mode, engine version and
+  date. Without a saved measurement, show unknown. `cuanta probe cache-ttl` previews without
+  spending until `--yes` is supplied.
+- pytest bounds ordinary tests per test, leaves live tests unbounded unless marked, and does not
+  restart a crashed xdist worker. See `pyproject.toml` and `tests/conftest.py`.
+- `NO_COLOR` disables automatic TUI launch when `cuanta` has no arguments.
 
 ## 8. Repo traps
 

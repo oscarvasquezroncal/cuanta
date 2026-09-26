@@ -51,7 +51,7 @@ These are single runs on one production Next.js landing page (Windows 11, Claude
 |---|---|---|
 | Context before the first answer, with the user's plugins, MCP servers and hooks loaded | 53,109 tokens. The answer came from injected memory, and zero files were read | Lean sessions start without user plugins, hooks or MCP servers |
 | Read-only audit of the site | $0.545 and 239 s with an orchestrator plus an analyst | $0.43 and 113 s in a single context: 21% cheaper, about half the time |
-| Fixed context vs. the actual request, first request of that audit | — | 41,505 fixed tokens vs. 413 for the request. The next thing to shrink, and cuanta shows it |
+| Fixed context vs. the actual request, first request of that audit | — | 41,505 fixed tokens vs. 413 for the request. This was measured before limiting built-in tool definitions; the later A/B result is in [external contracts](docs/CONTRACTS.md) |
 
 ---
 
@@ -61,7 +61,7 @@ These are single runs on one production Next.js landing page (Windows 11, Claude
 |---|---|
 | **Spectrum** | A token map of every run: per agent, model, tool and file. Session overhead, start-up timing, cache share, planned vs. actual models, and leaks (amplification, repeated reads, raw test output, compactions). |
 | **Mandates** | Tell it what you need in your own words. cuanta extracts the questions, errors and scope, classifies the task, and launches the right shape: a single read-only context for investigations, or a Forge pipeline (analyst → senior → tester → docs) for fixes and features. |
-| **Depth and routing** | Quick, Normal or Deep sets the effort, the model tiers and a hard spend cap. Each role gets a tier (economy → premium). cuanta maps tiers to the models you actually have, then audits what really ran. |
+| **Depth and routing** | Quick, Normal or Deep sets the effort, the model tiers and a hard spend cap, plus a turn limit for Claude Code mandates. Each role gets a tier (economy → premium). cuanta maps tiers to the models you actually have, then audits what really ran. |
 | **Lean sessions** | Runs launched by cuanta start without your plugins, hooks and MCP servers, from byte-identical settings files, so the prompt prefix can be cached. |
 | **Gateway** | `cuanta test` runs your suite once, clusters failures by signature and stores full logs as capsules. Agents get one line per failure and page into details only when they need to. |
 | **Results and ledger** | Launched runs store reports and file snapshots under `.cuanta/runs/`; costs and telemetry live in the local SQLite ledger. Results show diffs, and ledger data exports to CSV or JSON. |
@@ -223,6 +223,7 @@ flowchart LR
 - **cuanta only picks models your engines report as available.** It never goes above the caps you set.
 - **Frontier models are opt-in.**
 - **After each run, the audit** compares the planned model with the one the telemetry saw.
+- **Claude turn limits** follow the selected depth. `cuanta mandate --max-turns` or `CUANTA_MAX_TURNS` overrides the depth limit; `--no-cap` removes only the spend cap.
 
 </details>
 
@@ -238,6 +239,8 @@ flowchart LR
 | Import past sessions | ✓ | ✓ | — |
 
 `--cross-engine` (experimental) runs each pipeline role in its own session on the engine its routing picks, passing a JSON handoff between roles.
+
+Engine flags, telemetry fields, pricing rows and their verification status are tracked in [`docs/CONTRACTS.md`](docs/CONTRACTS.md).
 
 </details>
 
@@ -269,7 +272,7 @@ Use `--help` on any command. Global `--plain` and `--json` control CLI output; `
 | `cuanta doctor` (`purr`) | Health check, with one fix per issue |
 | `cuanta init` | Detect, graph, telemetry, Forge, verify. `--dry-run`, `--skip-forge` |
 | `cuanta refresh` | Refresh Forge's knowledge, reindex the graph, report tier drift |
-| `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--dry-run` |
+| `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--max-turns` for Claude, `--dry-run` |
 | `cuanta route --dry-run` | Show the routing plan for a request |
 | `cuanta runs list \| show \| open` | Stored runs and their reports |
 | `cuanta test` | Gateway: one run, failures clustered into signatures |
@@ -281,6 +284,7 @@ Use `--help` on any command. Global `--plain` and `--json` control CLI output; `
 | `cuanta instinct show \| use \| probe` | Configure Instinct. `cuanta instinct use NAME --global` sets the user-wide default |
 | `cuanta models` | The model catalog and its tiers |
 | `cuanta bench run \| report` | The reproducible benchmark |
+| `cuanta probe cache-ttl` | Measure Claude's prompt-cache window with capped runs in a temporary project. Preview without spend; `--yes` runs it, `--long` adds a later check |
 | `cuanta loop` | A guarded fix loop, only where verification is strong |
 | `cuanta meow` | Michi, the palette and the version |
 
@@ -306,6 +310,7 @@ port = 4318
 | Variable | Purpose |
 |---|---|
 | `CUANTA_BUDGET_USD` | Default spend cap for launched runs |
+| `CUANTA_MAX_TURNS` | Claude mandate turn limit override; zero uses the depth limit |
 | `CUANTA_ENGINE` | Default engine |
 | `CUANTA_INSTINCT` | Instinct backend: heuristic, jev or llm |
 | `CUANTA_LANG` | App language |
@@ -314,6 +319,13 @@ port = 4318
 | `CUANTA_NO_ANIMATION` | Keep Michi still |
 | `TYPESAFE_API_KEY` | Jev key, for Instinct |
 | `TYPESAFE_BASE_URL` | A different Jev endpoint, such as OpenRouter's System One API |
+| `TYPESAFE_API_BASE` | Fallback Jev endpoint when `TYPESAFE_BASE_URL` is absent |
+
+The default cache probe saves a conservative warm lower bound. Add `--long` to check for a later
+cold result; a usable measurement is saved with its authentication mode, engine version, model
+and date in the user config. [External contracts](docs/CONTRACTS.md) distinguishes observed
+cache behavior from unverified modes. The Home and Team window estimates expiry for the last
+observed Claude prefix; it does not guarantee that a different next mandate will reuse it.
 
 The full list lives in [`docs/FLAGS.md`](docs/FLAGS.md).
 
@@ -324,7 +336,7 @@ The full list lives in [`docs/FLAGS.md`](docs/FLAGS.md).
 ## Privacy and safety
 
 - **Local first.** The ledger, reports and capsules live in `.cuanta/` inside your project, which is git-ignored. The telemetry listener only binds to `127.0.0.1`.
-- **Your credentials stay with your engines.** cuanta drives the official CLIs with your own sign-in, and never reads or stores your passwords or tokens. The Jev key is read from the environment.
+- **Authentication and local config.** Engine runs use the official CLIs' sign-in. For Jev, cuanta reads `TYPESAFE_API_KEY` from the environment and sends it as a bearer token. It also reads Claude settings `env` values for routing; telemetry setup backs up existing engine config locally, so protect those backups as you would the originals.
 - **Consent before config changes.** Wiring telemetry edits an engine's config only after you agree, and keeps a backup. `cuanta telemetry off` restores it.
 - **Prompts are not stored by default.** Reports are, because they're your deliverable.
 - **Instinct is offline by default.** With Jev, it sends the redacted request text and, only if you enable it, file paths and symbol names. It never sends code, and **See what is sent** shows the exact payload.
