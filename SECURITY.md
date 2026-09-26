@@ -7,14 +7,14 @@ backports. Upgrade to the latest supported version before checking whether a pro
 
 ## Reporting a vulnerability
 
-Private vulnerability reporting is not enabled for this repository. To request a private
-reporting channel, open a [security contact request](https://github.com/oscarvasquezroncal/cuanta/issues/new)
-without vulnerability details, exploit code, or sensitive data. Share technical details only
-after a private channel is agreed.
+Report vulnerabilities privately through GitHub's private vulnerability reporting: open the
+repository's [Security tab](https://github.com/oscarvasquezroncal/cuanta/security) and choose
+[Report a vulnerability](https://github.com/oscarvasquezroncal/cuanta/security/advisories/new).
+Do not share vulnerability details, exploit code or sensitive data anywhere public.
 
-Once a private channel is available, include the cuanta version, operating system, affected
-engine and version, a minimal reproduction using synthetic data, and the expected impact.
-Remove credentials, private prompts, client files and local personal paths from logs.
+Include the cuanta version, operating system, affected engine and version, a minimal
+reproduction using synthetic data, and the expected impact. Remove credentials, private
+prompts, client files and local personal paths from logs.
 
 See the [engine guarantees and privacy limits](README.md#privacy-and-safety) before relying
 on a sandbox, permission rule or spend cap. Engine-specific verification is recorded in

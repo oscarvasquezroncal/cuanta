@@ -1,4 +1,7 @@
-# Contributing to cuanta
+# Development (maintainer notes)
+
+cuanta is maintained by its author and does not accept issues or pull requests. These notes
+record the maintainer's Git workflow, verification gates and release steps.
 
 ## Git workflow
 
@@ -19,12 +22,13 @@ session links, preserves human coauthors, normalizes CRLF and trims trailing
 blank lines. It always exits successfully; the commit script provides the
 post-commit check.
 
-Finish each milestone with separate conventional commits by type:
+Finish each milestone with separate
+[Conventional Commits](https://www.conventionalcommits.org) by type:
 
 ```cmd
 scripts\git\commit.cmd -m "feat(git): add guarded workflow" scripts/git .githooks .gitattributes
 scripts\git\commit.cmd -m "test(git): cover workflow guards" tests pyproject.toml uv.lock .github/workflows/ci.yml
-scripts\git\commit.cmd -m "docs(git): explain repository workflow" CONTRIBUTING.md docs
+scripts\git\commit.cmd -m "docs(git): explain repository workflow" README.md docs
 ```
 
 Quote paths containing spaces. Omitting paths stages all changes; existing
@@ -102,11 +106,22 @@ A release is complete only when publication and all three published-package smok
 If a post-publication check fails, diagnose it without rewriting the tag or republishing the
 same version.
 
+## House rules
+
+Keep these rules; tests and the gates below check most of them:
+
+- The hexagonal layers.
+- `mypy --strict`.
+- No comments or docstrings in `src/` and `tests/`: names and tests carry the meaning.
+- Every visible string in both the English and Spanish catalogs.
+- Snapshot tests for every screen.
+
 ## Verification and handoff
 
-Use focused tests during development. At milestone close:
+Use focused tests during development. At milestone close, from the repository root:
 
 ```cmd
+uv sync --extra web
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy --strict
@@ -125,8 +140,7 @@ out of performance measurements. Keep the assertions and budgets unchanged.
 group; fixed-port listener tests share one group. Use `--maxprocesses=4` when
 local resources require a worker limit for the parallel phase. Run the full gate once, or twice
 consecutively when changing TUI lifecycle, process management or timing-sensitive
-code, and at V2 M9. Do not lower the coverage floor. No comments or docstrings;
-keep strict types, hexagonal layers and both es/en catalogs.
+code, and at V2 M9. Do not lower the coverage floor.
 Tests have a 120-second timeout; tests whose own bounds require more time use
 `@pytest.mark.timeout(300)`, while opted-in live tests have no timeout.
 
