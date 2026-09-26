@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -244,7 +245,7 @@ def test_cost_migration_preserves_legacy_values_fields_and_indexes(tmp_path: Pat
     from cuanta.adapters.storage.migrations import MIGRATIONS
 
     path = tmp_path / "legacy-cost.db"
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         for version, statements in enumerate(MIGRATIONS[:-1], start=1):
             connection.executescript(statements)
             connection.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
@@ -291,7 +292,7 @@ def test_cost_migration_preserves_legacy_values_fields_and_indexes(tmp_path: Pat
         assert reopened.events(EventQuery(run_id="new"))[0].cost_usd is None
     finally:
         reopened.close()
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         indexes = {
             row[0]
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")
