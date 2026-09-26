@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from cuanta.adapters.engines.base import LineParser, StreamingEngine, as_dict
@@ -13,10 +14,12 @@ from cuanta.domain.engine import (
     SessionStarted,
     ToolCall,
 )
+from cuanta.domain.sandbox import STATE_DIR, STATE_ROOT_ENV
 
+WRITABLE_ROOTS = "sandbox_workspace_write.writable_roots="
 SANDBOX_CONFIG = (
     'approval_policy="never"',
-    "sandbox_workspace_write.writable_roots=[]",
+    f"{WRITABLE_ROOTS}[]",
     "sandbox_workspace_write.exclude_tmpdir_env_var=true",
     "sandbox_workspace_write.exclude_slash_tmp=true",
     "sandbox_workspace_write.network_access=false",
@@ -118,8 +121,12 @@ class CodexEngine(StreamingEngine):
             "--sandbox",
             "read-only" if request.read_only else "workspace-write",
         ]
+        state = request.env.get(STATE_ROOT_ENV, "") if request.temporary_copy else ""
+        writable = json.dumps([str(Path(state) / STATE_DIR)], ensure_ascii=False)
+        roots = f"{WRITABLE_ROOTS}{writable}" if state else ""
         for setting in SANDBOX_CONFIG:
-            command.extend(["--config", setting])
+            chosen = roots if roots and setting.startswith(WRITABLE_ROOTS) else setting
+            command.extend(["--config", chosen])
         if request.temporary_copy:
             command.append("--skip-git-repo-check")
         if request.model:

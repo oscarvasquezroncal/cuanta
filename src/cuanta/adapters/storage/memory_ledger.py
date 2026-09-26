@@ -16,6 +16,7 @@ from cuanta.domain.ledger import (
     Snapshot,
     TestRunRecord,
 )
+from cuanta.domain.sandbox import SANDBOX_MODE
 from cuanta.ports.ledger import EventQuery
 
 
@@ -92,9 +93,15 @@ class MemoryLedger:
             reverse=True,
         )
 
-    def test_runs(self, run_id: str = "", limit: int = 0) -> tuple[TestRunRecord, ...]:
+    def test_runs(
+        self, run_id: str = "", limit: int = 0, project_only: bool = False
+    ) -> tuple[TestRunRecord, ...]:
+        copies = {run.id for run in self._runs.values() if run.mode == SANDBOX_MODE}
         selected = [
-            record for record in self._ordered_test_runs() if not run_id or record.run_id == run_id
+            record
+            for record in self._ordered_test_runs()
+            if (not run_id or record.run_id == run_id)
+            and not (project_only and record.run_id in copies)
         ]
         return tuple(selected[:limit] if limit else selected)
 
@@ -155,6 +162,13 @@ class MemoryLedger:
             replace(item, accepted=1 if accepted else 0) if item.run_id == run_id else item
             for item in self._routing
         ]
+
+    def set_run_outcome(self, run_id: str, outcome: str, at: str) -> bool:
+        run = self._runs.get(run_id)
+        if run is None or run.outcome:
+            return False
+        self._runs[run_id] = replace(run, outcome=outcome, outcome_at=at)
+        return True
 
     def add_route_audits(self, audits: Sequence[RouteAudit]) -> None:
         for audit in audits:

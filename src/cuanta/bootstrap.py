@@ -17,6 +17,7 @@ from cuanta.adapters.system.process_runner import SubprocessRunner
 from cuanta.adapters.system.workspace import LocalHome, LocalWorkspace
 from cuanta.domain.config import Config, layer_from_env, layer_from_table, merge
 from cuanta.domain.ids import make_run_id
+from cuanta.domain.sandbox import STATE_ROOT_ENV
 from cuanta.ports.progress import ProgressSink
 from cuanta.ports.system import Clock, ProcessRunner
 
@@ -77,7 +78,7 @@ if TYPE_CHECKING:
     from cuanta.application.cache_probe import CacheProbeReport
     from cuanta.application.cache_state import PrefixQuery
     from cuanta.application.cat_capsule import CatCapsule
-    from cuanta.application.cross_engine import CrossEnginePipeline
+    from cuanta.application.cross_engine import CrossEnginePipeline, CrossReport
     from cuanta.application.detect import DetectProject
     from cuanta.application.doctor import Doctor
     from cuanta.application.drafts import Drafts
@@ -90,30 +91,35 @@ if TYPE_CHECKING:
     from cuanta.application.instinct_view import JevCard
     from cuanta.application.intake import IntakeService
     from cuanta.application.ledger_view import RunsQuery
-    from cuanta.application.mandate import MandateService
-    from cuanta.application.mandate_flow import MandateFlow
+    from cuanta.application.mandate import MandateReport, MandateService
+    from cuanta.application.mandate_flow import MandateFlow, MandateOptions, Prepared
     from cuanta.application.models import ModelService, ProbeOutcome
     from cuanta.application.new_files import NewFileReview
     from cuanta.application.refresh import RefreshProject
     from cuanta.application.results import ResultQuery
     from cuanta.application.route_apply import MandateRouting
     from cuanta.application.routing import RouteAdvisor, RoutePlan
+    from cuanta.application.sandbox import SandboxResult, SandboxRunner
     from cuanta.application.session_profile import LeanProfile
     from cuanta.application.spectrum import SpectrumQuery
     from cuanta.application.telemetry import TelemetryService, TranscriptImport
     from cuanta.application.tests_view import LatestTests
+    from cuanta.application.trials import TrialStore
     from cuanta.domain.assistant import Suggestions
     from cuanta.domain.bench import BenchTask, Condition
+    from cuanta.domain.engine import EngineEvent
     from cuanta.domain.instinct import Choice
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.routing import CostRange, RoutingPolicy
+    from cuanta.domain.sandbox import SandboxLaunch
     from cuanta.domain.shells import Shell
     from cuanta.domain.terminal import TerminalReport
     from cuanta.ports.engine import Engine
     from cuanta.ports.instinct import Instinct
     from cuanta.ports.ledger import Ledger
     from cuanta.ports.listener import ListenerControl
+    from cuanta.ports.sandbox import SandboxCopy
     from cuanta.ports.test_runner import TestRunner
 
 
@@ -134,19 +140,37 @@ class Container:
     runner: ProcessRunner = field(default_factory=SubprocessRunner)
     clock: Clock = field(default_factory=SystemClock)
     home: Path = field(default_factory=home_dir)
+    state_root: Path | None = None
+    extra_env: tuple[tuple[str, str], ...] = ()
     _shared: Ledger | None = field(default=None, repr=False)
     _opened: list[Ledger] = field(default_factory=list, repr=False)
     decision_scope: DecisionScope = field(default_factory=_new_scope, repr=False)
 
     @classmethod
     def for_project(cls, project: Path) -> Container:
-        return cls(project=project, config=load_config(project))
+        state = os.environ.get(STATE_ROOT_ENV, "").strip()
+        return cls(
+            project=project,
+            config=load_config(project),
+            state_root=Path(state) if state else None,
+        )
 
     def new_run_id(self) -> str:
         return make_run_id(self.clock.now_ms(), secrets.token_bytes(10))
 
     def workspace(self) -> LocalWorkspace:
         return LocalWorkspace(self.project)
+
+    def state_project(self) -> Path:
+        return self.state_root or self.project
+
+    def state_workspace(self) -> LocalWorkspace:
+        return LocalWorkspace(self.state_project())
+
+    def sandbox_container(
+        self, copy_root: Path, env: tuple[tuple[str, str], ...] = ()
+    ) -> Container:
+        return replace(self, project=copy_root, state_root=self.state_project(), extra_env=env)
 
     def home_reader(self) -> LocalHome:
         return LocalHome(self.home)
@@ -263,7 +287,7 @@ class Container:
             port=self.config.port,
             listener=self.listener() if telemetry else None,
             prices=load_prices(),
-            reports=RunReports(self.workspace()),
+            reports=RunReports(self.state_workspace()),
             lean_files=self.lean_profile().files,
             default_session=self.config.run_session,
         )
@@ -548,7 +572,7 @@ class Container:
         if scope is None:
             self.preview_scope(Request(type=task_type, what=what, where=where))
         ledger = self.shared_ledger()
-        latest = ledger.test_runs(limit=1)
+        latest = ledger.test_runs(limit=1, project_only=True)
         inputs = RouteInputs(
             task_type=task_type,
             what=what,
@@ -668,7 +692,12 @@ class Container:
         return Improvement(estimate, chosen.key, proposal, diff, launch.run.cost_usd, True)
 
     def cross_engine(
-        self, ledger: Ledger, budget_usd: float, max_turns: int = 0
+        self,
+        ledger: Ledger,
+        budget_usd: float,
+        max_turns: int = 0,
+        sandbox: SandboxLaunch | None = None,
+        checkpoint: Callable[[], Message | None] | None = None,
     ) -> CrossEnginePipeline:
         from cuanta.application.cross_engine import CrossEnginePipeline
 
@@ -685,6 +714,8 @@ class Container:
             cwd=str(self.project),
             budget_usd=budget_usd,
             max_turns=max_turns if max_turns > 0 else self.config.max_turns,
+            sandbox=sandbox,
+            checkpoint=checkpoint,
         )
 
     def bench_runner(
@@ -735,7 +766,7 @@ class Container:
     def stored_reports(self) -> frozenset[str]:
         from cuanta.application.run_reports import RUNS_DIR
 
-        folder = self.project / RUNS_DIR
+        folder = self.state_project() / RUNS_DIR
         if not folder.is_dir():
             return frozenset()
         return frozenset(
@@ -851,15 +882,16 @@ class Container:
         from cuanta.application.mandate import MandateService
 
         return MandateService(
-            self.workspace(),
+            self.state_workspace(),
             ledger,
             self.decisions(ledger),
             self.clock.now_iso,
             frozenset(self.config.exclusions),
             self.capsule_store(),
+            scanned=self.workspace(),
         )
 
-    def mandate_flow(self, ledger: Ledger) -> MandateFlow:
+    def mandate_flow(self, ledger: Ledger, sandbox: SandboxLaunch | None = None) -> MandateFlow:
         from cuanta.application.mandate_flow import MandateFlow
         from cuanta.application.spectrum import Selection
         from cuanta.domain.spectrum import View
@@ -885,6 +917,7 @@ class Container:
             scope=self.decision_scope,
             new_run_id=self.new_run_id,
             graph_mode=lambda: self.detector().graph_mode()[0],
+            sandbox=sandbox,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -913,6 +946,114 @@ class Container:
         except NotAvailable:
             return None
         return scoped.report.status.value
+
+    def trial_store(self, ledger: Ledger) -> TrialStore:
+        from cuanta.application.trials import TrialStore
+
+        return TrialStore(self.state_workspace(), ledger, self.clock.now_iso)
+
+    def sandbox_runner(self, ledger: Ledger) -> SandboxRunner:
+        from cuanta.adapters.system.sandbox import LocalSandbox
+        from cuanta.application.sandbox import SandboxRunner, TrialRecorder
+
+        sandbox = LocalSandbox(now_iso=self.clock.now_iso)
+        recorder = TrialRecorder(sandbox, self.state_workspace(), self.clock.now_iso)
+        return SandboxRunner(sandbox, recorder, ledger, self.state_project())
+
+    def run_metrics(self, ledger: Ledger, run_id: str) -> dict[str, object]:
+        from cuanta.application.spectrum import Selection
+
+        totals = self.spectrum_query(ledger).run(Selection(run=run_id)).report.totals
+        view = self.result_query(ledger).load(run_id)
+        split = view.split if view is not None else None
+        cache = view.cache if view is not None else None
+        return {
+            "tokens": {
+                "fresh_input": totals.fresh_input,
+                "cache_read": totals.cache_read,
+                "cache_write": totals.cache_write,
+                "output": totals.output,
+                "reasoning": totals.reasoning,
+            },
+            "duration_s": view.duration_s if view is not None else None,
+            "first_request": (
+                {"tokens": split.first_request, "fixed": split.fixed, "request": split.request}
+                if split is not None
+                else None
+            ),
+            "cache": cache.state.value if cache is not None else None,
+        }
+
+    def run_sandboxed(
+        self,
+        ledger: Ledger,
+        request: MandateRequest,
+        signatures: int,
+        options: MandateOptions,
+        progress: ProgressSink,
+        observer: Callable[[EngineEvent], None] | None = None,
+        verdict: bool = True,
+        on_start: Callable[[MandateFlow, Prepared], None] | None = None,
+    ) -> SandboxResult:
+        from cuanta.application.mandate import report_payload
+
+        def flow_for(copy: SandboxCopy, launch: SandboxLaunch) -> MandateFlow:
+            return self.sandbox_container(copy.root, launch.env).mandate_flow(ledger, launch)
+
+        def payload(report: MandateReport) -> dict[str, object]:
+            return {**report_payload(report), **self.run_metrics(ledger, report.run.id)}
+
+        return self.sandbox_runner(ledger).run_mandate(
+            flow_for,
+            request,
+            signatures,
+            options,
+            progress,
+            observer,
+            verdict,
+            payload,
+            on_start,
+        )
+
+    def run_sandboxed_cross(
+        self,
+        ledger: Ledger,
+        request: MandateRequest,
+        plan: RoutePlan,
+        progress: ProgressSink,
+        budget_usd: float,
+        max_turns: int,
+        keep: bool,
+    ) -> SandboxResult:
+        def pipeline_for(
+            copy: SandboxCopy, launch: SandboxLaunch, checkpoint: Callable[[], Message | None]
+        ) -> CrossEnginePipeline:
+            sub = self.sandbox_container(copy.root, launch.env)
+            return sub.cross_engine(ledger, budget_usd, max_turns, launch, checkpoint)
+
+        def payload(report: CrossReport) -> dict[str, object]:
+            return {
+                "ok": report.ok,
+                "spent_usd": report.spent_usd,
+                "steps": [
+                    {
+                        "role": step.role.value,
+                        "engine": step.engine,
+                        "model": step.model,
+                        "run_id": step.run_id,
+                        "ok": step.ok,
+                        "cost_usd": step.cost_usd,
+                        "cost_source": step.cost_source,
+                        "handoff_chars": len(step.handoff),
+                        **self.run_metrics(ledger, step.run_id),
+                    }
+                    for step in report.steps
+                ],
+            }
+
+        return self.sandbox_runner(ledger).run_cross(
+            pipeline_for, request, plan, progress, keep, payload
+        )
 
     def new_file_review(self) -> NewFileReview:
         from cuanta.application.new_files import NewFileReview
@@ -964,7 +1105,7 @@ class Container:
 
         return LocalListenerControl(
             self.cuanta_dir(),
-            self.project,
+            self.state_project(),
             self.ledger,
             keep_prompts=self.config.store_prompts,
             linger_s=linger_s,
@@ -1061,13 +1202,13 @@ class Container:
         )
 
     def cuanta_dir(self) -> Path:
-        return self.project / ".cuanta"
+        return self.state_project() / ".cuanta"
 
     def ledger(self) -> SqliteLedger:
         from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
         from cuanta.application.init_project import ensure_cuanta_dir
 
-        ensure_cuanta_dir(self.workspace())
+        ensure_cuanta_dir(self.state_workspace())
         ledger = SqliteLedger(self.cuanta_dir() / "ledger.db")
         self._opened.append(ledger)
         return ledger
@@ -1095,8 +1236,9 @@ class Container:
             capsules=self.capsule_store(),
             clock=self.clock,
             new_id=self.new_run_id,
-            scratch=self.cuanta_dir() / "tmp",
+            scratch=self.project / ".cuanta" / "tmp",
             triage=SignatureTriage(ledger, self.decisions(ledger)),
+            env=dict(self.extra_env),
         )
 
     def affected_gateway(self, ledger: Ledger) -> AffectedGateway:
@@ -1109,6 +1251,7 @@ class Container:
             ledger=ledger,
             exclusions=frozenset(self.config.exclusions),
             neighbours=lambda: load_neighbours(self.project),
+            remember=self.state_root is None,
         )
 
     def model_service(self) -> ModelService:
@@ -1144,7 +1287,7 @@ class Container:
             save_override=lambda key, tier: self.set_project_path(
                 ("models", "tiers", key), tier.value
             ),
-            workspace=self.workspace(),
+            workspace=self.state_workspace(),
             now_iso=self.clock.now_iso,
         )
 

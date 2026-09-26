@@ -6,8 +6,11 @@ from cuanta.cli.runtime import Session, execute, global_options
 
 if TYPE_CHECKING:
     from cuanta.application.results import ResultView
+    from cuanta.application.trials import Trial, TrialSummary
     from cuanta.bootstrap import Container
-    from cuanta.cli.document import Block, Document
+    from cuanta.cli.document import Block, Document, Table
+    from cuanta.domain.handoff import Handoff, Workflow
+    from cuanta.domain.shells import Shell
 
 runs_app = typer.Typer(
     help="Runs cuanta launched, with their stored reports.", no_args_is_help=True
@@ -52,6 +55,34 @@ def open_command(
             typer.echo(f"  {error.hint}", err=True)
         raise typer.Exit(int(error.exit_code)) from error
     launch(options, open_run=resolved)
+
+
+@runs_app.command("apply", help="Apply an isolated-copy run to the project after a drift check.")
+def apply_command(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id or a unique prefix.")],
+) -> None:
+    execute(ctx, lambda session: _apply(session, run_id))
+
+
+@runs_app.command("discard", help="Reject an isolated-copy run; the project is not touched.")
+def discard_command(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id or a unique prefix.")],
+) -> None:
+    execute(ctx, lambda session: _discard(session, run_id))
+
+
+@runs_app.command("branch", help="Suggested branch or commit and the git commands to run.")
+def branch_command(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id or a unique prefix.")],
+    shell: Annotated[str, typer.Option("--shell", help="cmd, pwsh, bash, zsh or fish.")] = "",
+    workflow: Annotated[
+        str, typer.Option("--workflow", help="branches or trunk; defaults to git.workflow.")
+    ] = "",
+) -> None:
+    execute(ctx, lambda session: _branch(session, run_id, shell, workflow))
 
 
 def _resolve(project: object, run_id: str) -> str:
@@ -167,6 +198,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "report_path": view.report_path or None,
         "sections": [section.key for section in view.sections],
         "overhead": overhead_payload(view.overhead) if view.overhead is not None else None,
+        "trial": _trial_payload(view.trial),
     }
     if markdown:
         text = run_markdown(view)
@@ -198,8 +230,11 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         ("cost", usd(run.cost_usd, run.cost_source)),
         *turn_rows,
         ("files changed", str(len(view.changed_files))),
+        *_trial_rows(view.trial),
     )
     blocks: list[Block] = [KeyValues(rows)]
+    if view.trial is not None and view.trial.trial.guard_tripped:
+        blocks.append(_no_handoff(view.trial))
     if view.overhead is not None:
         blocks.extend(Line(english(line)) for line in overhead_messages(view.overhead))
     if view.text.strip():
@@ -209,3 +244,272 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
     if view.report_path:
         blocks.append(Hint(f"report: {view.report_path} · cuanta runs open {run.id}"))
     return Document(blocks=tuple(blocks), payload=payload)
+
+
+COMMAND_LABELS = (
+    ("cd ", "project"),
+    ("Set-Location ", "project"),
+    ("git switch ", "branch"),
+    ("cuanta runs apply ", "apply"),
+    ("git --literal-pathspecs add ", "stage"),
+    ("git --literal-pathspecs commit ", "commit"),
+)
+
+
+def _label(command: str) -> str:
+    return next((label for prefix, label in COMMAND_LABELS if command.startswith(prefix)), "")
+
+
+def _changes(trial: "Trial") -> "Table":
+    from cuanta.cli.document import Column, Table
+
+    return Table(
+        "changes",
+        (Column("change"), Column("file"), Column("+", numeric=True), Column("−", numeric=True)),
+        tuple(
+            (
+                change.kind.value,
+                change.path,
+                "bin" if change.binary else str(change.added),
+                "bin" if change.binary else str(change.removed),
+            )
+            for change in trial.changes
+        ),
+    )
+
+
+def _handoff_blocks(handoff: "Handoff | None") -> "list[Block]":
+    from cuanta.cli.document import Commands, KeyValues, Line
+    from cuanta.domain.progress import Status
+
+    if handoff is None:
+        return []
+    rows = [("commit", handoff.subject)]
+    if handoff.branch:
+        rows.append(("branch", handoff.branch))
+    elif handoff.current_branch:
+        rows.append(("branch", f"{handoff.current_branch} (current)"))
+    items = tuple((_label(command), command) for command in handoff.commands)
+    blocks: list[Block] = [
+        KeyValues(tuple(rows)),
+        Commands(f"git hand-off ({handoff.workflow.value})", items),
+    ]
+    if handoff.uncommitted:
+        shown = ", ".join(handoff.uncommitted[:5])
+        blocks.append(
+            Line(
+                "these files already had your own uncommitted changes, and the commit will "
+                f"include them: {shown}",
+                Status.WARN,
+            )
+        )
+    if handoff.untracked:
+        shown = ", ".join(handoff.untracked[:5])
+        blocks.append(
+            Line(
+                "these files were not tracked by git before the run, and the commit adds them "
+                f"whole: {shown}",
+                Status.WARN,
+            )
+        )
+    return blocks
+
+
+def _handoff_payload(handoff: "Handoff | None", shell: str) -> dict[str, object] | None:
+    if handoff is None:
+        return None
+    return {
+        "workflow": handoff.workflow.value,
+        "kind": handoff.kind,
+        "subject": handoff.subject,
+        "branch": handoff.branch or None,
+        "current_branch": handoff.current_branch or None,
+        "shell": shell,
+        "commands": list(handoff.commands),
+        "one_line": handoff.chained,
+        "uncommitted": list(handoff.uncommitted),
+        "untracked": list(handoff.untracked),
+    }
+
+
+def _shell(container: "Container", name: str) -> "Shell":
+    from cuanta.domain.errors import DomainFailure
+    from cuanta.domain.shells import Shell, shell_from_name
+
+    if not name:
+        return container.shell()
+    chosen = shell_from_name(name)
+    if chosen is Shell.UNKNOWN:
+        raise DomainFailure(f"unknown --shell {name}", "use cmd, pwsh, bash, zsh or fish")
+    return chosen
+
+
+def _workflow(container: "Container", name: str) -> "Workflow":
+    from cuanta.cli.commands.route import check_choice
+    from cuanta.domain.handoff import WORKFLOWS, parse_workflow
+
+    check_choice(name, WORKFLOWS, "--workflow")
+    return parse_workflow(name or container.config.git_workflow)
+
+
+def _apply(session: Session, run_id: str) -> "Document":
+    from cuanta.bootstrap import Container
+    from cuanta.cli.document import Document, Hint, Line
+    from cuanta.domain.errors import DomainFailure
+    from cuanta.domain.progress import Status
+
+    container = Container.for_project(session.project)
+    try:
+        resolved = container.resolve_run(run_id)
+        store = container.trial_store(container.shared_ledger())
+        summary = store.summary(resolved)
+        if summary is None:
+            raise DomainFailure(
+                f"run {resolved} has no isolated-copy changes",
+                "only runs launched with --sandbox can be applied",
+            )
+        table = _changes(summary.trial)
+        if not session.options.yes:
+            if not session.interactive:
+                return Document(
+                    blocks=(table, Hint("nothing written · add --yes to apply")),
+                    payload={"applied": False, "run_id": resolved},
+                )
+            session.presenter.render(Document(blocks=(table,)))
+            if not typer.confirm(f"Apply these changes to {session.project}?", default=False):
+                return Document(
+                    blocks=(Hint("nothing written"),),
+                    payload={"applied": False, "run_id": resolved},
+                )
+        trial = store.apply(resolved)
+        shell = container.shell()
+        handoff = store.handoff(resolved, _workflow(container, ""), shell)
+    finally:
+        container.close()
+    blocks: list[Block] = [
+        Line(f"applied {len(trial.changes)} files from run {resolved}", Status.OK),
+        *_handoff_blocks(handoff),
+    ]
+    return Document(
+        blocks=tuple(blocks),
+        payload={
+            "applied": True,
+            "run_id": resolved,
+            "files": list(trial.paths),
+            "handoff": _handoff_payload(handoff, shell.value),
+        },
+    )
+
+
+def _discard(session: Session, run_id: str) -> "Document":
+    from pathlib import Path
+
+    from cuanta.bootstrap import Container
+    from cuanta.cli.document import Document, Hint, Line
+    from cuanta.domain.progress import Status
+
+    container = Container.for_project(session.project)
+    try:
+        resolved = container.resolve_run(run_id)
+        trial = container.trial_store(container.shared_ledger()).discard(resolved)
+    finally:
+        container.close()
+    blocks: list[Block] = [
+        Line(f"run {resolved} rejected · the project was not touched", Status.OK)
+    ]
+    kept = trial.copy_root if trial is not None and trial.kept else ""
+    if kept and Path(kept).exists():
+        blocks.append(Hint(f"the isolated copy is still at {kept}; delete it when done"))
+    return Document(
+        blocks=tuple(blocks),
+        payload={"rejected": True, "run_id": resolved, "kept_copy": kept or None},
+    )
+
+
+def _branch(session: Session, run_id: str, shell_name: str, workflow_name: str) -> "Document":
+    from cuanta.bootstrap import Container
+    from cuanta.cli.document import Document
+
+    container = Container.for_project(session.project)
+    try:
+        resolved = container.resolve_run(run_id)
+        shell = _shell(container, shell_name)
+        workflow = _workflow(container, workflow_name)
+        store = container.trial_store(container.shared_ledger())
+        handoff = store.handoff(resolved, workflow, shell)
+        summary = store.summary(resolved)
+    finally:
+        container.close()
+    blocks = _handoff_blocks(handoff)
+    tripped = summary is not None and summary.trial.guard_tripped
+    if handoff is None:
+        blocks.append(_no_handoff(summary))
+    return Document(
+        blocks=tuple(blocks),
+        payload={
+            "run_id": resolved,
+            "handoff": _handoff_payload(handoff, shell.value),
+            "trial": _trial_payload(summary),
+        },
+        exit_code=1 if tripped else 0,
+    )
+
+
+def _trial_rows(summary: "TrialSummary | None") -> tuple[tuple[str, str], ...]:
+    if summary is None:
+        return ()
+    trial = summary.trial
+    state = (
+        f"applied {summary.applied_at[:16]}"
+        if summary.applied_at
+        else summary.outcome or "waiting for apply or discard"
+    )
+    rows = [
+        ("isolated copy", f"{len(trial.changes)} files, +{trial.added} −{trial.removed}"),
+        ("outcome", state),
+    ]
+    if summary.drift:
+        rows.append(("changed since the copy", ", ".join(summary.drift[:5])))
+    return tuple(rows)
+
+
+def _no_handoff(summary: "TrialSummary | None") -> "Block":
+    from cuanta.application.trials import NPM_HINT, REJECTED, STATE_HINT
+    from cuanta.cli.document import Hint, Line
+    from cuanta.domain.progress import Status
+
+    if summary is None:
+        return Hint("this run did not work in an isolated copy")
+    trial = summary.trial
+    if trial.state_changed_count:
+        return Line(
+            "cuanta's own files in the project changed during the run: "
+            f"{', '.join(trial.state_changed[:5])}; {STATE_HINT}",
+            Status.FAIL,
+        )
+    if trial.guard_tripped:
+        return Line(
+            f"node_modules in the project changed during the run "
+            f"({trial.dependencies_changed_count} files): {NPM_HINT}",
+            Status.FAIL,
+        )
+    if summary.outcome == REJECTED:
+        return Hint("this run was discarded; there is nothing to hand off")
+    if trial.base_missing:
+        return Line("files changed in the project while the run worked", Status.WARN)
+    return Hint("this run has no changes to hand off")
+
+
+def _trial_payload(summary: "TrialSummary | None") -> dict[str, object] | None:
+    from cuanta.application.trials import trial_payload
+
+    if summary is None:
+        return None
+    return {
+        **trial_payload(summary.trial),
+        "outcome": summary.outcome or None,
+        "outcome_at": summary.outcome_at or None,
+        "applied_at": summary.applied_at or None,
+        "drift": list(summary.drift),
+        "guard_tripped": summary.trial.guard_tripped,
+    }

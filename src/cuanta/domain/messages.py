@@ -530,6 +530,43 @@ ENGLISH: dict[str, str] = {
     ),
     "cache_probe.verdict.unstable": ("the prefix changed between identical runs; no TTL recorded"),
     "cache_probe.verdict.inconclusive": "inconclusive: no usable bracket; no TTL recorded",
+    "sandbox.copied": (
+        "isolated copy ready: {files} files copied and {linked} dependency files linked "
+        "in {seconds} s at {path}"
+    ),
+    "sandbox.kept": "isolated copy kept at {path}",
+    "sandbox.remove_failed": "could not remove the isolated copy at {path}; delete it by hand",
+    "sandbox.trial": "{files} files changed in the copy; patch saved to {path}",
+    "sandbox.no_changes": "the run changed no files in the copy",
+    "sandbox.skipped_links": (
+        "{count} links point outside the project and were left out of the copy: {paths}"
+    ),
+    "sandbox.outside_dependencies": (
+        "dependencies above the project folder are not in the copy, so installs or builds "
+        "that need them can fail: {paths}"
+    ),
+    "sandbox.skipped_outputs": "build outputs ignored by .gitignore were not copied: {paths}",
+    "sandbox.stopped_before_launch": "stopped before the engine started; nothing was spent",
+    "sandbox.ignored_changes": (
+        "{count} files ignored by .gitignore changed in the copy and were left out: {paths}"
+    ),
+    "sandbox.read_only_breach": (
+        "the investigation changed {count} files in the copy; nothing will be applied"
+    ),
+    "sandbox.base_missing": (
+        "{count} files changed in the project while the run worked; this run cannot be applied"
+    ),
+    "sandbox.dependencies_changed": (
+        "node_modules in the project changed during the run ({count} files); "
+        "run npm ci in the project to restore it"
+    ),
+    "sandbox.state_changed": (
+        "cuanta's own files in the project changed during the run ({count}): {paths}; "
+        "review .cuanta/config.toml and discard pending isolated-copy results you did not expect"
+    ),
+    "sandbox.unreadable": (
+        "{count} files ignored by .gitignore could not be read and are not in the copy: {paths}"
+    ),
 }
 
 

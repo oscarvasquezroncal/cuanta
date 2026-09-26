@@ -127,9 +127,11 @@ class MandateService:
         clock_iso: Callable[[], str],
         exclusions: frozenset[str] = frozenset(),
         capsules: CapsuleStore | None = None,
+        scanned: Workspace | None = None,
     ) -> None:
         self._capsules = capsules
         self._workspace = workspace
+        self._scanned = scanned or workspace
         self._reports = RunReports(workspace)
         self._ledger = ledger
         self._decisions = decisions
@@ -146,7 +148,7 @@ class MandateService:
             raise DomainFailure(str(error), "regenerate it with cuanta refresh") from error
 
     def from_failure(self) -> tuple[str, int]:
-        latest = self._ledger.test_runs(limit=1)
+        latest = self._ledger.test_runs(limit=1, project_only=True)
         if not latest:
             raise DomainFailure("no gateway result yet", "run cuanta test first")
         record = latest[0]
@@ -225,14 +227,14 @@ class MandateService:
         self._ledger.close_run_decisions(run_id, outcome)
 
     def snapshot(self, run_id: str, phase: str) -> dict[str, str]:
-        scan = self._workspace.scan(self._exclusions, collect_files=True)
+        scan = self._scanned.scan(self._exclusions, collect_files=True)
         hashes: dict[str, str] = {}
         for path in scan.files:
-            digest = self._workspace.sha256(path)
+            digest = self._scanned.sha256(path)
             if digest is not None:
                 hashes[path] = digest
                 if phase == "start":
-                    self._reports.keep_blob(path, digest)
+                    self._reports.keep_blob(path, digest, self._scanned)
         self._ledger.add_snapshots(
             [Snapshot(run_id, phase, path, digest) for path, digest in hashes.items()]
         )

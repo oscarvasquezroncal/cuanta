@@ -55,6 +55,8 @@ class LaunchSpec:
     persist_session: bool = True
     read_only: bool = False
     temporary_copy: bool = False
+    mode: str = ""
+    env: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +112,7 @@ class EngineLauncher:
         env = run_env(run_id, parent)
         if port is not None and self._engine.name == "claude":
             env.update(claude_env(port, self._project, run_id, parent))
+        env.update(dict(spec.env))
         mcp_config, settings_file = "", ""
         session = spec.session or self._default_session
         if session == LEAN and self._engine.name == "claude" and self._lean_files is not None:
@@ -168,6 +171,7 @@ class EngineLauncher:
             task_type=spec.task_type,
             depth=spec.depth,
             max_turns=spec.max_turns,
+            mode=spec.mode,
         )
         self._ledger.add_run(run)
         if before is not None:

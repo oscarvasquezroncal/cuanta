@@ -22,6 +22,7 @@ from cuanta.domain.ledger import (
     Snapshot,
     TestRunRecord,
 )
+from cuanta.domain.sandbox import SANDBOX_MODE
 from cuanta.ports.ledger import EventQuery
 
 RUN_COLUMNS = tuple(item.name for item in fields(Run))
@@ -214,9 +215,18 @@ class SqliteLedger:
                 [astuple(signature) for signature in signatures],
             )
 
-    def test_runs(self, run_id: str = "", limit: int = 0) -> tuple[TestRunRecord, ...]:
-        where = "WHERE run_id = ?" if run_id else ""
-        parameters = (run_id,) if run_id else ()
+    def test_runs(
+        self, run_id: str = "", limit: int = 0, project_only: bool = False
+    ) -> tuple[TestRunRecord, ...]:
+        clauses: list[str] = []
+        parameters: list[str] = []
+        if run_id:
+            clauses.append("run_id = ?")
+            parameters.append(run_id)
+        if project_only:
+            clauses.append("run_id NOT IN (SELECT id FROM runs WHERE mode = ?)")
+            parameters.append(SANDBOX_MODE)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         suffix = f" LIMIT {int(limit)}" if limit else ""
         rows = self._query(
             f"SELECT * FROM test_runs {where} ORDER BY started_at DESC, id DESC{suffix}", parameters
@@ -345,6 +355,14 @@ class SqliteLedger:
             "UPDATE routing_decisions SET accepted = ? WHERE run_id = ?",
             (1 if accepted else 0, run_id),
         )
+
+    def set_run_outcome(self, run_id: str, outcome: str, at: str) -> bool:
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE runs SET outcome = ?, outcome_at = ? WHERE id = ? AND outcome = ''",
+                (outcome, at, run_id),
+            )
+            return cursor.rowcount == 1
 
     def add_route_audits(self, audits: Sequence[RouteAudit]) -> None:
         with self._transaction() as connection:

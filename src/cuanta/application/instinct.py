@@ -294,7 +294,7 @@ class SignatureTriage:
         self._decisions = decisions
 
     def features(self, signature_id: str, run_id: str) -> dict[str, object]:
-        history = self._ledger.test_runs(limit=HISTORY_WINDOW)
+        history = self._ledger.test_runs(limit=HISTORY_WINDOW, project_only=True)
         containing = {record.id for record in self._ledger.signature_history(signature_id)}
         seen_before = sum(
             1
