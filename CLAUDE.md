@@ -91,8 +91,10 @@ floor. Preserve performance assertions, measured startup work and budgets.
   rebase, stash, clean or rewriting published commits. At session start, fetch and
   pull with `--ff-only` if a remote exists; stop on divergence. See `docs/DEVELOPMENT.md`.
 - The private session plan, when present, lives in `.cuanta/NEXT_SESSIONS.md` and stays
-  untracked. Follow its milestone order. Full gate (both pytest phases) once at close,
-  twice consecutively for TUI lifecycle, process management, timing changes and V2 M9.
+  untracked. Follow its milestone order. While working, run focused tests only. At close:
+  `ruff check`, `ruff format --check`, `mypy`, the privacy scan and one full gate (both pytest
+  phases, the parallel one with `-n auto`); a second consecutive full gate only when the
+  milestone changes process management, and at V2 M9. Speed budgets never move.
 
 - The layer `ALLOWED` map and the no-I/O-in-domain check (`tests/architecture/test_layers.py`).
 - No comments / no docstrings (`tests/architecture/test_style.py`).
@@ -119,6 +121,10 @@ floor. Preserve performance assertions, measured startup work and budgets.
 - pytest bounds ordinary tests per test, leaves live tests unbounded unless marked, and does not
   restart a crashed xdist worker. See `pyproject.toml` and `tests/conftest.py`.
 - `NO_COLOR` disables automatic TUI launch when `cuanta` has no arguments.
+- `cuanta mandate --sandbox` works in a copy (`node_modules` hard-linked, never junctioned:
+  Turbopack rejects it); changes wait in `.cuanta/trials/<run-id>/` for `cuanta runs apply`.
+  cuanta sets `CUANTA_STATE_ROOT` for engines in the copy so `cuanta test` there writes to the
+  original ledger. `git.workflow` defaults to `branches`; cuanta only prints git commands.
 
 ## 8. Repo traps
 

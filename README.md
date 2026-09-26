@@ -64,6 +64,7 @@ These are single runs on one production Next.js landing page (Windows 11, Claude
 | **Lean sessions** | Claude Code runs launched by cuanta start without your plugins, hooks and MCP servers, from byte-identical settings files, so the prompt prefix can be cached. |
 | **Gateway** | `cuanta test` runs your suite once, clusters failures by signature and stores full logs as capsules. Agents get one line per failure and page into details only when they need to. |
 | **Results and ledger** | Launched runs store reports and file snapshots under `.cuanta/runs/`; costs and telemetry live in the local SQLite ledger. Results show diffs, and ledger data exports to CSV or JSON. |
+| **Isolated copies** | `--sandbox` (or **Try in an isolated copy** on the Team step) runs a mandate in a copy of your project. Your working tree is untouched until you apply the change set; the patch, the changed files and the run's metrics wait in `.cuanta/trials/<run-id>/`. |
 | **Instinct** | Fast, typed decisions (choice, score, yes/no) for classification and routing. An offline heuristic by default, or [TypeSafe's Jev](https://typesafe.ai) when you connect a key. |
 | **Forge** | Ships [claude-agent-forge](https://github.com/oscarvasquezroncal/claude-agent-forge) v0.4: a project rulebook (`CLAUDE.md`), four agents and a mandate template, generated for your repo by `cuanta init`. |
 | **The app** | A mouse-friendly terminal app, built on [Textual](https://textual.textualize.io), in English and Spanish, with a web mode. Everything also works as plain commands with `--json`. |
@@ -246,7 +247,7 @@ flowchart LR
 
 `--cross-engine` (experimental) runs each pipeline role in its own session on the engine its routing picks, passing a JSON handoff between roles.
 
-For Claude roles in this experimental path, read-only is **not available**: write tools are denied, but there is no filesystem check between cross-engine roles. The **checked after the run** entry above applies to ordinary mandates, which compare file snapshots. Codex sandbox enforcement and the OpenCode read-only refusal apply in both paths.
+For Claude roles in this experimental path, read-only is **not available**: write tools are denied, but there is no filesystem check between cross-engine roles. The **checked after the run** entry above applies to ordinary mandates, which compare file snapshots. Codex sandbox enforcement and the OpenCode read-only refusal apply in both paths. With `--sandbox`, the whole pipeline runs in one isolated copy and its changes are checked once, after the last role.
 
 Each role shows its engine guarantees before launch. Codex costs use the requested model's published standard price row and are labelled **estimated**, not actual subscription billing. Missing prices or incomplete usage show **n/a** (JSON `null`). A capped cross-engine run stops before its next role when remaining spend cannot be calculated. An OpenCode step can overshoot its cap before reporting cost; cuanta records the reported overshoot and budget termination. A capped OpenCode run also stops when a step omits cost, with an explicit reason. Failed attempts and retries count toward totals and cost per accepted change.
 
@@ -284,9 +285,10 @@ Use `--help` on any command. Global `--plain` and `--json` control CLI output; `
 | `cuanta doctor` (`purr`) | Health check, with one fix per issue |
 | `cuanta init` | Detect, graph, telemetry, Forge, verify. `--dry-run`, `--skip-forge` |
 | `cuanta refresh` | Refresh Forge's knowledge, reindex the graph, report tier drift |
-| `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--max-turns` for Claude, `--dry-run` |
+| `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--max-turns` for Claude, `--dry-run`, `--sandbox` to work in an isolated copy (`--keep` keeps the copy) |
 | `cuanta route --dry-run` | Show the routing plan for a request |
 | `cuanta runs list \| show \| open` | Stored runs and their reports |
+| `cuanta runs apply \| discard \| branch` | For isolated-copy runs: apply the changes after a drift check, reject them, or print the suggested branch or commit and the git commands for your shell |
 | `cuanta test` | Gateway: one run, failures clustered into signatures |
 | `cuanta cat <capsule>` | Page through a stored log by level or line range |
 | `cuanta spectrum [run]` | Token map, leaks and session overhead. `--import` reads past sessions |
@@ -314,6 +316,9 @@ session = "lean"            # lean | full
 [ui]
 language = "es"             # es | en
 mandate_layout = "guided"   # guided | one_page
+
+[git]
+workflow = "branches"       # branches | trunk
 
 [listener]
 port = 4318
@@ -352,8 +357,9 @@ The full list lives in [`docs/FLAGS.md`](docs/FLAGS.md).
 - **Consent before config changes.** Wiring telemetry edits an engine's config only after you agree, and keeps a backup. `cuanta telemetry off` restores it.
 - **Local records and engine storage.** cuanta stores reports, snapshots and usage locally. OpenCode's temporary prompt attachment is removed after a run. The official engine CLIs can retain their own sessions, prompts and operational state under their settings; cuanta's ledger policy does not disable that storage or their configured plugins and MCP servers.
 - **Instinct is offline by default.** With Jev, it sends the redacted request text and, only if you enable it, file paths and symbol names. It never sends code, and **See what is sent** shows the exact payload.
-- **Engine-specific read-only behavior.** Codex investigations and analyst roles use an explicit read-only sandbox; editing roles use workspace-write with no extra writable roots or writable temp directories. cuanta never requests full-access mode. Claude investigations deny write tools and check file changes afterward; this is not a verified OS filesystem boundary. OpenCode investigations and analyst roles are refused because shell permission rules on the verified version admit write bypasses. See the engine table and contracts for the limits of each guarantee.
-- **Git boundary.** cuanta never runs git in your projects. Codex's repository check is skipped only for temporary copies owned by cuanta, never for ordinary user directories.
+- **Engine-specific read-only behavior.** Codex investigations and analyst roles use an explicit read-only sandbox; editing roles use workspace-write with no extra writable roots or writable temp directories, except that isolated-copy runs add the original project's `.cuanta` folder so tests run inside the copy record into your ledger; cuanta checks `.cuanta/config.toml` and stored isolated-copy results after each such run and blocks applying when they changed. cuanta never requests full-access mode. Claude investigations deny write tools and check file changes afterward; this is not a verified OS filesystem boundary. OpenCode investigations and analyst roles are refused because shell permission rules on the verified version admit write bypasses. See the engine table and contracts for the limits of each guarantee.
+- **Git boundary.** cuanta never runs git in your projects. Codex's repository check is skipped only for temporary copies owned by cuanta, never for ordinary user directories. After an isolated-copy run, `cuanta runs apply` writes the changed files itself and prints the git commands (branch, stage, commit) for you to run.
+- **Isolated copies.** The copy lives in your temp folder, or another folder on the project's drive, and leaves out `.git`, build caches and cuanta's own state. `node_modules` is shared through hard links, so builds work without writing to your project, but never install packages or edit `node_modules` in the copy: an in-place write reaches your project's files. Runs are told so, Claude runs deny edits there, and a check after the run (after every role in a cross-engine run) stops the run and blocks applying if your `node_modules` changed; restore it with `npm ci`. New files ignored by your `.gitignore` never enter the patch, and edits to ignored files are listed as left out. `.env` files are copied so builds work: `--keep` leaves them in the kept copy, so delete it when you are done. Build outputs ignored by `.gitignore` (such as `target/`, `dist/` or `build/`) are not copied, and for Python projects installed in editable mode `PYTHONPATH` points tests at the copy's sources. Applying refuses any file that changed in your project since the copy. The hand-off warns when a changed file already had your own uncommitted edits, or was not tracked by git, because the commit includes them whole; edits you had already staged are not detected, so review `git diff --cached` before committing.
 
 ---
 
