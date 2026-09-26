@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from unittest.mock import patch
 
 from textual.pilot import Pilot
-from textual.widgets import Button, ContentSwitcher, DataTable, Static
+from textual.widgets import Button, ContentSwitcher, DataTable, Select, Static
 from textual.worker import WorkerCancelled
 
 from cuanta.application.doctor import result
@@ -65,8 +65,25 @@ def drive(app: CuantaApp, scenario: Scenario, size: tuple[int, int] = (120, 36))
         async with app.run_test(size=size) as pilot:
             await settle(app, pilot)
             await scenario(app, pilot)
+            await settle(app, pilot)
 
     asyncio.run(main())
+
+
+def test_driver_finishes_pending_widget_mounts_before_shutdown() -> None:
+    completed: list[str] = []
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        async def mount() -> None:
+            await asyncio.sleep(0)
+            selector = Select([("Ready", "ready")], allow_blank=False)
+            await app.base.mount(selector)
+            completed.append(str(selector.query_one("#label", Static).render()))
+
+        app.run_worker(mount())
+
+    drive(make_app(), scenario)
+    assert completed == ["Ready"]
 
 
 def text_of(app: CuantaApp, selector: str) -> str:
