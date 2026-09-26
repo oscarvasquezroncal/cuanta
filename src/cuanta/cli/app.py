@@ -29,7 +29,6 @@ from cuanta.cli.commands import (
     ui,
 )
 from cuanta.cli.group import hoist_globals
-from cuanta.cli.output import GlobalOptions
 from cuanta.cli.theme import ThemeName
 
 app = typer.Typer(
@@ -57,6 +56,8 @@ def root(
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Assume yes to prompts.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="More detail.")] = False,
 ) -> None:
+    from cuanta.cli.output import GlobalOptions
+
     ctx.obj = GlobalOptions(
         plain=plain,
         json=json_output,
@@ -115,6 +116,8 @@ def _prefer_utf8_when_piped() -> None:
 def main() -> None:
     arguments = sys.argv[1:]
     if not arguments and ui.interactive_terminal() and "NO_COLOR" not in os.environ:
+        from cuanta.cli.output import GlobalOptions
+
         ui.launch(GlobalOptions())
         return
     _prefer_utf8_when_piped()
