@@ -7,6 +7,19 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Added
+- `docs/CONTRACTS.md` records external contracts with their version, status, date and evidence.
+- Claude mandates have a depth-based turn limit, configurable through `CUANTA_MAX_TURNS`,
+  `runs.max_turns` or `--max-turns`; the ledger records the limit and turns used.
+- Single-context Claude investigations limit built-in tool definitions. An M0 A/B probe on
+  Claude Code 2.1.282 cut first-request tokens from 30,588 to 15,454.
+- `cuanta probe cache-ttl` measures a bounded prompt-cache window in a temporary project;
+  without `--yes` it previews the plan. Measurements record authentication mode, engine version,
+  model and date in user config when the result is usable.
+- Result and Spectrum show whether a Claude run's first request found a warm or cold cache;
+  Team and Home show an estimated prefix window, or unknown without a usable measurement.
+- A per-test pytest timeout and disabled xdist worker restarts make hung or crashed tests fail
+  with diagnostic output.
+- Health reports the size of the home `AGENTS.md` and its estimated share of a first request.
 - Public agent instructions linking the project rules and guarded Git workflow.
 - Repository Git workflow on `main`: setup, guarded commit and user-only push scripts,
   a POSIX hook stripping AI attribution, a guard against committing ZIP archives,
@@ -76,6 +89,9 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   you ask for `--include-raw` (a checkbox in the app); `cuanta ledger export --all`.
 
 ### Changed
+- Investigation prompts request the report in the request's language, and displayed reports
+  begin at their first heading while the raw report stays available. New runs store whether
+  the shape was a single context or a pipeline; ambiguous older runs display unknown.
 - A visual pass on the app: buttons are three rows tall (primary filled, secondary quiet) with
   a visible focus ring; button rows wrap instead of clipping their labels; cards separate by
   surface color instead of borders; the header facts are compact chips; label/value facts wrap

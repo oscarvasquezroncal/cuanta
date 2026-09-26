@@ -70,6 +70,8 @@ local resources require a worker limit. Run the full suite once, or twice
 consecutively when changing TUI lifecycle, process management or timing-sensitive
 code, and at V2 M9. Do not lower the coverage floor. No comments or docstrings;
 keep strict types, hexagonal layers and both es/en catalogs.
+Tests have a 120-second timeout; tests whose own bounds require more time use
+`@pytest.mark.timeout(300)`, while opted-in live tests have no timeout.
 
 Record changes, gate results, verified and unverified external contracts, risks
 and the next milestone in a local plan under the ignored `.cuanta/` directory.
