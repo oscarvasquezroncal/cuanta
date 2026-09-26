@@ -23,6 +23,7 @@ from cuanta.ports.ledger import Ledger
 
 PATHS = ("/v1/logs", "/v1/metrics", "/v1/traces")
 MAX_BODY = 32 * 1024 * 1024
+MAX_PORT = 65535
 BATCH_SIZE = 500
 FLUSH_INTERVAL_S = 0.25
 UNSUPPORTED_HINT = (
@@ -296,3 +297,18 @@ def build_listener(
     writer = EventWriter(ledger_factory)
     server = OtlpServer(port, writer, keep_prompts, token)
     return RunningListener(server, writer)
+
+
+def bind_listener(
+    start: int,
+    ledger_factory: Callable[[], Ledger],
+    keep_prompts: bool,
+    token: str,
+    attempts: int = 50,
+) -> RunningListener:
+    for port in range(start, min(start + attempts, MAX_PORT + 1)):
+        try:
+            return build_listener(port, ledger_factory, keep_prompts, token)
+        except OSError:
+            continue
+    raise OSError(f"no free port in {start}..{start + attempts - 1}")
