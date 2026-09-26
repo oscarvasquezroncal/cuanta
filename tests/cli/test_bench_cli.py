@@ -60,6 +60,7 @@ def test_bench_without_yes_only_shows_the_ceiling(tmp_path: Path, env: dict[str,
     assert not (tmp_path / ".cuanta" / "bench").exists()
 
 
+@pytest.mark.timeout(300)
 def test_mini_bench_completes_with_the_fake_engine(tmp_path: Path, env: dict[str, str]) -> None:
     result = invoke(
         _args(tmp_path, "--suite", "mini", "--reps", "1", "--seed", "7", "--yes"), env=env

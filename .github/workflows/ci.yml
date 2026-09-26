@@ -12,6 +12,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.12", "3.13"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     env:
       CUANTA_HELP_BUDGET_S: "0.6"
       CUANTA_PAINT_BUDGET_S: "1.5"
@@ -34,6 +35,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

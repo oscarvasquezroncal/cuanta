@@ -128,6 +128,28 @@ def test_the_launcher_applies_the_session_profile_to_claude_only() -> None:
     assert codex.mcp_config == ""
 
 
+def test_the_launcher_carries_tools_and_max_turns() -> None:
+    files = ("/p/mcp.json", "/p/settings.json")
+    spec = LaunchSpec(
+        kind="mandate",
+        prompt="p",
+        cwd=".",
+        allowed_tools=(),
+        tools=("Read",),
+        max_turns=40,
+    )
+    request = launcher("claude", lambda: files, "lean").request(spec, "RUN", "00-x", None)
+    assert request.tools == ("Read",)
+    assert request.max_turns == 40
+    assert build_command(("claude",), request)[-5:] == [
+        "--strict-mcp-config",
+        "--mcp-config",
+        files[0],
+        "--settings",
+        files[1],
+    ]
+
+
 def test_an_older_user_forge_is_detected() -> None:
     plugins = parse_installed(json.dumps(INSTALLED))
     stale = older_forge(plugins, "0.4.0")

@@ -8,9 +8,11 @@ HELP = """Usage: claude [options]
   -p, --print  --output-format <format> (choices: "text", "json", "stream-json")
   --verbose  --permission-mode <mode> (choices: "acceptEdits", "dontAsk", "plan")
   --allowedTools, --allowed-tools <tools...>  --disallowedTools, --disallowed-tools <tools...>
+  --tools <tools...>
   --model <model>  --max-budget-usd <amount>  --agents <json-or-file>
   --strict-mcp-config  --mcp-config <configs...>  --settings <file-or-json>
   --effort <level>  --append-system-prompt <prompt>
+  --exclude-dynamic-system-prompt-sections  --no-session-persistence
 """
 
 AGENT = """---
@@ -189,7 +191,8 @@ def main(argv):
         pathlib.Path(captured).write_text(prompt, encoding="utf-8")
     model = argv[argv.index("--model") + 1] if "--model" in argv else "claude-sonnet-5"
     root = pathlib.Path.cwd()
-    emit({"type": "system", "subtype": "init", "session_id": "fake-session", "model": model})
+    emit({"type": "system", "subtype": "init", "session_id": "fake-session", "model": model,
+          "apiKeySource": "none", "claude_code_version": "9.9.9"})
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "Phase 1 — AUDIT or SEED done. Phase 2A next."}]}, "parent_tool_use_id": None})
     emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Agent", "input": {"subagent_type": "architecture-analyst", "prompt": "plan"}}]}, "parent_tool_use_id": None})
     emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": "CLAUDE.md"}}]}, "parent_tool_use_id": "t1"})

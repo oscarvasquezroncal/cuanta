@@ -11,8 +11,9 @@ from tests.fakes import FakeRunner
 
 CLAUDE_HELP = (
     "-p, --print --output-format stream-json --verbose --permission-mode dontAsk "
-    "--allowedTools --disallowedTools --model --max-budget-usd --agents"
+    "--allowedTools --disallowedTools --tools --model --max-budget-usd --agents"
     " --strict-mcp-config --mcp-config --settings --effort --append-system-prompt"
+    " --exclude-dynamic-system-prompt-sections --no-session-persistence"
 )
 
 

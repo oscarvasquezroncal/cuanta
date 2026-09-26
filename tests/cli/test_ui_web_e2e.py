@@ -62,6 +62,7 @@ async def bounded(base: str) -> tuple[bytes, bytes, str]:
     return await asyncio.wait_for(first_frame(base), TOTAL_TIMEOUT_S)
 
 
+@pytest.mark.timeout(300)
 def test_ui_web_serves_the_first_frame(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "shop"\n', encoding="utf-8")
     port = free_port()

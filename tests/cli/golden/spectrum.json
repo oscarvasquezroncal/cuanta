@@ -45,6 +45,13 @@
     }
   ],
   "overhead": {
+    "first_request_cache": {
+      "cache_read_tokens": 20000,
+      "cache_write_tokens": 3000,
+      "context_tokens": 27000,
+      "share": 0.7407,
+      "state": "warm"
+    },
     "first_request_tokens": 27000,
     "fixed_context_tokens": 27000,
     "hooks": [],

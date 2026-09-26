@@ -12,6 +12,8 @@ Offline, $0 proof of behavior: unit, contract, architecture, adapter, CLI and TU
   not linted, not typechecked).
 - Perf assertions use the `perf` marker and read their budgets from env
   (`CUANTA_HELP_BUDGET_S`, `CUANTA_PAINT_BUDGET_S`).
+- Tests needing more than 120 seconds declare `@pytest.mark.timeout(300)`; live tests are
+  unbounded by `conftest.py`, and `faulthandler_timeout` must stay unset.
 
 ## Local commands
 - One suite: `uv run pytest tests/<suite> -q 2>&1 | tail -n 40`

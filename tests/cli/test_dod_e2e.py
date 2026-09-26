@@ -385,47 +385,55 @@ def test_depth_caps_the_spend_and_states_a_read_budget(
 ) -> None:
     root = copy_repo("bugfix", tmp_path)
     _init(root, env)
-    dry = invoke(
-        [
-            "pounce",
-            "--type",
-            "investigation",
-            "--what",
-            "how does add work",
-            "--why",
-            "curious",
-            "--out-of-scope",
-            "everything",
-            "--depth",
-            "quick",
-            "--dry-run",
-            "--json",
-            "--project",
-            str(root),
-        ],
-        env=env,
-    )
+    args = [
+        "pounce",
+        "--type",
+        "investigation",
+        "--what",
+        "how does add work",
+        "--why",
+        "curious",
+        "--out-of-scope",
+        "everything",
+        "--depth",
+        "quick",
+        "--dry-run",
+        "--json",
+        "--project",
+        str(root),
+    ]
+    dry = invoke(args, env=env)
     document = json.loads(dry.stdout)
     command = " ".join(document["command"])
     prompt = document["prompt"]
     assert "--max-budget-usd" in command
+    assert "--max-turns 20" in command
     assert "0.25" in command
     assert "--append-system-prompt" in command
     assert "READ BUDGET (quick)" in command
     assert "READ BUDGET" not in prompt
+    assert "same language as the request" in prompt
     assert "--effort low" in command
     assert "Agent,Task" in command
     assert "--agents" not in command
     assert "ONCE" not in prompt
     if graph_available:
+        assert "--tools Read,Grep,Glob,Bash" in command
         assert "You are architecture-analyst." in command
         assert "You are the codebase analyst for this repository" not in command
     else:
+        assert "--tools Read,Grep,Glob" in command
         assert "You are the codebase analyst for this repository" in command
         assert "You are architecture-analyst." not in command
         assert "graphify" not in command.lower()
     assert "Deliverable: a written report" in prompt
     assert "regression fixture" not in prompt
+    configured = invoke(args, env={**env, "CUANTA_MAX_TURNS": "30"})
+    assert configured.exit_code == 0, configured.stdout + configured.stderr
+    assert "--max-turns 30" in " ".join(json.loads(configured.stdout)["command"])
+    overridden = invoke([*args, "--max-turns", "7"], env={**env, "CUANTA_MAX_TURNS": "30"})
+    assert overridden.exit_code == 0, overridden.stdout + overridden.stderr
+    assert "--max-turns 7" in " ".join(json.loads(overridden.stdout)["command"])
     bad = invoke(["pounce", "--depth", "huge", "--dry-run", "--project", str(root)], env=env)
     assert bad.exit_code != 0
     shaped = invoke(["pounce", "--shape", "twisted", "--dry-run", "--project", str(root)], env=env)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 from textual.pilot import Pilot
@@ -9,7 +10,9 @@ from textual.widgets import Button, Checkbox, Input, Select, Static, TextArea
 
 from cuanta.application.assistant import sent_payload
 from cuanta.application.intake import Understanding
+from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixState, PrefixWindow
 from cuanta.tui.app import CuantaApp
+from cuanta.tui.cache_text import clock_time
 from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.screens.pipeline import PipelineScreen
 from cuanta.tui.views.mandate import MandateView
@@ -45,6 +48,27 @@ async def tell(wizard: MandateWizard, pilot: Pilot[None], story: str) -> None:
     wizard.query_one("#wiz-story", TextArea).text = story
     wizard.query_one("#wiz-next", Button).press()
     await wait_for(pilot, lambda: wizard.understanding is not None and current(wizard) == "confirm")
+
+
+def test_team_shows_the_measured_prefix_window() -> None:
+    until = datetime(2026, 1, 5, 10, 10, tzinfo=UTC)
+    services = FakeServices(prefix=PrefixWindow(PrefixState.WARM, until))
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        prefix = wizard.query_one("#wiz-prefix", Static)
+        await wait_for(pilot, lambda: "last observed Claude prefix warm until" in render(prefix))
+        assert clock_time(until) in render(prefix)
+        assert "claude" in services.prefix_engines
+        services.prefix = UNKNOWN_PREFIX
+        wizard.query_one("#wiz-engine", Select).value = "opencode"
+        await wait_for(pilot, lambda: "opencode" in services.prefix_engines)
+        assert "last observed prefix: unknown" in render(prefix)
+
+    drive(make_app(services), scenario, size=(120, 50))
 
 
 def test_the_wizard_walks_three_steps_and_launches() -> None:
@@ -195,6 +219,29 @@ def test_depth_sets_the_cap_and_no_cap_needs_confirmation() -> None:
         assert screen is not None
         assert screen.options.no_cap
         assert screen.options.depth == "deep"
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_team_step_shows_the_turn_limit_and_repaints_on_engine_change() -> None:
+    services = FakeServices()
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        cap = wizard.query_one("#wiz-cap-note", Static)
+        assert "$0.60" in render(cap)
+        assert "Turn limit: 40" in render(cap)
+        wizard.query_one("#depth-deep", Button).press()
+        await wait_for(pilot, lambda: "Turn limit: 80" in render(cap))
+        wizard.query_one("#wiz-engine", Select).value = "opencode"
+        await wait_for(pilot, lambda: wizard.engine == "opencode")
+        assert "Turn limit" not in render(cap)
+        wizard.query_one("#wiz-engine", Select).value = "claude"
+        await wait_for(pilot, lambda: "Turn limit: 80" in render(cap))
+        assert wizard.options().max_turns == 0
 
     drive(make_app(services), scenario, size=(120, 50))
 

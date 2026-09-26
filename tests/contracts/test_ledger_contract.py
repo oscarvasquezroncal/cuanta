@@ -54,6 +54,12 @@ def test_runs_roundtrip_and_order(ledger: Ledger) -> None:
     assert ledger.get_run("zzz") is None
 
 
+def test_run_turns_round_trip(ledger: Ledger) -> None:
+    run = Run(id="T", kind="mandate", max_turns=40, turns=42, end_reason="error_max_turns")
+    ledger.add_run(run)
+    assert ledger.get_run("T") == run
+
+
 def test_events_filtering(ledger: Ledger) -> None:
     events = [
         LedgerEvent(
@@ -134,6 +140,29 @@ def test_sqlite_uses_wal_and_migrates_idempotently(tmp_path: Path) -> None:
     assert second.schema_version() == LATEST_VERSION
     second.close()
     assert (tmp_path / "l.db-wal").exists() or path.exists()
+
+
+def test_migration_adds_turn_columns_with_zero_defaults(tmp_path: Path) -> None:
+    import sqlite3
+
+    from cuanta.adapters.storage.migrations import MIGRATIONS
+
+    path = tmp_path / "v8.db"
+    connection = sqlite3.connect(path)
+    for version, statements in enumerate(MIGRATIONS[:8], start=1):
+        connection.executescript(statements)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
+    connection.execute("INSERT INTO runs(id, kind) VALUES ('R', 'mandate')")
+    connection.commit()
+    connection.close()
+    upgraded = SqliteLedger(path)
+    try:
+        assert upgraded.schema_version() == LATEST_VERSION == 9
+        run = upgraded.get_run("R")
+        assert run is not None
+        assert (run.max_turns, run.turns, run.end_reason) == (0, 0, "")
+    finally:
+        upgraded.close()
 
 
 def test_unknown_run_cost_round_trips_as_none(ledger: Ledger) -> None:

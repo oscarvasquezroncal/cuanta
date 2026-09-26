@@ -3,15 +3,22 @@ from __future__ import annotations
 import json
 
 from cuanta.domain.ledger import LedgerEvent
+from cuanta.domain.messages import english
 from cuanta.domain.overhead import (
+    agents_md_message,
+    agents_md_share,
+    agents_md_tokens,
     attributes,
+    first_request_split,
     iso_ms,
     overhead_messages,
+    overhead_payload,
     session_overhead,
     spawn_event,
     startup_of,
     startup_payload,
 )
+from cuanta.domain.report import ContextSplit
 
 PLUGINS = (
     ("claude-mem", "12.1.0"),
@@ -84,6 +91,36 @@ def user_run() -> list[LedgerEvent]:
     return events
 
 
+def test_agents_md_share_estimates_bytes_over_fixed_context() -> None:
+    split = ContextSplit(53_111, 0)
+    assert agents_md_tokens(230) == 57
+    assert round(agents_md_share(230, split) or 0, 5) == 0.00107
+    message = agents_md_message(230, split)
+    assert message.key == "doctor.agents_md.share"
+    assert dict(message.params) == {
+        "path": "~/AGENTS.md",
+        "bytes": "230",
+        "tokens": "57",
+        "share": "0.1%",
+        "fixed": "53,111",
+        "per_token": "4",
+    }
+    assert "estimate" in english(message)
+
+
+def test_agents_md_share_is_unavailable_without_first_request_data() -> None:
+    assert agents_md_share(230, None) is None
+    assert agents_md_share(230, ContextSplit(10, 10)) is None
+    assert "unavailable" in english(agents_md_message(230, None))
+    assert agents_md_message(None, ContextSplit(10, 0)).key == "doctor.absent"
+
+
+def test_first_request_split_matches_session_overhead() -> None:
+    events = user_run()
+    assert first_request_split(events) == session_overhead(events, 0).split
+    assert first_request_split([]) is None
+
+
 def test_the_users_run_breaks_down_into_plugins_servers_and_hooks() -> None:
     overhead = session_overhead(user_run(), 5_641)
     assert len(overhead.plugins) == 5
@@ -101,6 +138,22 @@ def test_the_users_run_breaks_down_into_plugins_servers_and_hooks() -> None:
     assert overhead.split.fixed_share > 0.95
     assert overhead.startup_ms == 4_000
     assert not overhead.empty
+
+
+def test_the_first_request_cache_state_joins_the_overhead() -> None:
+    overhead = session_overhead(user_run(), 0)
+    assert overhead.cache is not None
+    assert overhead.cache.state.value == "warm"
+    lines = overhead_messages(overhead)
+    assert any(line.key == "overhead.cache_warm" for line in lines)
+    assert lines[-1].key == "overhead.startup"
+    assert overhead_payload(overhead)["first_request_cache"] == {
+        "state": "warm",
+        "cache_read_tokens": 20_482,
+        "cache_write_tokens": 32_625,
+        "context_tokens": 53_111,
+        "share": 0.3856,
+    }
 
 
 def test_a_lean_run_has_no_overhead_items() -> None:

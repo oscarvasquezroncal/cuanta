@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from cuanta.adapters.engines.claude_code import ClaudeCodeEngine, build_command
+from cuanta.adapters.engines.claude_code import REQUIRED_FLAGS, ClaudeCodeEngine, build_command
 from cuanta.adapters.engines.claude_stream import parse_line
 from cuanta.adapters.forge.assets import (
     COMMANDS,
@@ -110,6 +110,16 @@ def test_claude_stream_fixture_parses() -> None:
     failed = parse_line('{"type": "result", "subtype": "error_max_turns", "is_error": true}')[0]
     assert isinstance(failed, RunResult)
     assert failed.ok is False
+
+
+def test_turn_limit_result_is_parsed() -> None:
+    line = (ENGINES / "claude_max_turns.jsonl").read_text(encoding="utf-8").strip()
+    result = parse_line(line)[0]
+    assert isinstance(result, RunResult)
+    assert result.ok is False
+    assert result.subtype == "error_max_turns"
+    assert result.terminal_reason == "max_turns"
+    assert result.num_turns == 2
 
 
 def test_prompts_ask_for_staging_outside_protected_claude_dir() -> None:
@@ -226,6 +236,36 @@ def test_build_command_matches_verified_flags() -> None:
     ]
 
 
+def test_build_command_limits_builtin_tools_and_turns() -> None:
+    request = EngineRequest(
+        prompt="go",
+        cwd=".",
+        env={},
+        disallowed_tools=("Agent",),
+        tools=("Read", "Grep", "Glob", "Bash"),
+        max_budget_usd=0.25,
+        max_turns=20,
+    )
+    command = build_command(("claude",), request)
+    denied = command.index("--disallowedTools")
+    assert command[denied : denied + 4] == [
+        "--disallowedTools",
+        "Agent",
+        "--tools",
+        "Read,Grep,Glob,Bash",
+    ]
+    budget = command.index("--max-budget-usd")
+    assert command[budget : budget + 4] == ["--max-budget-usd", "0.25", "--max-turns", "20"]
+    none = build_command(("claude",), EngineRequest(prompt="go", cwd=".", env={}))
+    assert "--tools" not in none and "--max-turns" not in none
+    empty = build_command(("claude",), EngineRequest(prompt="go", cwd=".", env={}, tools=()))
+    assert empty[-2:] == ["--tools", ""]
+
+
+def test_max_turns_is_not_a_required_flag() -> None:
+    assert "--max-turns" not in REQUIRED_FLAGS
+
+
 def test_missing_flags_capability_check() -> None:
     runner = FakeRunner(
         binaries={"claude": "/bin/claude"},
@@ -233,6 +273,7 @@ def test_missing_flags_capability_check() -> None:
     )
     missing = ClaudeCodeEngine(runner).missing_flags()
     assert "--permission-mode" in missing
+    assert "--tools" in missing
     assert "dontAsk" in missing
     assert "--print" not in missing
 

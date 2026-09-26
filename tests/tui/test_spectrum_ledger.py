@@ -59,6 +59,11 @@ def test_spectrum_shows_metrics_bars_tree_and_leaks() -> None:
         cost = view.query_one("#metric-cost")
         assert render(cost.query_one(".metric-value", Static)) == "$0.90"
         assert "reported by the engine" in render(cost.query_one(".metric-note", Static))
+        cache = view.query_one("#metric-cache")
+        assert "warm cache · 20,000 tokens read (74%)" in render(
+            cache.query_one(".metric-note", Static)
+        )
+        assert "warm cache" in render(view.query_one("#spectrum-overhead", Static))
         assert "main" in render(view.query_one("#bars-agent", Static))
         assert "src/app.py" in render(view.query_one("#bars-file", Static))
         tree = view.query_one("#spectrum-tree", Tree)

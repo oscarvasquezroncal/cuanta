@@ -7,6 +7,8 @@ import pytest
 
 from cuanta.bootstrap import Container
 from cuanta.domain.messages import ENGLISH, msg, placeholders
+from cuanta.domain.overhead import agents_md_message
+from cuanta.domain.report import ContextSplit
 from cuanta.tui import theme as themes
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.commands import CLI_EQUIVALENT, COMMANDS, ICONS, SECTIONS, action_name
@@ -32,6 +34,13 @@ def test_catalog_translates_messages_and_falls_back_to_english() -> None:
     assert Catalog("en").message(msg("stage.port", port=47300)) == "port 47300"
     assert Catalog("es").message(msg("unknown.key")) == "unknown.key"
     assert Catalog("es").message(None) == ""
+
+
+def test_agents_md_row_renders_in_spanish() -> None:
+    catalog = Catalog("es")
+    assert catalog.check_name("agents-md") == "AGENTS.md del usuario"
+    assert "estimación" in catalog.message(agents_md_message(230, ContextSplit(53_111, 0)))
+    assert "no disponible" in catalog.message(agents_md_message(230, None))
 
 
 def test_catalog_falls_back_and_formats() -> None:
