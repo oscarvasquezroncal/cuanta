@@ -172,3 +172,17 @@ def test_cache_ttl_requires_stable_prefix_flags_before_spending(
     assert output.exit_code != 0
     assert "--exclude-dynamic-system-prompt-sections" in output.stdout
     assert not any("-p" in call for call in fake_runner.calls)
+
+
+def test_a_probe_over_its_cap_reports_unknown_warmth_without_crashing(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    queue(fake_runner, stream(0, 8456, 0.01), stream(7116, 1338, 0.06))
+    output = invoke(["probe", "cache-ttl", "--yes", "--json", "--project", str(tmp_path)])
+    assert output.exit_code == 1, output.stdout
+    data = json.loads(output.stdout)
+    assert data["verdict"] == "inconclusive"
+    assert data["saved"] is False
+    assert data["spent_usd"] == pytest.approx(0.07)
+
+    assert [run["warmth"] for run in data["runs"]] == ["seed", "unknown"]

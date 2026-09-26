@@ -10,6 +10,7 @@ from cuanta.adapters.instinct.jev import JevInstinct
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.application.instinct import DecisionMaker
 from cuanta.application.intake import IntakeService, intake_asks
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.instinct import Choice
 from cuanta.domain.intake import (
     IntakeFacts,
@@ -245,7 +246,7 @@ def test_intake_questions_go_to_jev_in_one_batched_request(
     assert understood.cost_usd == pytest.approx(0.0012)
     logged = ledger.decisions()
     assert len(logged) == len(questions)
-    assert sum(item.cost_usd for item in logged) == pytest.approx(0.0012)
+    assert sum_costs(item.cost_usd for item in logged) == pytest.approx(0.0012)
 
 
 def test_a_failing_jev_falls_back_to_the_heuristic(monkeypatch: pytest.MonkeyPatch) -> None:

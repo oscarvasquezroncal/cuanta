@@ -748,7 +748,7 @@ class FakeServices:
         self, request: MandateRequest, options: MandateOptions
     ) -> tuple[RoutePlan, Estimate]:
         self.team_options.append(options)
-        policy = RoutingPolicy()
+        policy = RoutingPolicy(engines=(options.engine or "claude",))
         requests = default_requests(policy, roles_that_run(request.type, options.simple))
         routes = plan_route(policy, self.catalog, requests)
         plan = RoutePlan(policy, None, None, (), routes, "heuristic")

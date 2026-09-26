@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 import pytest
 from textual.pilot import Pilot
-from textual.widgets import Button, Checkbox, DataTable, TabbedContent, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Select, TabbedContent, TextArea
 
 from cuanta.application.mandate_flow import MandateOptions
 from cuanta.domain.mandate import MandateRequest
@@ -141,6 +141,24 @@ async def understood(pilot: Pilot[None], step: int = 1) -> MandateWizard:
 
 async def filled_form(pilot: Pilot[None]) -> None:
     await understood(pilot)
+
+
+@pytest.mark.parametrize("engine", ["codex", "opencode"])
+@pytest.mark.parametrize("size", SIZES, ids=lambda size: f"{size[0]}x{size[1]}")
+def test_team_engine_guarantees(
+    snap_compare: SnapCompare, engine: str, size: tuple[int, int]
+) -> None:
+    async def show_guarantees(pilot: Pilot[None]) -> None:
+        wizard = await understood(pilot, 2)
+        wizard.query_one("#wiz-engine", Select).value = engine
+        await loaded(pilot)
+        wizard.query_one("#wiz-guarantees").scroll_visible(animate=False, top=True)
+        await loaded(pilot)
+
+    services = FakeServices(engines=(("claude", True), ("codex", True), ("opencode", True)))
+    assert snap_compare(
+        app_for("calico-dark", services), terminal_size=size, run_before=show_guarantees
+    )
 
 
 @pytest.mark.parametrize("theme", THEMES)

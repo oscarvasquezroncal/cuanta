@@ -8,7 +8,8 @@ from cuanta.adapters.models.codex_catalog import CodexCatalog
 from cuanta.adapters.models.opencode_catalog import OpenCodeCatalog, parse_verbose
 from cuanta.adapters.models.tiers import claude_facts, load_tier_table
 from cuanta.adapters.system.prices import load_prices
-from cuanta.domain.models import Access, Availability, Tier
+from cuanta.domain.models import Access, Availability, Tier, entry_to_json, probe_cost
+from cuanta.domain.pricing import Price, dollars
 from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner
 
@@ -21,7 +22,12 @@ CODEX_MODELS = {
             "visibility": "list",
             "supported_reasoning_levels": [{"effort": "low"}, {"effort": "max"}],
         },
+        {"slug": "gpt-6-sol", "display_name": "GPT-6-Sol", "visibility": "list"},
+        {"slug": "gpt-6-luna", "display_name": "GPT-6-Luna", "visibility": "list"},
         {"slug": "gpt-5.6-sol", "display_name": "GPT-5.6-Sol", "visibility": "list"},
+        {"slug": "gpt-5.6-terra", "display_name": "GPT-5.6-Terra", "visibility": "list"},
+        {"slug": "gpt-5.6-luna", "display_name": "GPT-5.6-Luna", "visibility": "list"},
+        {"slug": "gpt-5.5", "display_name": "GPT-5.5", "visibility": "list"},
         {"slug": "codex-auto-review", "display_name": "Codex Auto Review", "visibility": "hide"},
     ]
 }
@@ -81,14 +87,67 @@ def test_codex_catalog_reads_the_listing_and_the_config(tmp_path: Path) -> None:
     )
     catalog = CodexCatalog(runner, tmp_path, {"OPENAI_API_KEY": "set"}, load_prices())
     entries = {entry.id: entry for entry in catalog.list()}
-    assert set(entries) == {"gpt-6-astra", "gpt-5.6-sol", "gpt-9-private"}
+    assert set(entries) == {
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-9-private",
+    }
     assert entries["gpt-6-astra"].efforts == ("low", "max")
     assert entries["gpt-6-astra"].context == 272000
     assert entries["gpt-5.6-sol"].default
     assert entries["gpt-5.6-sol"].availability is Availability.CONFIGURED
     assert entries["gpt-9-private"].availability is Availability.CONFIGURED
     assert entries["gpt-9-private"].input_price is None
+    assert entries["gpt-9-private"].output_price is None
+    assert dollars(probe_cost(entries["gpt-9-private"], 1_000, 1_000)) == "cost n/a"
     assert entries["gpt-6-astra"].access is Access.API
+
+
+def test_codex_catalog_routes_models_with_verified_price_rows(tmp_path: Path) -> None:
+    expected = {
+        "gpt-6-astra": Price(input=10.0, output=50.0, cache_write=12.5, cache_read=1.0),
+        "gpt-6-sol": Price(input=2.0, output=10.0, cache_write=2.5, cache_read=0.2),
+        "gpt-6-luna": Price(input=0.1, output=0.5, cache_write=0.125, cache_read=0.01),
+        "gpt-5.6-sol": Price(input=4.0, output=20.0, cache_write=5.0, cache_read=0.4),
+        "gpt-5.6-terra": Price(input=2.0, output=12.0, cache_write=2.5, cache_read=0.2),
+        "gpt-5.6-luna": Price(input=0.2, output=1.2, cache_write=0.25, cache_read=0.02),
+        "gpt-5.5": Price(input=5.0, output=30.0, cache_write=None, cache_read=0.5),
+    }
+    runner = FakeRunner(
+        binaries={"codex": "/bin/codex"},
+        responses={"codex debug models": Completed(0, json.dumps(CODEX_MODELS), "")},
+    )
+    prices = load_prices()
+    entries = CodexCatalog(runner, tmp_path, {}, prices).list()
+    assert {entry.id for entry in entries} == set(expected)
+    for entry in entries:
+        price = expected[entry.id]
+        assert prices.lookup(entry.resolved) == price
+        assert (entry.input_price, entry.output_price) == (price.input, price.output)
+        assert probe_cost(entry, 1_000_000, 1_000_000) == price.input + price.output
+
+
+def test_codex_catalog_keeps_unknown_listed_model_unpriced(tmp_path: Path) -> None:
+    runner = FakeRunner(
+        binaries={"codex": "/bin/codex"},
+        responses={
+            "codex debug models": Completed(
+                0, json.dumps({"models": [{"slug": "gpt-6-sol-private"}]}), ""
+            )
+        },
+    )
+    prices = load_prices()
+    (entry,) = CodexCatalog(runner, tmp_path, {}, prices).list()
+    assert prices.lookup(entry.resolved) is None
+    assert entry.input_price is None and entry.output_price is None
+    assert dollars(probe_cost(entry, 1_000_000, 1_000_000)) == "cost n/a"
+    assert entry_to_json(entry)["input_price"] is None
+    assert entry_to_json(entry)["output_price"] is None
 
 
 def test_opencode_catalog_parses_verbose_blocks(tmp_path: Path) -> None:

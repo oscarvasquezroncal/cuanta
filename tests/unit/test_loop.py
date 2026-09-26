@@ -95,3 +95,18 @@ def test_tier_transition() -> None:
     )
     assert tier_transition("strong", "strong", "x") == ("verify: strong (unchanged)", False)
     assert tier_transition("", "weak", "nothing")[1] is True
+
+
+def test_unknown_fix_cost_stops_before_another_paid_fix() -> None:
+    report = _loop(["red", "red"], [FixStep("M1", True, None)]).run("L", 3, 1.0)
+    assert report.stop is StopReason.COST_UNKNOWN
+    assert report.spent_usd is None
+    assert len(report.iterations) == 1
+
+
+def test_unknown_fix_cost_keeps_uncapped_total_unknown() -> None:
+    report = _loop(
+        ["red", "red", "green"], [FixStep("M1", True, None), FixStep("M2", True, 0.2)]
+    ).run("L", 3, 0)
+    assert report.ok and report.spent_usd is None
+    assert len(report.iterations) == 2

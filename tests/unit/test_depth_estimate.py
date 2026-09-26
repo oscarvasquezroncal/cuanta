@@ -7,6 +7,7 @@ from cuanta.application.mandate_flow import MandateOptions, resolve_budget, reso
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.depth import (
     Depth,
+    context_cost,
     estimate_message,
     over_cap,
     parse_depth,
@@ -103,6 +104,13 @@ def test_plan_cost_grows_with_depth() -> None:
     assert quick is not None and deep is not None
     assert 0 < quick < deep
     assert plan_cost([], profile(Depth.NORMAL, "bug")) is None
+
+
+@pytest.mark.parametrize("price", [Price(1.0, 2.0, None, 0.1), Price(1.0, 2.0, 1.25, None)])
+def test_plan_estimate_cannot_assume_an_unknown_cache_rate_is_free(price: Price) -> None:
+    chosen = profile(Depth.NORMAL, "investigation")
+    assert context_cost(price, chosen) is None
+    assert plan_cost([SONNET, price], chosen) is None
 
 
 def test_resolve_budget_prefers_no_cap_then_custom_then_depth() -> None:

@@ -157,7 +157,7 @@ def test_migration_adds_turn_columns_with_zero_defaults(tmp_path: Path) -> None:
     connection.close()
     upgraded = SqliteLedger(path)
     try:
-        assert upgraded.schema_version() == LATEST_VERSION == 9
+        assert upgraded.schema_version() == LATEST_VERSION
         run = upgraded.get_run("R")
         assert run is not None
         assert (run.max_turns, run.turns, run.end_reason) == (0, 0, "")
@@ -220,3 +220,87 @@ def test_routing_decisions_round_trip_and_close(ledger: Ledger) -> None:
     assert stored[0].confidence == 0.8
     assert ledger.routing_decisions(run_id="R2")[0].outcome == ""
     assert len(ledger.routing_decisions(limit=1)) == 1
+
+
+def test_cost_provenance_and_unknown_event_and_decision_round_trip(ledger: Ledger) -> None:
+    ledger.add_run(Run("E", "mandate", cost_usd=0.25, cost_source="estimated"))
+    stored = ledger.get_run("E")
+    assert stored is not None and stored.cost_source == "estimated"
+    ledger.add_events(
+        [
+            LedgerEvent(run_id="E", kind="result_usage", cost_usd=None),
+            LedgerEvent(run_id="E", kind="result_usage", cost_usd=0.0),
+        ]
+    )
+    assert [event.cost_usd for event in ledger.events(EventQuery(run_id="E"))] == [None, 0.0]
+    for cost in (None, 0.0):
+        ledger.add_decision(Decision("E", "llm", "noul", "q", "", "yes", 1.0, 1, cost_usd=cost))
+    assert {decision.cost_usd for decision in ledger.decisions(run_id="E")} == {None, 0.0}
+
+
+def test_cost_migration_preserves_legacy_values_fields_and_indexes(tmp_path: Path) -> None:
+    import sqlite3
+
+    from cuanta.adapters.storage.migrations import MIGRATIONS
+
+    path = tmp_path / "legacy-cost.db"
+    with sqlite3.connect(path) as connection:
+        for version, statements in enumerate(MIGRATIONS[:-1], start=1):
+            connection.executescript(statements)
+            connection.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
+        connection.execute("INSERT INTO runs(id, kind, cost_usd) VALUES ('R', 'mandate', 0)")
+        connection.execute(
+            "INSERT INTO events(id, run_id, cost_usd, effort, ttft_ms, raw) VALUES (?, ?, ?, ?, ?, ?)",
+            (42, "R", 0.0, "low", 17, "preserved"),
+        )
+        connection.execute("INSERT INTO events(id, run_id) VALUES (100, 'deleted')")
+        connection.execute("DELETE FROM events WHERE id = 100")
+        connection.execute(
+            "INSERT INTO decisions(id,run_id,backend,primitive,question,options,answer,confidence,"
+            "latency_ms,cost_usd,preview,request_hash,fallback_error,fallback_from) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (12, "R", "llm", "noul", "q", "", "yes", 0.7, 5, 0.0, 1, "hash", "error", "jev"),
+        )
+    upgraded = SqliteLedger(path)
+    try:
+        run = upgraded.get_run("R")
+        assert run is not None and run.cost_usd == 0.0 and run.cost_source == "unknown"
+        event = upgraded.events(EventQuery(run_id="R"))[0]
+        assert (event.id, event.cost_usd, event.effort, event.ttft_ms, event.raw) == (
+            42,
+            0.0,
+            "low",
+            17,
+            "preserved",
+        )
+        decision = upgraded.decisions(run_id="R")[0]
+        assert (decision.id, decision.cost_usd, decision.preview, decision.request_hash) == (
+            12,
+            0.0,
+            True,
+            "hash",
+        )
+        assert (decision.fallback_error, decision.fallback_from) == ("error", "jev")
+        upgraded.add_events([LedgerEvent(run_id="new", cost_usd=None)])
+        assert upgraded.events(EventQuery(run_id="new"))[0].id > 100
+    finally:
+        upgraded.close()
+    reopened = SqliteLedger(path)
+    try:
+        assert reopened.schema_version() == LATEST_VERSION
+        assert reopened.events(EventQuery(run_id="new"))[0].cost_usd is None
+    finally:
+        reopened.close()
+    with sqlite3.connect(path) as connection:
+        indexes = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        }
+    assert {
+        "idx_events_run",
+        "idx_events_trace",
+        "idx_events_session",
+        "idx_events_ts",
+        "idx_decisions_run",
+        "idx_decisions_hash",
+    } <= indexes

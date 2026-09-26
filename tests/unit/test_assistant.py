@@ -104,7 +104,7 @@ def test_the_preview_is_exactly_what_a_remote_backend_receives() -> None:
     sent = remote.contexts[0]
     assert {key: sent[key] for key in preview} == preview
     assert "sk-abcdef1234567890" not in json.dumps(remote.contexts)
-    assert clarity.cost_usd > 0
+    assert clarity.cost_usd is not None and clarity.cost_usd > 0
     assert len(remote.contexts) == 5
 
 
