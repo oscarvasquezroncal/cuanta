@@ -81,7 +81,7 @@ class HomeView(VerticalScroll):
     def on_mount(self) -> None:
         table = self.query_one("#runs", DataTable)
         for key in RUN_COLUMNS:
-            table.add_column(self._t(f"home.{key}"), key=key)
+            table.add_column(Text(self._t(f"home.{key}")), key=key)
         self.query_one("#next-run", Button).display = False
 
     def show(self, snapshot: HomeSnapshot) -> None:
