@@ -45,24 +45,26 @@ def score_levels(low: float, high: float) -> tuple[float, ...]:
     return tuple(low + index * step for index in range(count))
 
 
-def spend(data: Mapping[str, Any], direct: bool) -> float:
+def spend(data: Mapping[str, Any], direct: bool) -> float | None:
     usage = data.get("usage")
     if not isinstance(usage, dict):
-        return 0.0
+        return None
     reported = usage.get("cost")
     if isinstance(reported, int | float) and not isinstance(reported, bool):
         return float(reported)
     if not direct:
-        return 0.0
+        return None
     model = str(data.get("model") or MODEL)
     prices = load_prices()
-    price = prices.lookup(model) or prices.lookup(MODEL)
+    price = prices.lookup(model)
     if price is None:
-        return 0.0
+        return None
     tokens_in = usage.get("input_tokens")
     tokens_out = usage.get("output_tokens")
-    total = (tokens_in if isinstance(tokens_in, int) else 0) * price.input
-    total += (tokens_out if isinstance(tokens_out, int) else 0) * price.output
+    if not isinstance(tokens_in, int) or not isinstance(tokens_out, int):
+        return None
+    total = tokens_in * price.input
+    total += tokens_out * price.output
     return total / PER_MILLION
 
 

@@ -92,7 +92,7 @@ def _list(session: Session, limit: int) -> "Document":
                 run.kind,
                 run.engine or "-",
                 run.status,
-                usd(run.cost_usd),
+                usd(run.cost_usd, run.cost_source),
                 run.started_at[:16].replace("T", " ") or "-",
                 "yes" if run.id in stored else "-",
             )
@@ -112,6 +112,7 @@ def _list(session: Session, limit: int) -> "Document":
                 "engine": run.engine,
                 "status": run.status,
                 "cost_usd": run.cost_usd,
+                "cost_source": run.cost_source,
                 "started_at": run.started_at,
                 "report": run.id in stored,
             }
@@ -159,6 +160,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "engine": run.engine,
         "model": run.model,
         "cost_usd": run.cost_usd,
+        "cost_source": run.cost_source,
         "duration_s": view.duration_s,
         "changed_files": list(view.changed_files),
         "report": view.text,
@@ -193,7 +195,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         ("status", run.status),
         ("engine", f"{run.engine} · {run.model or 'default model'}"),
         ("duration", duration),
-        ("cost", usd(run.cost_usd)),
+        ("cost", usd(run.cost_usd, run.cost_source)),
         *turn_rows,
         ("files changed", str(len(view.changed_files))),
     )

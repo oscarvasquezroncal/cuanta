@@ -44,7 +44,7 @@ def similar_costs(runs: Sequence[Run], task_type: str, depth: str) -> list[float
         run.cost_usd
         for run in runs
         if run.kind == "mandate"
-        and run.cost_usd
+        and run.cost_usd is not None
         and run.task_type == task_type
         and (run.depth or DEFAULT_DEPTH.value) == wanted
     ]

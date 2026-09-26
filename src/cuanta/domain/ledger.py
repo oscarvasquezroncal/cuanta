@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cuanta.domain.costs import CostSource
+
 
 @dataclass(frozen=True, slots=True)
 class Run:
@@ -16,13 +18,14 @@ class Run:
     hu_ref: str = ""
     scope: str = ""
     prompt_hash: str = ""
-    cost_usd: float | None = 0.0
+    cost_usd: float | None = None
     parent_id: str = ""
     task_type: str = ""
     depth: str = ""
     max_turns: int = 0
     turns: int = 0
     end_reason: str = ""
+    cost_source: CostSource = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +43,7 @@ class LedgerEvent:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     reasoning_tokens: int = 0
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     tool_name: str = ""
     tool_use_id: str = ""
     tool_result_bytes: int = 0
@@ -118,7 +121,7 @@ class Decision:
     answer: str
     confidence: float
     latency_ms: int
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     outcome: str = ""
     created_at: str = ""
     preview: bool = False

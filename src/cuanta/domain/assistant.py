@@ -81,7 +81,7 @@ class Clarity:
     score: float
     chips: tuple[Chip, ...]
     backend: str
-    cost_usd: float = 0.0
+    cost_usd: float | None = 0.0
 
     @property
     def level(self) -> str:

@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from cuanta.adapters.engines.base import LineParser, StreamingEngine
 from cuanta.adapters.engines.claude_stream import parse_line
 from cuanta.domain.engine import EngineEvent, EngineRequest
+from cuanta.domain.mandate import (
+    READ_ONLY_DENIED,
+    Shape,
+    investigation_builtin_tools,
+    investigation_denied,
+    investigation_tools,
+)
 
 REQUIRED_FLAGS = (
     "--print",
@@ -25,7 +34,29 @@ REQUIRED_CHOICES = ("stream-json", "dontAsk")
 PROBE_FLAGS = ("--exclude-dynamic-system-prompt-sections", "--no-session-persistence")
 
 
+def readonly_request(request: EngineRequest) -> EngineRequest:
+    if not request.read_only:
+        return request
+    graph = "Bash(graphify *)" in request.allowed_tools
+    pipeline = set(investigation_tools(False, Shape.PIPELINE, graph))
+    if (
+        set(READ_ONLY_DENIED) <= set(request.disallowed_tools)
+        and set(request.allowed_tools) == pipeline
+        and request.tools is None
+    ):
+        return request
+    allowed = investigation_tools(False, Shape.SINGLE, graph)
+    denied = (*request.disallowed_tools, *investigation_denied(False, Shape.SINGLE))
+    return replace(
+        request,
+        allowed_tools=allowed,
+        disallowed_tools=tuple(dict.fromkeys(denied)),
+        tools=investigation_builtin_tools(False, Shape.SINGLE, graph),
+    )
+
+
 def build_command(binary: tuple[str, ...], request: EngineRequest) -> list[str]:
+    request = readonly_request(request)
     command = [
         *binary,
         "-p",
@@ -78,5 +109,5 @@ class ClaudeCodeEngine(StreamingEngine):
     def command(self, request: EngineRequest) -> list[str]:
         return build_command(self.binary(), request)
 
-    def parser(self) -> ClaudeStreamParser:
+    def parser(self, request: EngineRequest) -> ClaudeStreamParser:
         return ClaudeStreamParser()

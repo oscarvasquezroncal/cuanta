@@ -14,6 +14,14 @@ from cuanta.domain.engine import (
     ToolCall,
 )
 
+SANDBOX_CONFIG = (
+    'approval_policy="never"',
+    "sandbox_workspace_write.writable_roots=[]",
+    "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+    "sandbox_workspace_write.exclude_slash_tmp=true",
+    "sandbox_workspace_write.network_access=false",
+)
+
 
 def _int(value: Any) -> int:
     return int(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0
@@ -46,14 +54,15 @@ class CodexParser(LineParser):
             self._turns += 1
             usage = as_dict(data.get("usage"))
             cached = _int(usage.get("cached_input_tokens"))
+            written = _int(usage.get("cache_write_input_tokens"))
+            reasoning = _int(usage.get("reasoning_output_tokens"))
             self._usage = ModelUsage(
                 self._model,
-                input_tokens=self._usage.input_tokens
-                + max(_int(usage.get("input_tokens")) - cached, 0),
-                output_tokens=self._usage.output_tokens + _int(usage.get("output_tokens")),
-                cache_read_tokens=self._usage.cache_read_tokens + cached,
-                reasoning_tokens=self._usage.reasoning_tokens
-                + _int(usage.get("reasoning_output_tokens")),
+                input_tokens=max(_int(usage.get("input_tokens")) - cached - written, 0),
+                output_tokens=max(_int(usage.get("output_tokens")) - reasoning, 0),
+                cache_read_tokens=cached,
+                cache_write_tokens=written,
+                reasoning_tokens=reasoning,
             )
             return []
         if kind == "turn.failed":
@@ -92,14 +101,31 @@ class CodexEngine(StreamingEngine):
     default_binary = "codex"
     binary_env = "CUANTA_CODEX_BIN"
     help_args = ("exec", "--help")
-    required_tokens = ("--json",)
+    required_tokens = (
+        "--json",
+        "--sandbox",
+        "read-only",
+        "workspace-write",
+        "--skip-git-repo-check",
+        "--config",
+    )
 
     def command(self, request: EngineRequest) -> list[str]:
-        command = [*self.binary(), "exec", "--json"]
+        command = [
+            *self.binary(),
+            "exec",
+            "--json",
+            "--sandbox",
+            "read-only" if request.read_only else "workspace-write",
+        ]
+        for setting in SANDBOX_CONFIG:
+            command.extend(["--config", setting])
+        if request.temporary_copy:
+            command.append("--skip-git-repo-check")
         if request.model:
             command.extend(["--model", request.model])
         command.append("-")
         return command
 
-    def parser(self) -> CodexParser:
-        return CodexParser("")
+    def parser(self, request: EngineRequest) -> CodexParser:
+        return CodexParser(request.model)

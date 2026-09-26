@@ -340,7 +340,7 @@ def _payload(result: Any, view: Any, plan: bool, imported: dict[str, Any]) -> di
                     "tokens": row.tokens,
                     "share": round(row.share, 4),
                     "count": row.count,
-                    "cost_usd": round(row.cost_usd, 6),
+                    "cost_usd": None if row.cost_usd is None else round(row.cost_usd, 6),
                 }
                 for row in result.rows(view)
             ],

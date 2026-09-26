@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cuanta.adapters.engines.base import LineParser, StreamingEngine, as_dict
+from cuanta.adapters.engines.base import LineParser, StreamingEngine, as_dict, reported_cost
 from cuanta.domain.engine import (
     AssistantText,
     EngineEvent,
@@ -13,16 +13,16 @@ from cuanta.domain.engine import (
     ModelUsage,
     RunResult,
     SessionStarted,
+    StepUsage,
     ToolCall,
 )
+from cuanta.domain.errors import DomainFailure
+from cuanta.domain.guarantees import readonly_unavailable
+from cuanta.domain.messages import english
 
 
 def _int(value: Any) -> int:
     return int(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0
-
-
-def _float(value: Any) -> float:
-    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0.0
 
 
 ATTACHED_PROMPT = "Follow the instructions in the attached prompt file exactly."
@@ -39,8 +39,7 @@ class OpenCodeParser(LineParser):
         self._model = model or "opencode"
         self._session = ""
         self._usage = ModelUsage(self._model)
-        self._cost = 0.0
-        self._priced = False
+        self._cost: float | None = 0.0
         self._steps = 0
         self._error = False
         self._last_text = ""
@@ -66,9 +65,20 @@ class OpenCodeParser(LineParser):
             self._steps += 1
             tokens = as_dict(part.get("tokens"))
             cache = as_dict(tokens.get("cache"))
-            if "cost" in part:
-                self._priced = True
-            self._cost += _float(part.get("cost"))
+            step = ModelUsage(
+                self._model,
+                input_tokens=_int(tokens.get("input")),
+                output_tokens=_int(tokens.get("output")),
+                cache_read_tokens=_int(cache.get("read")),
+                cache_write_tokens=_int(cache.get("write")),
+                reasoning_tokens=_int(tokens.get("reasoning")),
+                cost_usd=reported_cost(part.get("cost")),
+            )
+            self._cost = (
+                self._cost + step.cost_usd
+                if self._cost is not None and step.cost_usd is not None
+                else None
+            )
             self._usage = ModelUsage(
                 self._model,
                 input_tokens=self._usage.input_tokens + _int(tokens.get("input")),
@@ -78,6 +88,7 @@ class OpenCodeParser(LineParser):
                 reasoning_tokens=self._usage.reasoning_tokens + _int(tokens.get("reasoning")),
                 cost_usd=self._cost,
             )
+            events.append(StepUsage(step, message_id=str(part.get("id") or "")))
         elif kind == "tool_use":
             state = as_dict(part.get("state"))
             inputs = as_dict(state.get("input"))
@@ -96,7 +107,7 @@ class OpenCodeParser(LineParser):
         return RunResult(
             ok=ok,
             subtype="success" if ok else "error",
-            cost_usd=self._cost if self._priced else None,
+            cost_usd=self._cost if self._steps else None,
             num_turns=self._steps,
             session_id=self._session,
             models=(self._usage,),
@@ -110,8 +121,12 @@ class OpenCodeEngine(StreamingEngine):
     binary_env = "CUANTA_OPENCODE_BIN"
     help_args = ("run", "--help")
     required_tokens = ("--format", "json", "--model")
+    step_cost_cap = True
 
     def command(self, request: EngineRequest) -> list[str]:
+        reason = readonly_unavailable(self.name) if request.read_only else None
+        if reason is not None:
+            raise DomainFailure(english(reason))
         command = [*self.binary(), "run", "--format", "json"]
         if request.model:
             command.extend(["--model", request.model])
@@ -131,5 +146,5 @@ class OpenCodeEngine(StreamingEngine):
     def cleanup(self, request: EngineRequest) -> None:
         prompt_file(request).unlink(missing_ok=True)
 
-    def parser(self) -> OpenCodeParser:
-        return OpenCodeParser("")
+    def parser(self, request: EngineRequest) -> OpenCodeParser:
+        return OpenCodeParser(request.model)

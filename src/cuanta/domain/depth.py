@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.messages import Message, msg
 from cuanta.domain.models import Tier
 from cuanta.domain.pricing import PER_MILLION, Price, dollars
@@ -81,7 +82,9 @@ def read_budget_line(chosen: DepthProfile, graph_available: bool = True) -> str:
     )
 
 
-def context_cost(price: Price, chosen: DepthProfile) -> float:
+def context_cost(price: Price, chosen: DepthProfile) -> float | None:
+    if price.cache_write is None or price.cache_read is None:
+        return None
     reads = chosen.read_budget * TOKENS_PER_READ
     requests = chosen.read_budget // 2 + 2
     written = PREFIX_TOKENS + reads
@@ -97,7 +100,7 @@ def context_cost(price: Price, chosen: DepthProfile) -> float:
 def plan_cost(prices: Sequence[Price], chosen: DepthProfile) -> float | None:
     if not prices:
         return None
-    return sum(context_cost(price, chosen) for price in prices)
+    return sum_costs(context_cost(price, chosen) for price in prices)
 
 
 def estimate_message(similar: CostRange, planned: float | None) -> Message:

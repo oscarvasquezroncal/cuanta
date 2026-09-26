@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.loop import Iteration, StopReason, next_stop
 from cuanta.domain.messages import msg
 from cuanta.domain.progress import Status, finished, note, started
@@ -27,7 +28,7 @@ class LoopReport:
     loop_id: str
     iterations: tuple[Iteration, ...]
     stop: StopReason
-    spent_usd: float
+    spent_usd: float | None
     final_status: str
 
     @property
@@ -48,7 +49,7 @@ class FixLoop:
 
     def run(self, loop_id: str, max_iterations: int, budget_usd: float) -> LoopReport:
         iterations: list[Iteration] = []
-        spent = 0.0
+        spent: float | None = 0.0
         number = 0
         while True:
             self._progress.publish(started(f"test-{number}", msg("loop.test")))
@@ -68,7 +69,7 @@ class FixLoop:
                 started(key, msg("loop.pounce", number=number, total=max_iterations))
             )
             fix = self._fix(loop_id, number)
-            spent += fix.cost_usd or 0.0
+            spent = sum_costs((spent, fix.cost_usd))
             iterations.append(
                 Iteration(number, step.status, step.signatures, fix.run_id, fix.ok, fix.cost_usd)
             )
@@ -77,7 +78,7 @@ class FixLoop:
                 finished(
                     key,
                     outcome,
-                    msg("loop.cost", cost=f"{fix.cost_usd or 0.0:.2f}")
+                    msg("loop.cost", cost=f"{fix.cost_usd:.2f}")
                     if fix.cost_usd is not None
                     else msg("loop.cost_unknown"),
                 )

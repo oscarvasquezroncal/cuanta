@@ -7,7 +7,15 @@ from cuanta.application.engine_run import EngineLauncher, LaunchSpec
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.agents import AgentDefinition, role_of
 from cuanta.domain.capsules import capsule_id
-from cuanta.domain.mandate import INLINE_EVIDENCE_LIMIT, MandateRequest, clip_evidence
+from cuanta.domain.costs import CostSource, sum_costs
+from cuanta.domain.depth import DEFAULT_DEPTH, MAX_TURNS
+from cuanta.domain.guarantees import readonly_unavailable
+from cuanta.domain.mandate import (
+    INLINE_EVIDENCE_LIMIT,
+    INVESTIGATION,
+    MandateRequest,
+    clip_evidence,
+)
 from cuanta.domain.messages import Message, msg
 from cuanta.domain.progress import Status, finished, note, started
 from cuanta.domain.routing import Role
@@ -28,13 +36,14 @@ class CrossStep:
     ok: bool
     cost_usd: float | None
     handoff: str
+    cost_source: CostSource = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
 class CrossReport:
     steps: tuple[CrossStep, ...]
     ok: bool
-    spent_usd: float
+    spent_usd: float | None
     stopped: Message | None = None
 
 
@@ -82,12 +91,14 @@ class CrossEnginePipeline:
         capsules: CapsuleStore,
         cwd: str,
         budget_usd: float,
+        max_turns: int = 0,
     ) -> None:
         self._launchers = launchers
         self._definitions = definitions
         self._capsules = capsules
         self._cwd = cwd
         self._budget = budget_usd
+        self._max_turns = max_turns if max_turns > 0 else MAX_TURNS[DEFAULT_DEPTH]
 
     def _handoff(self, text: str) -> str:
         if len(text) <= INLINE_EVIDENCE_LIMIT:
@@ -98,7 +109,7 @@ class CrossEnginePipeline:
     def run(self, request: MandateRequest, plan: RoutePlan, progress: ProgressSink) -> CrossReport:
         definitions = self._definitions()
         steps: list[CrossStep] = []
-        spent = 0.0
+        spent: float | None = 0.0
         handoff = ""
         parent = ""
         for role in CROSS_ORDER:
@@ -106,9 +117,15 @@ class CrossEnginePipeline:
             if route is None or route.model is None:
                 progress.publish(note(Status.SKIP, msg("cross.skipped", role=role.value)))
                 continue
-            remaining = self._budget - spent
+            if self._budget > 0 and spent is None:
+                return CrossReport(tuple(steps), False, None, msg("cross.cost_unknown"))
+            remaining = self._budget - spent if spent is not None else 0.0
             if self._budget > 0 and remaining <= 0:
                 return CrossReport(tuple(steps), False, spent, msg("cross.budget"))
+            read_only = role is Role.ANALYST or request.type == INVESTIGATION
+            refusal = readonly_unavailable(route.engine) if read_only else None
+            if refusal is not None:
+                return CrossReport(tuple(steps), False, spent, refusal)
             launcher = self._launchers(route.engine)
             if launcher is None:
                 return CrossReport(
@@ -129,8 +146,10 @@ class CrossEnginePipeline:
                     allowed_tools=tools_of(definition) if route.engine == "claude" else (),
                     model=model,
                     max_budget_usd=remaining if self._budget > 0 else 0.0,
+                    max_turns=self._max_turns if route.engine == "claude" else 0,
                     scope=role.value,
                     parent_id=parent,
+                    read_only=read_only,
                 ),
                 lambda _: None,
             )
@@ -140,13 +159,32 @@ class CrossEnginePipeline:
             text = outcome.result.text if outcome is not None and outcome.result else ""
             handoff = self._handoff(text)
             cost = launch.run.cost_usd
-            spent += cost or 0.0
-            steps.append(CrossStep(role, route.engine, model, launch.run.id, ok, cost, handoff))
+            spent = sum_costs((spent, cost))
+            steps.append(
+                CrossStep(
+                    role,
+                    route.engine,
+                    model,
+                    launch.run.id,
+                    ok,
+                    cost,
+                    handoff,
+                    launch.run.cost_source,
+                )
+            )
             progress.publish(
                 finished(
                     key, Status.OK if ok else Status.FAIL, msg("cross.done", run=launch.run.id)
                 )
             )
             if not ok:
+                if outcome.result is not None and outcome.result.subtype == "error_cost_unknown":
+                    return CrossReport(tuple(steps), False, spent, msg("engine.cost_unknown"))
+                if (
+                    outcome is not None
+                    and outcome.result is not None
+                    and "budget" in outcome.result.subtype
+                ):
+                    return CrossReport(tuple(steps), False, spent, msg("cross.budget"))
                 return CrossReport(tuple(steps), False, spent, msg("cross.failed", role=role.value))
         return CrossReport(tuple(steps), bool(steps), spent)

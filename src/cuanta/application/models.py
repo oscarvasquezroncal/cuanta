@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.errors import DomainFailure
 from cuanta.domain.ledger import Run
 from cuanta.domain.models import (
@@ -53,7 +54,7 @@ class ModelStats:
     tier: Tier | None
     runs: int
     ok: int
-    cost_usd: float
+    cost_usd: float | None
     priced_runs: int
 
     @property
@@ -62,7 +63,7 @@ class ModelStats:
 
     @property
     def average_cost(self) -> float | None:
-        return self.cost_usd / self.priced_runs if self.priced_runs else None
+        return self.cost_usd / self.runs if self.runs and self.cost_usd is not None else None
 
 
 class ModelService:
@@ -184,7 +185,7 @@ def model_stats(runs: Sequence[Run], entries: Sequence[ModelEntry]) -> tuple[Mod
                 tier=entry.tier if entry else None,
                 runs=len(items),
                 ok=sum(1 for run in items if run.status == "ok"),
-                cost_usd=sum(priced),
+                cost_usd=sum_costs(run.cost_usd for run in items),
                 priced_runs=len(priced),
             )
         )

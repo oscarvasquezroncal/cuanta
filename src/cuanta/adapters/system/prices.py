@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import tomllib
 from importlib import resources
+from math import isfinite
 
 from cuanta.domain.pricing import Price, PriceTable
 
 
-def _number(value: object) -> float:
-    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0.0
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if isfinite(number) and number >= 0 else None
 
 
 def load_prices() -> PriceTable:
@@ -18,9 +25,13 @@ def load_prices() -> PriceTable:
     if isinstance(raw, dict):
         for name, values in raw.items():
             if isinstance(values, dict):
+                input_price = _number(values.get("input"))
+                output_price = _number(values.get("output"))
+                if input_price is None or output_price is None:
+                    continue
                 models[str(name).lower()] = Price(
-                    input=_number(values.get("input")),
-                    output=_number(values.get("output")),
+                    input=input_price,
+                    output=output_price,
                     cache_write=_number(values.get("cache_write")),
                     cache_read=_number(values.get("cache_read")),
                 )

@@ -65,7 +65,10 @@ def mandate_command(
     ] = False,
     engine: Annotated[str, typer.Option("--engine", help="claude, codex or opencode.")] = "",
     model: Annotated[str, typer.Option("--model", help="Model for the run.")] = "",
-    budget: Annotated[float, typer.Option("--max-budget-usd", help="Spend cap (claude).")] = 0.0,
+    budget: Annotated[
+        float,
+        typer.Option("--max-budget-usd", help="Spend cap; enforcement depends on the engine."),
+    ] = 0.0,
     hu: Annotated[str, typer.Option("--hu", help="Tag the run with a story, e.g. HU-007.")] = "",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Print prompt and command.")] = False,
     route: Annotated[str, typer.Option("--route", help="Model routing: auto, fixed or off.")] = "",
@@ -307,20 +310,45 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
 
 
 def run_cross_engine(session: Session, container: "Container", args: MandateArgs) -> "Document":
-    from cuanta.cli.commands.route import parse_role_models
+    from cuanta.application.mandate_flow import resolve_max_turns
     from cuanta.cli.document import Column, Document, Line, Table
     from cuanta.cli.fmt import usd
+    from cuanta.domain.depth import parse_depth, profile
+    from cuanta.domain.guarantees import cap_warning, engine_guarantees
     from cuanta.domain.messages import english
     from cuanta.domain.progress import Note, Status
 
     flow = container.mandate_flow(container.shared_ledger())
     request, _ = _build_request(session, flow.service, args)
-    roles = parse_role_models(list(args.role_models))
+    options = _options(args)
+    roles = dict(options.route.role_models)
     plan, _ = container.plan_route(
-        request.type, request.what, request.where, args.route, args.preset, roles
+        request.type,
+        request.what,
+        request.where,
+        args.route,
+        args.preset,
+        roles,
+        depth=options.depth,
     )
     session.presenter.publish(Note(Status.WARN, "cross-engine pipeline (experimental)"))
-    pipeline = container.cross_engine(container.shared_ledger(), args.cross_budget)
+    for route in plan.routes:
+        if route.model is None:
+            continue
+        for guarantee in engine_guarantees(route.engine, file_checks=False):
+            session.presenter.publish(
+                Note(
+                    Status.INFO,
+                    f"{route.role.value} · {route.engine} · {english(guarantee.message)}",
+                )
+            )
+        warning = cap_warning(route.engine, args.cross_budget)
+        if warning is not None:
+            session.presenter.publish(Note(Status.WARN, english(warning)))
+    max_turns = resolve_max_turns(
+        options, profile(parse_depth(options.depth), request.type), container.config.max_turns
+    )
+    pipeline = container.cross_engine(container.shared_ledger(), args.cross_budget, max_turns)
     report = pipeline.run(request, plan, session.presenter)
     rows = tuple(
         (
@@ -329,7 +357,7 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
             step.model,
             step.run_id,
             "ok" if step.ok else "failed",
-            usd(step.cost_usd),
+            usd(step.cost_usd, step.cost_source),
         )
         for step in report.steps
     )
@@ -363,6 +391,7 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
                 "run_id": step.run_id,
                 "ok": step.ok,
                 "cost_usd": step.cost_usd,
+                "cost_source": step.cost_source,
             }
             for step in report.steps
         ],
@@ -371,12 +400,16 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
 
 
 def team_lines(prepared: "Prepared") -> list[str]:
+    from cuanta.domain.guarantees import engine_guarantees
     from cuanta.domain.messages import english
 
     applied = prepared.applied
+    lines = [
+        f"{prepared.engine_name} · {english(row.message)}"
+        for row in engine_guarantees(prepared.engine_name)
+    ]
     if applied is None or not applied.active:
-        return ["team: routing off, the engine picks its default models"]
-    lines: list[str] = []
+        return [*lines, "team: routing off, the engine picks its default models"]
     for route in applied.plan.routes:
         model = route.model.id if route.model else "engine default"
         tier = route.tier.value if route.tier else "-"
@@ -390,6 +423,8 @@ def team_lines(prepared: "Prepared") -> list[str]:
 
 
 def publish_team(session: Session, prepared: "Prepared") -> None:
+    from cuanta.domain.guarantees import cap_warning
+    from cuanta.domain.messages import english
     from cuanta.domain.progress import Note, Status
 
     applied = prepared.applied
@@ -397,6 +432,9 @@ def publish_team(session: Session, prepared: "Prepared") -> None:
     for line in team_lines(prepared):
         status = Status.WARN if warn and "is set" in line else Status.INFO
         session.presenter.publish(Note(status, line))
+    warning = cap_warning(prepared.engine_name, prepared.spec.max_budget_usd)
+    if warning is not None:
+        session.presenter.publish(Note(Status.WARN, english(warning)))
 
 
 def audit_rows(report: "MandateReport") -> tuple[tuple[str, str], ...]:
@@ -417,9 +455,13 @@ def _final(report: "MandateReport") -> "Document":
     from cuanta.cli.document import Document, Hint, KeyValues, MarkdownText, MascotBlock, Panel
     from cuanta.cli.fmt import compact, percent, usd
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
+    from cuanta.domain.guarantees import budget_stop_reason
+    from cuanta.domain.messages import english
     from cuanta.domain.voice import Mood
 
     run = report.run
+    stop = budget_stop_reason(run.end_reason)
+    budget_rows = (("stop reason", english(stop)),) if stop is not None else ()
     agents = ", ".join(
         f"{name} {compact(tokens)}" for name, tokens in report.tokens_by_agent.items()
     )
@@ -436,8 +478,9 @@ def _final(report: "MandateReport") -> "Document":
         ("files changed", str(len(report.changed_files))),
         ("tests", report.tests),
         ("tokens by agent", agents or "-"),
-        ("cost", usd(run.cost_usd)),
+        ("cost", usd(run.cost_usd, run.cost_source)),
         *turn_rows,
+        *budget_rows,
         ("utilization", f"{index} (heuristic v1)"),
         *audit_rows(report),
     )

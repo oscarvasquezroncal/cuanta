@@ -21,6 +21,7 @@ class StopReason(StrEnum):
     PERSISTENT = "persistent signature"
     MAX_ITERATIONS = "max iterations"
     BUDGET = "budget reached"
+    COST_UNKNOWN = "cost unknown"
     ENGINE_ERROR = "engine error"
 
 
@@ -54,15 +55,18 @@ def next_stop(
     test_status: str,
     iterations_done: int,
     max_iterations: int,
-    spent_usd: float,
+    spent_usd: float | None,
     budget_usd: float,
 ) -> StopReason | None:
     if test_status == "green":
         return StopReason.GREEN
     if test_status == "persistent_failure":
         return StopReason.PERSISTENT
-    if budget_usd > 0 and spent_usd >= budget_usd:
-        return StopReason.BUDGET
+    if budget_usd > 0:
+        if spent_usd is None:
+            return StopReason.COST_UNKNOWN
+        if spent_usd >= budget_usd:
+            return StopReason.BUDGET
     if iterations_done >= max_iterations:
         return StopReason.MAX_ITERATIONS
     return None

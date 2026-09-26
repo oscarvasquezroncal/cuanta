@@ -21,6 +21,7 @@ from cuanta.domain.bench import (
     summarize,
     was_capped,
 )
+from cuanta.domain.costs import sum_costs
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.messages import msg
 from cuanta.domain.progress import Status, finished, note, started
@@ -241,10 +242,14 @@ class BenchRunner:
             tasks, conditions, meta.reps, meta.seed, sessions_for(meta.session)
         )
         metrics: list[RunMetrics] = []
-        spent = 0.0
+        spent: float | None = 0.0
         stopped = False
         for item in planned:
-            remaining = meta.budget_usd - spent
+            if meta.budget_usd > 0 and spent is None:
+                progress.publish(note(Status.WARN, msg("bench.cost_unknown")))
+                stopped = True
+                break
+            remaining = meta.budget_usd - spent if spent is not None else 0.0
             if meta.budget_usd > 0 and remaining < meta.per_run_usd:
                 progress.publish(note(Status.WARN, msg("bench.budget", spent=f"{spent:.2f}")))
                 stopped = True
@@ -267,7 +272,7 @@ class BenchRunner:
                 by_name[item.task], item.condition, item.rep, meta.per_run_usd, item.session
             )
             metrics.append(result)
-            spent += result.cost_usd or 0.0
+            spent = sum_costs((spent, result.cost_usd))
             verdict = "bench.accepted" if result.accepted else "bench.rejected"
             progress.publish(
                 finished(key, Status.OK if result.accepted else Status.FAIL, msg(verdict))
@@ -296,7 +301,7 @@ class BenchRunner:
     def publish(self, result: BenchResult, folder: str = DOCS_DIR, readme: str = README) -> None:
         self.report(result, folder)
         summary = summarize(result.metrics)
-        spent = sum(item.cost_usd or 0.0 for item in result.metrics)
+        spent = sum_costs(item.cost_usd for item in result.metrics)
         section = readme_section(result.meta, summary, spent, folder)
         current = self._workspace.read_text(readme) or ""
         self._workspace.write_text(readme, splice(current, section))

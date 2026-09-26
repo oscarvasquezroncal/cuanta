@@ -119,7 +119,7 @@ def _document(outcome: "LoopReport") -> "Document":
             (
                 MascotBlock(mood),
                 Line(f"stopped: {outcome.stop.value}", status),
-                KeyValues((("loop", outcome.loop_id), ("spent", f"${outcome.spent_usd:.2f}"))),
+                KeyValues((("loop", outcome.loop_id), ("spent", usd(outcome.spent_usd)))),
             ),
         )
     )

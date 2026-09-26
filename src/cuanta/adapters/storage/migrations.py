@@ -207,6 +207,92 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE runs ADD COLUMN turns INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE runs ADD COLUMN end_reason TEXT NOT NULL DEFAULT ''
     """,
+    """
+    ALTER TABLE runs ADD COLUMN cost_source TEXT NOT NULL DEFAULT 'unknown';
+    CREATE TABLE events_nullable_cost (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT '',
+        session_id TEXT NOT NULL DEFAULT '',
+        prompt_id TEXT NOT NULL DEFAULT '',
+        trace_id TEXT NOT NULL DEFAULT '',
+        agent TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+        reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL,
+        tool_name TEXT NOT NULL DEFAULT '',
+        tool_use_id TEXT NOT NULL DEFAULT '',
+        tool_result_bytes INTEGER NOT NULL DEFAULT 0,
+        tool_input_bytes INTEGER NOT NULL DEFAULT 0,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        success INTEGER,
+        query_source TEXT NOT NULL DEFAULT '',
+        file_path TEXT NOT NULL DEFAULT '',
+        command TEXT NOT NULL DEFAULT '',
+        ts TEXT NOT NULL DEFAULT '',
+        raw TEXT NOT NULL DEFAULT '',
+        effort TEXT NOT NULL DEFAULT '',
+        ttft_ms INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO events_nullable_cost (id, run_id, source, session_id, prompt_id, trace_id,
+    agent, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+    reasoning_tokens, cost_usd, tool_name, tool_use_id, tool_result_bytes, tool_input_bytes,
+    duration_ms, success, query_source, file_path, command, ts, raw, effort, ttft_ms) SELECT
+    id, run_id, source, session_id, prompt_id, trace_id, agent, kind, model, input_tokens,
+    output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost_usd,
+    tool_name, tool_use_id, tool_result_bytes, tool_input_bytes, duration_ms, success,
+    query_source, file_path, command, ts, raw, effort, ttft_ms FROM events;
+    INSERT INTO sqlite_sequence(name, seq)
+    SELECT 'events_nullable_cost', seq FROM sqlite_sequence WHERE name = 'events'
+    AND NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'events_nullable_cost');
+    UPDATE sqlite_sequence SET seq = MAX(seq, (
+        SELECT COALESCE(MAX(seq), 0) FROM sqlite_sequence WHERE name = 'events'
+    )) WHERE name = 'events_nullable_cost';
+    DROP TABLE events;
+    ALTER TABLE events_nullable_cost RENAME TO events;
+    CREATE INDEX idx_events_run ON events(run_id);
+    CREATE INDEX idx_events_trace ON events(trace_id);
+    CREATE INDEX idx_events_session ON events(session_id);
+    CREATE INDEX idx_events_ts ON events(ts);
+    CREATE TABLE decisions_nullable_cost (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL DEFAULT '',
+        backend TEXT NOT NULL,
+        primitive TEXT NOT NULL,
+        question TEXT NOT NULL,
+        options TEXT NOT NULL,
+        answer TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        latency_ms INTEGER NOT NULL,
+        cost_usd REAL,
+        outcome TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '',
+        preview INTEGER NOT NULL DEFAULT 0,
+        request_hash TEXT NOT NULL DEFAULT '',
+        fallback_error TEXT NOT NULL DEFAULT '',
+        fallback_from TEXT NOT NULL DEFAULT ''
+    );
+    INSERT INTO decisions_nullable_cost (id, run_id, backend, primitive, question, options,
+    answer, confidence, latency_ms, cost_usd, outcome, created_at, preview, request_hash,
+    fallback_error, fallback_from) SELECT id, run_id, backend, primitive, question, options,
+    answer, confidence, latency_ms, cost_usd, outcome, created_at, preview, request_hash,
+    fallback_error, fallback_from FROM decisions;
+    INSERT INTO sqlite_sequence(name, seq)
+    SELECT 'decisions_nullable_cost', seq FROM sqlite_sequence WHERE name = 'decisions'
+    AND NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'decisions_nullable_cost');
+    UPDATE sqlite_sequence SET seq = MAX(seq, (
+        SELECT COALESCE(MAX(seq), 0) FROM sqlite_sequence WHERE name = 'decisions'
+    )) WHERE name = 'decisions_nullable_cost';
+    DROP TABLE decisions;
+    ALTER TABLE decisions_nullable_cost RENAME TO decisions;
+    CREATE INDEX idx_decisions_run ON decisions(run_id);
+    CREATE INDEX idx_decisions_hash ON decisions(request_hash, question)
+    """,
 )
 
 LATEST_VERSION = len(MIGRATIONS)
