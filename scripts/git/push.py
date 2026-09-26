@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import argparse
 import sys
 
 from git_workflow import WorkflowError, check_outgoing, git, require_main
+from tag_release import publish_tag
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Publish main or its verified release tag.")
+    parser.add_argument("--tag", action="store_true", help="publish the verified version tag only")
+    options = parser.parse_args()
     try:
+        if options.tag:
+            print(publish_tag())
+            return 0
         require_main()
         if "origin" not in git("remote").splitlines():
             raise WorkflowError(
