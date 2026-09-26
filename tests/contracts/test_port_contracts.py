@@ -187,3 +187,24 @@ def test_bench_sandbox_contract(tmp_path: Path) -> None:
     assert accepted is True, output
     sandbox.discard(root)
     assert not Path(root).exists()
+
+
+def test_project_sandbox_contract(tmp_path: Path) -> None:
+    from cuanta.adapters.system.sandbox import LocalSandbox
+    from cuanta.ports.sandbox import ProjectSandbox
+    from tests.fakes import copy_repo
+
+    origin = copy_repo("bugfix", tmp_path)
+    sandbox: ProjectSandbox = LocalSandbox(parents=(tmp_path / "temp",))
+    copy = sandbox.create(origin)
+    target = "src/calc/__init__.py"
+    assert sandbox.read(copy, target) == (origin / target).read_bytes()
+    assert sandbox.manifest(copy) == copy.hashes()
+    (copy.root / target).write_bytes(b"changed\n")
+    assert sandbox.manifest(copy)[target] != copy.hashes()[target]
+    assert sandbox.dependencies_changed(copy) == ()
+    assert sandbox.state_changed(copy) == ()
+    assert sandbox.mode_changes(copy) == ()
+    assert sandbox.remove(copy)
+    assert not copy.slot.exists()
+    assert (origin / target).is_file()

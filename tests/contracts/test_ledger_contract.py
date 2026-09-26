@@ -246,7 +246,7 @@ def test_cost_migration_preserves_legacy_values_fields_and_indexes(tmp_path: Pat
 
     path = tmp_path / "legacy-cost.db"
     with closing(sqlite3.connect(path)) as connection, connection:
-        for version, statements in enumerate(MIGRATIONS[:-1], start=1):
+        for version, statements in enumerate(MIGRATIONS[:9], start=1):
             connection.executescript(statements)
             connection.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
         connection.execute("INSERT INTO runs(id, kind, cost_usd) VALUES ('R', 'mandate', 0)")
@@ -305,3 +305,56 @@ def test_cost_migration_preserves_legacy_values_fields_and_indexes(tmp_path: Pat
         "idx_decisions_run",
         "idx_decisions_hash",
     } <= indexes
+
+
+def test_run_outcome_is_recorded_once_with_its_time(ledger: Ledger) -> None:
+    ledger.add_run(Run(id="S", kind="mandate", mode="sandbox"))
+    assert ledger.set_run_outcome("S", "accepted", "2026-09-26T10:00:00+00:00")
+    assert not ledger.set_run_outcome("S", "rejected", "2026-09-26T11:00:00+00:00")
+    assert not ledger.set_run_outcome("missing", "accepted", "2026-09-26T10:00:00+00:00")
+    stored = ledger.get_run("S")
+    assert stored is not None
+    assert (stored.mode, stored.outcome, stored.outcome_at) == (
+        "sandbox",
+        "accepted",
+        "2026-09-26T10:00:00+00:00",
+    )
+
+
+def test_run_outcome_survives_a_later_full_row_update(ledger: Ledger) -> None:
+    ledger.add_run(Run(id="S", kind="mandate", mode="sandbox", status="ok"))
+    ledger.set_run_outcome("S", "rejected", "2026-09-26T10:00:00+00:00")
+    stored = ledger.get_run("S")
+    assert stored is not None and stored.outcome == "rejected"
+
+
+def test_migration_adds_mode_and_outcome_columns_with_empty_defaults(tmp_path: Path) -> None:
+    import sqlite3
+
+    from cuanta.adapters.storage.migrations import MIGRATIONS
+
+    path = tmp_path / "v10.db"
+    with closing(sqlite3.connect(path)) as connection, connection:
+        for version, statements in enumerate(MIGRATIONS[:10], start=1):
+            connection.executescript(statements)
+            connection.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
+        connection.execute("INSERT INTO runs(id, kind, status) VALUES ('R', 'mandate', 'ok')")
+    upgraded = SqliteLedger(path)
+    try:
+        assert upgraded.schema_version() == LATEST_VERSION
+        run = upgraded.get_run("R")
+        assert run is not None
+        assert (run.status, run.mode, run.outcome, run.outcome_at) == ("ok", "", "", "")
+    finally:
+        upgraded.close()
+
+
+def test_project_level_test_runs_leave_out_runs_made_in_an_isolated_copy(ledger: Ledger) -> None:
+    ledger.add_run(Run(id="P", kind="mandate"))
+    ledger.add_run(Run(id="S", kind="mandate", mode="sandbox"))
+    ledger.add_test_run(_test_run("T1", "P", "2026-09-26T10:00:00"), [])
+    ledger.add_test_run(_test_run("T2", "S", "2026-09-26T11:00:00"), [])
+    ledger.add_test_run(_test_run("T3", "", "2026-09-26T09:00:00"), [])
+    assert [record.id for record in ledger.test_runs(limit=1)] == ["T2"]
+    assert [record.id for record in ledger.test_runs(project_only=True)] == ["T1", "T3"]
+    assert [record.id for record in ledger.test_runs(run_id="S")] == ["T2"]

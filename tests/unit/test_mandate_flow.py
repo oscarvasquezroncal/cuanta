@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -11,14 +12,16 @@ from cuanta.application.mandate_flow import (
     models_for,
     validate,
 )
-from cuanta.domain.errors import DomainFailure
+from cuanta.domain.errors import DomainFailure, NotAvailable
 from cuanta.domain.mandate import MandateRequest
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.views.mandate import parse_budget, prefill_request
 from tests.tui.fakes import HAIRBALLS
 
 if TYPE_CHECKING:
+    from cuanta.application.mandate_flow import Prepared
     from cuanta.ports.engine import Engine
+    from cuanta.ports.progress import ProgressSink
 
 COMPLETE = MandateRequest("bug", "fix totals", "AssertionError", out_of_scope="payments")
 
@@ -89,3 +92,23 @@ def test_stop_only_cancels_an_active_run() -> None:
     flow._active = cast("Engine", engine)
     assert flow.stop()
     assert engine.cancelled == 1
+
+
+def test_stop_while_the_engine_is_checked_cancels_the_launch() -> None:
+    flow = MandateFlow.__new__(MandateFlow)
+    flow._active = None
+
+    class CheckedEngine(StubEngine):
+        def available(self) -> bool:
+            return True
+
+        def missing_flags(self) -> tuple[str, ...]:
+            assert flow.stop()
+            return ("--max-turns",)
+
+    engine = CheckedEngine()
+    prepared = SimpleNamespace(launcher=SimpleNamespace(engine=engine), engine_name="claude")
+    with pytest.raises(NotAvailable):
+        flow.run(cast("Prepared", prepared), cast("ProgressSink", None))
+    assert engine.cancelled == 1
+    assert not flow.stop()

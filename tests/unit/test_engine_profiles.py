@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from itertools import count
 from pathlib import Path
 
@@ -202,3 +203,30 @@ def test_cross_claude_readonly_roles_cannot_inherit_write_tools(tmp_path: Path, 
             assert command[command.index("--tools") + 1] == "Read,Grep,Glob"
         else:
             assert "Write" in allowed and "Edit" in allowed
+
+
+def test_codex_in_an_isolated_copy_may_write_only_the_original_state_folder() -> None:
+    from cuanta.domain.engine import EngineRequest
+    from cuanta.domain.sandbox import STATE_ROOT_ENV
+
+    engine = CodexEngine(FakeRunner())
+    env = {STATE_ROOT_ENV: str(Path("/work/shop"))}
+    isolated = engine.command(EngineRequest("p", "/copy", env, temporary_copy=True))
+    expected = json.dumps([str(Path("/work/shop") / ".cuanta")])
+    assert f"sandbox_workspace_write.writable_roots={expected}" in isolated
+    ordinary = engine.command(EngineRequest("p", "/work/shop", env))
+    assert "sandbox_workspace_write.writable_roots=[]" in ordinary
+
+
+def test_codex_writable_root_keeps_non_ascii_project_paths_readable() -> None:
+    from cuanta.domain.engine import EngineRequest
+    from cuanta.domain.sandbox import STATE_ROOT_ENV
+
+    engine = CodexEngine(FakeRunner())
+    state = str(Path("/work/tienda-\U0001f600"))
+    command = engine.command(
+        EngineRequest("p", "/copy", {STATE_ROOT_ENV: state}, temporary_copy=True)
+    )
+    setting = next(part for part in command if part.startswith("sandbox_workspace_write.writable"))
+    assert "\U0001f600" in setting
+    assert "\\ud83d" not in setting
