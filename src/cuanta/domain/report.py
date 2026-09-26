@@ -43,6 +43,7 @@ _REQUEST_LABEL = re.compile(
     r"^(?:TYPE|WHAT|WHY / EVIDENCE|WHERE|CONSTRAINTS|EXPECTED TESTS|OUT OF SCOPE):"
 )
 _HEADING_SHAPE = re.compile(r"^\s*(?:#{1,6}\s|\d+[.)]\s|\*\*|__)")
+_ATX_HEADING = re.compile(r"^ {0,3}#{1,6}\s+\S")
 _FILE_REF = re.compile(
     r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.[A-Za-z][\w]{0,7}):(\d{1,6})(?::\d{1,4})?(?!\d)"
 )
@@ -87,10 +88,14 @@ def _key_of(title: str) -> str:
     return PREAMBLE
 
 
+def _section_heading(line: str) -> re.Match[str] | None:
+    return _HEADING.match(line) if _HEADING_SHAPE.match(line) else None
+
+
 def parse_sections(text: str) -> tuple[ReportSection, ...]:
     sections: list[tuple[str, str, list[str]]] = [(PREAMBLE, "", [])]
     for line in text.splitlines():
-        match = _HEADING.match(line) if _HEADING_SHAPE.match(line) else None
+        match = _section_heading(line)
         if match is not None:
             title = match.group(1).upper()
             rest = match.group(2).strip().strip("*").strip()
@@ -102,6 +107,20 @@ def parse_sections(text: str) -> tuple[ReportSection, ...]:
     if len(named) < MIN_SECTIONS:
         return ()
     return tuple(section for section in found if section.key != PREAMBLE or section.body)
+
+
+def strip_preamble(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    fenced = False
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if _ATX_HEADING.match(line) or _section_heading(line) is not None:
+            return "".join(lines[index:]) if index else text
+    return text
 
 
 def section(sections: Sequence[ReportSection], key: str) -> ReportSection | None:
@@ -200,11 +219,15 @@ def docs_path(task_type: str, title: str, day: date) -> str:
     return f"{folder}/{day.isoformat()}-{slug(title)}.md"
 
 
+def first_request_event(events: Sequence[LedgerEvent]) -> LedgerEvent | None:
+    requests = (event for event in events if event.kind in FIRST_REQUEST_KINDS)
+    return min(requests, key=lambda event: (event.ts, event.id), default=None)
+
+
 def context_split(events: Sequence[LedgerEvent], prompt_chars: int) -> ContextSplit | None:
-    requests = [event for event in events if event.kind in FIRST_REQUEST_KINDS]
-    if not requests:
+    first = first_request_event(events)
+    if first is None:
         return None
-    first = min(requests, key=lambda event: (event.ts, event.id))
     total = first.input_tokens + first.cache_read_tokens + first.cache_write_tokens
     if total <= 0:
         return None

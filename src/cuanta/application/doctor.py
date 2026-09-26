@@ -5,11 +5,18 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from cuanta.application.detect import DetectProject, read_forge_state
+from cuanta.application.recent_runs import latest_with_requests
 from cuanta.domain.detection import Detection, GraphMode, SizeTier, VerifyTier
 from cuanta.domain.forge_verify import check_ceilings, placeholders
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, english, msg
-from cuanta.domain.overhead import session_overhead, startup_message
+from cuanta.domain.overhead import (
+    HOME_AGENTS_MD,
+    agents_md_message,
+    first_request_split,
+    session_overhead,
+    startup_message,
+)
 from cuanta.domain.plugins import InstalledPlugin, older_forge
 from cuanta.domain.progress import Status
 from cuanta.domain.telemetry import WiringReport, WiringState
@@ -18,7 +25,7 @@ from cuanta.ports.engine import Engine
 from cuanta.ports.forge import ForgeKit
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.listener import ListenerControl
-from cuanta.ports.workspace import Workspace
+from cuanta.ports.workspace import HomeReader, Workspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +331,32 @@ def instinct_check(
 
 STARTUP_WARN_MS = 5_000
 RECENT_CLAUDE_RUNS = 20
+AGENTS_MD_CHECK = "agents-md"
+
+
+def agents_md_check(
+    home: HomeReader, ledger_factory: Callable[[], Ledger], exists: Callable[[], bool]
+) -> Check:
+    def check(_: Detection) -> Sequence[CheckResult]:
+        path = ""
+        size = None
+        for relative in HOME_AGENTS_MD:
+            size = home.size_bytes(relative)
+            if size is not None:
+                path = f"~/{relative}"
+                break
+        split = None
+        if size is not None and exists():
+            ledger = ledger_factory()
+            try:
+                latest = latest_with_requests(ledger, RECENT_CLAUDE_RUNS, "claude")
+                if latest is not None:
+                    split = first_request_split(latest[1])
+            finally:
+                ledger.close()
+        return [result(AGENTS_MD_CHECK, Status.INFO, agents_md_message(size, split, path))]
+
+    return check
 
 
 def user_forge_check(

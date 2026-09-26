@@ -5,8 +5,11 @@ from dataclasses import dataclass
 from datetime import date
 
 from cuanta.application.run_reports import RunReports
+from cuanta.domain.cache import FirstRequestCache, cache_message
+from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
 from cuanta.domain.ledger import Run
-from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.mandate import INVESTIGATION, MandateRequest, Shape
+from cuanta.domain.messages import english
 from cuanta.domain.overhead import SessionOverhead, session_overhead
 from cuanta.domain.report import (
     ContextSplit,
@@ -17,6 +20,7 @@ from cuanta.domain.report import (
     next_request,
     parse_sections,
     section,
+    strip_preamble,
     unified_diff,
 )
 from cuanta.ports.ledger import EventQuery, Ledger
@@ -55,6 +59,12 @@ class ResultView:
     overhead: SessionOverhead | None = None
     fallback_error: str = ""
     fallback_from: str = ""
+    single: bool = False
+    shape_known: bool = True
+
+    @property
+    def cache(self) -> FirstRequestCache | None:
+        return self.overhead.cache if self.overhead is not None else None
 
     @property
     def duration_s(self) -> float | None:
@@ -90,11 +100,32 @@ def _counts(value: object) -> dict[str, int]:
     return {str(key): int(item) for key, item in value.items() if isinstance(item, int)}
 
 
+def stored_shape(meta: Mapping[str, object], run: Run, task_type: str) -> tuple[bool, bool]:
+    shape = meta.get("shape")
+    if shape == Shape.SINGLE.value:
+        return True, True
+    if shape == Shape.PIPELINE.value:
+        return False, True
+    if run.kind == "mandate" and meta.get("simple") is True:
+        return True, True
+    if run.kind == "mandate" and task_type == INVESTIGATION and meta.get("handoffs"):
+        return False, True
+    return False, False
+
+
 def run_markdown(view: ResultView) -> str:
     run = view.run
     cost = "n/a" if run.cost_usd is None else f"${run.cost_usd:,.2f}"
     duration = "n/a" if view.duration_s is None else f"{view.duration_s:,.0f} s"
-    mode = "simple mode (one agent, no project knowledge)" if view.simple else "Forge pipeline"
+    mode = "unknown shape"
+    if view.shape_known:
+        mode = (
+            "simple mode (one agent, no project knowledge)"
+            if view.simple
+            else "single context"
+            if view.single
+            else "pipeline"
+        )
     lines = [
         f"# Run {run.id}",
         "",
@@ -102,12 +133,20 @@ def run_markdown(view: ResultView) -> str:
         f"- Status: {run.status} · engine {run.engine} · model {run.model or 'default'}",
         f"- Started {run.started_at} · duration {duration} · cost {cost}",
     ]
+    if run.max_turns > 0:
+        turns = f"{run.turns}/{run.max_turns}"
+        cut = " · cut by turn limit" if run.end_reason == TURN_LIMIT_SUBTYPE else ""
+        lines.append(f"- Turns: {turns}{cut}")
+    elif run.end_reason == TURN_LIMIT_SUBTYPE:
+        lines.append(f"- Turns: {run.turns} · cut by turn limit")
     if view.split is not None:
         lines.append(
             f"- Context of the first request: {view.split.first_request:,} tokens · "
             f"fixed session context ≈ {view.split.fixed:,} ({view.split.fixed_share:.0%}) · "
             f"your request ≈ {view.split.request:,}"
         )
+    if view.cache is not None:
+        lines.append(f"- {english(cache_message(view.cache))}")
     if view.changed_files:
         lines += ["", "## Changed files", "", *(f"- `{path}`" for path in view.changed_files)]
     if view.tokens_by_agent:
@@ -134,7 +173,8 @@ class ResultQuery:
         if run is None:
             return None
         meta = self._reports.meta(run.id) or {}
-        text = self._reports.report(run.id) or ""
+        text = strip_preamble(self._reports.report(run.id) or "")
+        task_type = str(meta.get("task_type") or "")
         prompt_chars = meta.get("prompt_chars")
         events = self._ledger.events(EventQuery(run_id=run.id))
         fallback = next(
@@ -142,9 +182,10 @@ class ResultQuery:
             None,
         )
         overhead = session_overhead(events, prompt_chars if isinstance(prompt_chars, int) else 0)
+        single, shape_known = stored_shape(meta, run, task_type)
         return ResultView(
             run=run,
-            task_type=str(meta.get("task_type") or ""),
+            task_type=task_type,
             simple=meta.get("simple") is True,
             text=text,
             sections=parse_sections(text),
@@ -158,6 +199,8 @@ class ResultQuery:
             overhead=overhead,
             fallback_error=fallback.fallback_error if fallback is not None else "",
             fallback_from=fallback.fallback_from if fallback is not None else "",
+            single=single,
+            shape_known=shape_known,
         )
 
     def before(self, run_id: str, path: str) -> str | None:

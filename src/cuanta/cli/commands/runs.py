@@ -136,6 +136,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Document, Hint, KeyValues, Line, MarkdownText, Verbatim
     from cuanta.cli.fmt import usd
+    from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
     from cuanta.domain.messages import english
     from cuanta.domain.overhead import overhead_messages, overhead_payload
 
@@ -150,6 +151,10 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "kind": run.kind,
         "type": view.task_type,
         "simple": view.simple,
+        "shape": "unknown" if not view.shape_known else "single" if view.single else "pipeline",
+        "max_turns": run.max_turns,
+        "turns": run.turns,
+        "end_reason": run.end_reason,
         "status": run.status,
         "engine": run.engine,
         "model": run.model,
@@ -167,14 +172,29 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
             blocks=(Verbatim(text.rstrip("\n")),), payload={**payload, "markdown": text}
         )
     duration = "n/a" if view.duration_s is None else f"{view.duration_s:,.0f} s"
+    turn_rows: tuple[tuple[str, str], ...] = ()
+    if run.max_turns > 0 or run.end_reason == TURN_LIMIT_SUBTYPE:
+        count = f"{run.turns}/{run.max_turns}" if run.max_turns > 0 else str(run.turns)
+        cut = " · cut by turn limit" if run.end_reason == TURN_LIMIT_SUBTYPE else ""
+        turn_rows = (("turns", f"{count}{cut}"),)
     rows = (
         ("run", run.id),
         ("type", view.task_type or run.kind),
-        ("mode", "simple (one agent, no project knowledge)" if view.simple else "Forge pipeline"),
+        (
+            "mode",
+            "unknown shape"
+            if not view.shape_known
+            else "simple (one agent, no project knowledge)"
+            if view.simple
+            else "single context"
+            if view.single
+            else "pipeline",
+        ),
         ("status", run.status),
         ("engine", f"{run.engine} · {run.model or 'default model'}"),
         ("duration", duration),
         ("cost", usd(run.cost_usd)),
+        *turn_rows,
         ("files changed", str(len(view.changed_files))),
     )
     blocks: list[Block] = [KeyValues(rows)]

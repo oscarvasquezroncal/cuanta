@@ -8,7 +8,15 @@ from cuanta.application.instinct import DecisionScope
 from cuanta.application.mandate import Composed, MandateReport, MandateService, allowed_tools
 from cuanta.application.route_apply import Applied, MandateRouting, RouteOptions
 from cuanta.domain.agents import role_of
-from cuanta.domain.depth import DepthProfile, parse_depth, profile, read_budget_line
+from cuanta.domain.depth import (
+    DEFAULT_DEPTH,
+    MAX_TURNS,
+    DepthProfile,
+    parse_depth,
+    profile,
+    read_budget_line,
+    turn_limit,
+)
 from cuanta.domain.detection import GraphMode, Stack
 from cuanta.domain.engine import EngineEvent
 from cuanta.domain.errors import CuantaError, DomainFailure, NotAvailable
@@ -18,6 +26,7 @@ from cuanta.domain.mandate import (
     MandateType,
     analyst_system_prompt,
     decision_key,
+    investigation_builtin_tools,
     investigation_denied,
     investigation_tools,
     missing_fields,
@@ -49,6 +58,7 @@ class MandateOptions:
     no_cap: bool = False
     shape: str = ""
     intake_scope: str = ""
+    max_turns: int = 0
 
 
 def resolve_budget(options: MandateOptions, task_type: str, default: float) -> float:
@@ -59,6 +69,13 @@ def resolve_budget(options: MandateOptions, task_type: str, default: float) -> f
     if options.depth:
         return profile(parse_depth(options.depth), task_type).cost_cap_usd
     return default
+
+
+def resolve_max_turns(options: MandateOptions, chosen: DepthProfile | None, default: int) -> int:
+    return (
+        turn_limit(chosen, options.max_turns if options.max_turns > 0 else default)
+        or MAX_TURNS[DEFAULT_DEPTH]
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +138,7 @@ class MandateFlow:
         cwd: str,
         default_engine: str,
         default_budget: float,
+        default_max_turns: int = 0,
         final_suite: Callable[[str], str | None] | None = None,
         routing: MandateRouting | None = None,
         has_agents: Callable[[], bool] | None = None,
@@ -142,6 +160,7 @@ class MandateFlow:
         self._cwd = cwd
         self._default_engine = default_engine
         self._default_budget = default_budget
+        self._default_max_turns = default_max_turns
         self._active: Engine | None = None
 
     @property
@@ -210,6 +229,12 @@ class MandateFlow:
             append_system_prompt=system,
             unset_env=applied.unset if applied is not None else (),
             max_budget_usd=resolve_budget(options, request.type, self._default_budget),
+            max_turns=(resolve_max_turns(options, depth, self._default_max_turns) if claude else 0),
+            tools=(
+                investigation_builtin_tools(options.simple, shape, graph_available)
+                if claude and investigation
+                else None
+            ),
             hu_ref=options.hu.upper(),
             parent_id=options.parent,
             run_id=run_id,
@@ -329,6 +354,7 @@ class MandateSetup:
     budget_usd: float
     forge_ready: bool = True
     init_estimate: float | None = None
+    max_turns: int = 0
 
 
 @dataclass(frozen=True, slots=True)

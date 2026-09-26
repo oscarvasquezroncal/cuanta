@@ -1111,7 +1111,7 @@ Button.chip.depth-chip.-current, Button.chip.layout-chip.-current {
     margin-right: 1;
 }
 
-#wiz-improve-note, #wiz-sent-body, #wiz-estimate {
+#wiz-improve-note, #wiz-sent-body, #wiz-estimate, #wiz-prefix {
     height: auto;
 }
 
@@ -1284,7 +1284,7 @@ Button:focus {
     margin-left: 1;
 }
 
-#result-facts, #result-split, #result-simple {
+#result-facts, #result-split, #result-cache, #result-simple {
     height: auto;
 }
 

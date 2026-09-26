@@ -24,6 +24,12 @@ class Config:
     test_command: str = ""
     test_runner: str = ""
     budget_usd: float = 0.0
+    max_turns: int = 0
+    cache_ttl_s: int = 0
+    cache_auth: str = ""
+    cache_engine_version: str = ""
+    cache_measured_on: str = ""
+    cache_model: str = ""
     exclusions: tuple[str, ...] = ()
     remote_consent: tuple[str, ...] = ()
     store_prompts: bool = False
@@ -49,6 +55,12 @@ KEY_MAP: dict[str, str] = {
     "test.command": "test_command",
     "test.runner": "test_runner",
     "budget.usd": "budget_usd",
+    "runs.max_turns": "max_turns",
+    "cache.ttl_s": "cache_ttl_s",
+    "cache.auth": "cache_auth",
+    "cache.engine_version": "cache_engine_version",
+    "cache.measured_on": "cache_measured_on",
+    "cache.model": "cache_model",
     "detect.exclude": "exclusions",
     "privacy.store_prompts": "store_prompts",
     "loop.max_iterations": "loop_max_iterations",
@@ -64,6 +76,7 @@ ENV_MAP: dict[str, str] = {
     "CUANTA_TEST_COMMAND": "test_command",
     "CUANTA_TEST_RUNNER": "test_runner",
     "CUANTA_BUDGET_USD": "budget_usd",
+    "CUANTA_MAX_TURNS": "max_turns",
 }
 
 LAYOUTS = ("guided", "one_page")

@@ -11,6 +11,7 @@ REQUIRED_FLAGS = (
     "--permission-mode",
     "--allowedTools",
     "--disallowedTools",
+    "--tools",
     "--model",
     "--max-budget-usd",
     "--agents",
@@ -21,6 +22,7 @@ REQUIRED_FLAGS = (
     "--append-system-prompt",
 )
 REQUIRED_CHOICES = ("stream-json", "dontAsk")
+PROBE_FLAGS = ("--exclude-dynamic-system-prompt-sections", "--no-session-persistence")
 
 
 def build_command(binary: tuple[str, ...], request: EngineRequest) -> list[str]:
@@ -37,16 +39,24 @@ def build_command(binary: tuple[str, ...], request: EngineRequest) -> list[str]:
         command.extend(["--allowedTools", ",".join(request.allowed_tools)])
     if request.disallowed_tools:
         command.extend(["--disallowedTools", ",".join(request.disallowed_tools)])
+    if request.tools is not None:
+        command.extend(["--tools", ",".join(request.tools)])
     if request.model:
         command.extend(["--model", request.model])
     if request.max_budget_usd > 0:
         command.extend(["--max-budget-usd", f"{request.max_budget_usd:.2f}"])
+    if request.max_turns > 0:
+        command.extend(["--max-turns", str(request.max_turns)])
     if request.agents_file:
         command.extend(["--agents", request.agents_file])
     if request.effort:
         command.extend(["--effort", request.effort])
     if request.append_system_prompt:
         command.extend(["--append-system-prompt", request.append_system_prompt])
+    if request.stable_prefix:
+        command.append("--exclude-dynamic-system-prompt-sections")
+    if not request.persist_session:
+        command.append("--no-session-persistence")
     if request.mcp_config:
         command.extend(["--strict-mcp-config", "--mcp-config", request.mcp_config])
     if request.settings_file:

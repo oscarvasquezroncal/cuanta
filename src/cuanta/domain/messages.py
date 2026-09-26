@@ -290,6 +290,7 @@ ENGLISH: dict[str, str] = {
     "check.terminal": "terminal",
     "check.ledger": "ledger",
     "check.cuanta": ".cuanta",
+    "check.agents_md": "home AGENTS.md",
     "run_status.completed": "completed",
     "affected.no_baseline": "no baseline yet: the first run is the full suite",
     "affected.unsupported": "{runner} has no per-file selection: running the full suite",
@@ -381,6 +382,13 @@ ENGLISH: dict[str, str] = {
         "after {ttft}, {output} output tokens"
     ),
     "overhead.context_total": "the first request carried {total} tokens of context",
+    "overhead.cache_warm": (
+        "the first request hit a warm cache: {read} of {total} tokens read from cache ({share})"
+    ),
+    "overhead.cache_cold": (
+        "the first request hit a cold cache: nothing read from cache, "
+        "{written} of {total} tokens written to it"
+    ),
     "doctor.user_forge.old": (
         "a user-level claude-agent-forge {version} is installed; cuanta ships {vendored} per "
         "project and the old one can load in every session"
@@ -391,6 +399,13 @@ ENGLISH: dict[str, str] = {
     ),
     "doctor.startup": (
         "last session ({plugins} plugins, {servers} MCP servers, {hooks} hooks): {detail}"
+    ),
+    "doctor.agents_md.share": (
+        "{path}: {bytes} bytes ≈ {tokens} tokens · estimated {share} of the last session's "
+        "fixed context ({fixed} tokens; estimate at {per_token} bytes per token)"
+    ),
+    "doctor.agents_md.unavailable": (
+        "{path}: {bytes} bytes · share of the fixed context unavailable: no first-request data yet"
     ),
     "bench.budget": "bench budget reached after ${spent}: remaining runs skipped",
     "bench.run": "{order}/{total} {task} · {condition} · rep {rep}",
@@ -444,6 +459,24 @@ ENGLISH: dict[str, str] = {
     "terminal.hints": "{names} set",
     "terminal.vt_on": "virtual terminal processing enabled",
     "terminal.no_evidence": "no evidence of a legacy console",
+    "cache_probe.seed": (
+        "seed run on {model}: first request read {read} and wrote {written} cache tokens"
+    ),
+    "cache_probe.waiting": "waiting {seconds} s before the next run",
+    "cache_probe.warm": "after {gap} s: warm (read {read}, wrote {written})",
+    "cache_probe.cold": "after {gap} s: cold (read {read}, wrote {written})",
+    "cache_probe.unknown": "after {gap} s: no usable reading ({reason})",
+    "cache_probe.skipped": "the ${budget} cap does not cover the {gap} s check: skipped",
+    "cache_probe.verdict.measured": ("cache TTL {ttl} s (warm at {lower} s, cold at {upper} s)"),
+    "cache_probe.verdict.consistent": (
+        "cache TTL {ttl} s as the engine declares; warm at every gap up to {lower} s"
+    ),
+    "cache_probe.verdict.lower_bound": "cache TTL of at least {lower} s",
+    "cache_probe.verdict.uncacheable": (
+        "the prefix is below the model's minimum cacheable length; no TTL recorded"
+    ),
+    "cache_probe.verdict.unstable": ("the prefix changed between identical runs; no TTL recorded"),
+    "cache_probe.verdict.inconclusive": "inconclusive: no usable bracket; no TTL recorded",
 }
 
 

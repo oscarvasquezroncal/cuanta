@@ -160,6 +160,7 @@ class MandateView(Vertical):
                 setup.engines,
                 setup.forge_ready,
                 setup.init_estimate,
+                max_turns=setup.max_turns,
             )
             if not any(ready for _, ready in setup.engines):
                 self.app.notify(self._t("mandate.no_engine"), severity="warning")

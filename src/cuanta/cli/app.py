@@ -19,6 +19,7 @@ from cuanta.cli.commands import (
     mandate,
     meow,
     models,
+    probe,
     refresh,
     route,
     runs,
@@ -84,6 +85,7 @@ app.command("spectrum", help="Token map, leaks and Utilization Index for a run."
 app.add_typer(ledger.ledger_app, name="ledger")
 app.add_typer(instinct.instinct_app, name="instinct")
 app.add_typer(models.models_app, name="models")
+app.add_typer(probe.probe_app, name="probe")
 app.add_typer(bench.bench_app, name="bench")
 app.add_typer(runs.runs_app, name="runs")
 app.command("route", help="Plan which model each Forge role gets, and why (dry run).")(

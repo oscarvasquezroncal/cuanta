@@ -202,6 +202,11 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE decisions ADD COLUMN fallback_error TEXT NOT NULL DEFAULT '';
     ALTER TABLE decisions ADD COLUMN fallback_from TEXT NOT NULL DEFAULT ''
     """,
+    """
+    ALTER TABLE runs ADD COLUMN max_turns INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE runs ADD COLUMN turns INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE runs ADD COLUMN end_reason TEXT NOT NULL DEFAULT ''
+    """,
 )
 
 LATEST_VERSION = len(MIGRATIONS)

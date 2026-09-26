@@ -20,6 +20,9 @@ class Run:
     parent_id: str = ""
     task_type: str = ""
     depth: str = ""
+    max_turns: int = 0
+    turns: int = 0
+    end_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)

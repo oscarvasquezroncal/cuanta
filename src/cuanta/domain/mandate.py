@@ -191,7 +191,14 @@ def second_field(kind: str) -> str:
     return {"feature": "tests", "refactor": "constraints"}.get(kind, "why")
 
 
-REPORT_FORMAT = """End with this report, in this order, using these exact headings:
+REPORT_LANGUAGE = (
+    "Write the report in the same language as the request below: the language its WHAT and "
+    "WHY / EVIDENCE are written in (quoted logs, code and paths do not count). Keep the "
+    "headings above, the REQUEST labels and the TYPE value in English, exactly as written."
+)
+
+REPORT_FORMAT = (
+    """End with this report, in this order, using these exact headings:
 
 ## SUMMARY
 Two to five sentences that answer the request.
@@ -207,7 +214,11 @@ What the code could not answer; "None." when there are none.
 
 ## NEXT STEP
 The single most sensible next request, as a filled REQUEST block. Propose only; never start it.
+
 """
+    + REPORT_LANGUAGE
+    + "\n"
+)
 
 
 class Shape(StrEnum):
@@ -337,3 +348,12 @@ def investigation_denied(simple: bool, shape: Shape) -> tuple[str, ...]:
     if single_context(INVESTIGATION, simple, shape):
         return (*READ_ONLY_DENIED, *DELEGATION_TOOLS)
     return READ_ONLY_DENIED
+
+
+def investigation_builtin_tools(
+    simple: bool, shape: Shape, graph_available: bool = True
+) -> tuple[str, ...] | None:
+    if not single_context(INVESTIGATION, simple, shape):
+        return None
+    allowed = investigation_tools(simple, shape, graph_available)
+    return tuple(dict.fromkeys(item.split("(", 1)[0] for item in allowed))

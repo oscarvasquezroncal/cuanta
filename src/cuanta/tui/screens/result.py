@@ -22,10 +22,12 @@ from textual.widgets import (
 )
 
 from cuanta.application.results import ResultView
+from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
 from cuanta.domain.mandate import MandateRequest, MandateType
 from cuanta.domain.messages import msg
 from cuanta.domain.overhead import overhead_messages
 from cuanta.domain.report import link_file_refs
+from cuanta.tui.cache_text import first_request_content
 from cuanta.tui.fmt import money
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.screens.run_file import RunFileScreen
@@ -77,6 +79,10 @@ class ResultScreen(Screen[None]):
             yield Static(self._status(), id="result-status")
             yield Button(t("result.close"), id="result-close", compact=True)
         yield Static(self._facts(), id="result-facts")
+        if view.run.end_reason == TURN_LIMIT_SUBTYPE:
+            yield Static(
+                Content.styled(t("result.cut_by_turns"), "$warning"), id="result-turns-cut"
+            )
         if view.fallback_error:
             yield Static(
                 Content.styled(
@@ -94,6 +100,7 @@ class ResultScreen(Screen[None]):
         if view.simple:
             yield Static(Content.styled(t("result.simple_note"), "$warning"), id="result-simple")
         yield Static(self._split(), id="result-split")
+        yield Static(first_request_content(t, view.cache), id="result-cache")
         with FlowRow(id="result-actions", classes="button-row"):
             yield Button(
                 t("result.save_docs"),
@@ -160,7 +167,15 @@ class ResultScreen(Screen[None]):
             if view.duration_s is not None
             else t("spectrum.na")
         )
-        mode = t("result.mode_simple") if view.simple else t("result.mode_pipeline")
+        mode = (
+            t("result.mode_unknown")
+            if not view.shape_known
+            else t("result.mode_simple")
+            if view.simple
+            else t("result.mode_single")
+            if view.single
+            else t("result.mode_pipeline")
+        )
         parts = [
             kind_label,
             mode,
@@ -168,6 +183,10 @@ class ResultScreen(Screen[None]):
             money(view.run.cost_usd, t("spectrum.na")),
             view.run.model or t("wizard.engine_default"),
         ]
+        if view.run.max_turns > 0:
+            parts.append(t("result.turns", used=view.run.turns, limit=view.run.max_turns))
+        elif view.run.end_reason == TURN_LIMIT_SUBTYPE:
+            parts.append(t("result.turns_used", used=view.run.turns))
         return Content.styled("  ·  ".join(parts), "$text-muted")
 
     def _split(self) -> Content:

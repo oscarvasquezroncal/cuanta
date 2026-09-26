@@ -11,6 +11,7 @@ from cuanta.application.home import HomeSnapshot
 from cuanta.domain.fixes import FixKind, classify
 from cuanta.domain.progress import Status
 from cuanta.domain.voice import Mood
+from cuanta.tui.cache_text import prefix_content
 from cuanta.tui.commands import HEALTH, INIT, MANDATES, SPECTRUM, TESTS
 from cuanta.tui.fmt import compact, glyph, grouped, money, status_style
 from cuanta.tui.i18n import Catalog
@@ -75,6 +76,7 @@ class HomeView(VerticalScroll):
                 yield Static(t("home.week"), classes="card-title")
                 yield Sparkline([0] * 7, id="week")
                 yield Static("", id="week-total")
+                yield Static("", id="home-prefix")
 
     def on_mount(self) -> None:
         table = self.query_one("#runs", DataTable)
@@ -112,6 +114,7 @@ class HomeView(VerticalScroll):
         self.query_one("#week-total", Static).update(
             Content.styled(t("home.week_total", total=total), "$text-muted")
         )
+        self.query_one("#home-prefix", Static).update(prefix_content(t, snapshot.prefix))
 
     def _show_actions(self, initialized: bool) -> None:
         init = self.query_one(f"#action-{INIT}", Button)
