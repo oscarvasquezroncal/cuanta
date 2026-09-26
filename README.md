@@ -8,7 +8,7 @@
 
 <p>
   <a href="https://github.com/oscarvasquezroncal/cuanta/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/oscarvasquezroncal/cuanta/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Version 0.2.0 beta" src="https://img.shields.io/badge/version-0.2.0%20beta-F4A87C?style=flat-square&labelColor=1C1B26">
+  <a href="https://pypi.org/project/cuanta/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/cuanta?style=flat-square&color=F4A87C&labelColor=1C1B26"></a>
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-B4B9F5?style=flat-square&labelColor=1C1B26">
   <img alt="Platforms: Windows, Linux, macOS" src="https://img.shields.io/badge/platforms-windows%20%7C%20linux%20%7C%20macos-9FD8A0?style=flat-square&labelColor=1C1B26">
   <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-F2A7C3?style=flat-square&labelColor=1C1B26">
@@ -61,8 +61,8 @@ These are single runs on one production Next.js landing page (Windows 11, Claude
 |---|---|
 | **Spectrum** | A token map of every run: per agent, model, tool and file. Session overhead, start-up timing, cache share, planned vs. actual models, and leaks (amplification, repeated reads, raw test output, compactions). |
 | **Mandates** | Tell it what you need in your own words. cuanta extracts the questions, errors and scope, classifies the task, and launches the right shape: a single read-only context for investigations, or a Forge pipeline (analyst → senior → tester → docs) for fixes and features. |
-| **Depth and routing** | Quick, Normal or Deep sets the effort, the model tiers and a hard spend cap, plus a turn limit for Claude Code mandates. Each role gets a tier (economy → premium). cuanta maps tiers to the models you actually have, then audits what really ran. |
-| **Lean sessions** | Runs launched by cuanta start without your plugins, hooks and MCP servers, from byte-identical settings files, so the prompt prefix can be cached. |
+| **Depth and routing** | Quick, Normal or Deep sets the effort, model tiers and spend cap, with enforcement shown for the chosen engine, plus a turn limit for Claude Code mandates. Each role gets a tier (economy → premium). cuanta maps tiers to the models you actually have, then audits what really ran. |
+| **Lean sessions** | Claude Code runs launched by cuanta start without your plugins, hooks and MCP servers, from byte-identical settings files, so the prompt prefix can be cached. |
 | **Gateway** | `cuanta test` runs your suite once, clusters failures by signature and stores full logs as capsules. Agents get one line per failure and page into details only when they need to. |
 | **Results and ledger** | Launched runs store reports and file snapshots under `.cuanta/runs/`; costs and telemetry live in the local SQLite ledger. Results show diffs, and ledger data exports to CSV or JSON. |
 | **Instinct** | Fast, typed decisions (choice, score, yes/no) for classification and routing. An offline heuristic by default, or [TypeSafe's Jev](https://typesafe.ai) when you connect a key. |
@@ -114,14 +114,16 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 - [Codex CLI](https://github.com/openai/codex)
 - [OpenCode](https://opencode.ai)
 
-**3. Install cuanta from a source checkout, in the folder containing `pyproject.toml`:**
+**3. Install cuanta from PyPI:**
 
 ```bash
-uv tool install .
+uv tool install cuanta
 cuanta meow
 ```
 
-For web mode, use `uv tool install . --with textual-serve`. A PyPI release is planned.
+For web mode, use `uv tool install cuanta --with textual-serve`, then `cuanta ui --web`.
+To install a source checkout instead, run `uv tool install .` from the folder containing
+`pyproject.toml`. See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release steps.
 
 **Optional extras:**
 - [graphify](https://github.com/Graphify-Labs/graphify) for a code graph agents can query instead of reading files.
@@ -376,8 +378,8 @@ _Results will appear here after the first public run of `cuanta bench report --r
 
 ## Project status and roadmap
 
-**0.2.0, beta.**
-- **Tested daily** on Windows 11 with Claude Code 2.1.28x; CI is configured for Linux and macOS.
+**0.3.0, beta.**
+- **CI checks** Windows, Linux and macOS on Python 3.12 and 3.13, then installs the wheel on all three OS. Tagged releases also install the published PyPI package on all three OS.
 - **Codex and OpenCode** support is newer and less exercised.
 
 **Next up:**
@@ -407,7 +409,7 @@ House rules, enforced by tests:
 - Every visible string in both the English and Spanish catalogs.
 - Snapshot tests for every screen.
 
-Commits follow [Conventional Commits](https://www.conventionalcommits.org). See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org). See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and [SECURITY.md](SECURITY.md) for security reporting and supported versions.
 
 ### The palette
 
