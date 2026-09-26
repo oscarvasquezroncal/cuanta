@@ -48,13 +48,14 @@ class RunReports:
             return None
         return data if isinstance(data, dict) else None
 
-    def keep_blob(self, path: str, digest: str) -> None:
+    def keep_blob(self, path: str, digest: str, source: Workspace | None = None) -> None:
+        origin = source or self._workspace
         target = f"{BLOBS_DIR}/{digest}"
         if self._workspace.exists(target):
             return
-        if self._workspace.size_bytes(path) > BLOB_LIMIT_BYTES:
+        if origin.size_bytes(path) > BLOB_LIMIT_BYTES:
             return
-        text = self._workspace.read_text(path)
+        text = origin.read_text(path)
         if text is None or any(marker in text for marker in BINARY_MARKERS):
             return
         self._workspace.write_text(target, text)

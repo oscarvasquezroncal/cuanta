@@ -1027,8 +1027,12 @@ Button.chip.depth-chip.-current, Button.chip.layout-chip.-current {
     height: auto;
 }
 
-#wiz-cap-field, #cap-row, #summary-actions {
+#wiz-cap-field, #cap-row, #summary-actions, #sandbox-row, #wiz-sandbox-note {
     height: auto;
+}
+
+#sandbox-row Checkbox {
+    width: auto;
 }
 
 #cap-row Button, #cap-row Checkbox, #summary-actions Button {
@@ -1294,6 +1298,20 @@ Button:focus {
 
 #result-actions {
     margin-bottom: 1;
+}
+
+#result-trial, #result-trial-line, #result-trial-notes, #result-trial-handoff {
+    height: auto;
+}
+
+#result-trial {
+    margin: 1 0;
+}
+
+#confirm-details {
+    height: auto;
+    max-height: 14;
+    margin-top: 1;
 }
 
 #forge-gate-actions {

@@ -103,7 +103,7 @@ class LatestTests:
             return None
         ledger = self._ledger_factory()
         try:
-            records = ledger.test_runs(limit=1)
+            records = ledger.test_runs(limit=1, project_only=True)
             if not records:
                 return None
             return from_records(records[0], ledger.signatures(records[0].id))

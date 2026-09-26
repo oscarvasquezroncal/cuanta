@@ -34,7 +34,9 @@ class AffectedGateway:
         ledger: Ledger,
         exclusions: frozenset[str],
         neighbours: Callable[[], Mapping[str, frozenset[str]]],
+        remember: bool = True,
     ) -> None:
+        self._remember = remember
         self._gateway = gateway
         self._workspace = workspace
         self._ledger = ledger
@@ -86,6 +88,6 @@ class AffectedGateway:
             chosen = self.selection(choice.name, run_id, current)
         arguments = chosen.arguments if chosen is not None and not chosen.full else ()
         report = self._gateway.run(stack, config, tier, run_id=run_id, arguments=arguments)
-        if not arguments:
+        if not arguments and self._remember:
             self.remember(current)
         return ScopedReport(report, chosen)

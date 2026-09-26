@@ -97,6 +97,7 @@ class RunGateway:
         new_id: Callable[[], str],
         scratch: Path,
         triage: Callable[[Signature, str], str] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self._triage = triage
         self._root = root
@@ -106,6 +107,7 @@ class RunGateway:
         self._clock = clock
         self._new_id = new_id
         self._scratch = scratch
+        self._env = dict(env or {})
 
     def choose(
         self, stack: Stack, config: Config, tier: VerifyTier
@@ -146,7 +148,8 @@ class RunGateway:
                 f"{choice.name} needs a command", "set test.command in .cuanta/config.toml"
             )
         started_at = self._clock.now_iso()
-        result = runner.run(base, self._root, self._scratch, env)
+        merged = {**self._env, **(env or {})}
+        result = runner.run(base, self._root, self._scratch, merged or None)
         outcome = result.outcome
         signatures = cluster(outcome.failures, str(self._root))
         digest, _, size = self._capsules.put(result.output)

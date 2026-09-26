@@ -9,6 +9,7 @@ from cuanta.cli.runtime import Session, execute
 if TYPE_CHECKING:
     from cuanta.application.mandate import MandateReport, MandateService
     from cuanta.application.mandate_flow import MandateFlow, MandateOptions, Prepared
+    from cuanta.application.sandbox import SandboxResult
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Block, Document
     from cuanta.domain.mandate import MandateRequest
@@ -42,6 +43,8 @@ class MandateArgs:
     depth: str = ""
     max_turns: int = 0
     shape: str = ""
+    sandbox: bool = False
+    keep: bool = False
 
 
 def mandate_command(
@@ -121,6 +124,16 @@ def mandate_command(
             help="Investigations: single (one context, default) or pipeline (analyst subagent).",
         ),
     ] = "",
+    sandbox: Annotated[
+        bool,
+        typer.Option(
+            "--sandbox",
+            help="Work in an isolated copy of the project; apply later with cuanta runs apply.",
+        ),
+    ] = False,
+    keep: Annotated[
+        bool, typer.Option("--keep", help="Keep the isolated copy after the run (--sandbox).")
+    ] = False,
 ) -> None:
     args = MandateArgs(
         type=type_,
@@ -148,6 +161,8 @@ def mandate_command(
         depth=depth,
         max_turns=max_turns,
         shape=shape,
+        sandbox=sandbox,
+        keep=keep,
     )
     execute(ctx, lambda cli: run_mandate(cli, args))
 
@@ -220,6 +235,7 @@ def _options(args: MandateArgs) -> "MandateOptions":
     from cuanta.application.route_apply import RouteOptions
     from cuanta.cli.commands.route import PRESETS, ROUTE_MODES, check_choice, parse_role_models
     from cuanta.domain.depth import DEPTHS
+    from cuanta.domain.errors import DomainFailure
     from cuanta.domain.mandate import Shape
     from cuanta.domain.plugins import SESSIONS
 
@@ -228,6 +244,8 @@ def _options(args: MandateArgs) -> "MandateOptions":
     check_choice(args.preset, PRESETS, "--preset")
     check_choice(args.depth, tuple(depth.value for depth in DEPTHS), "--depth")
     check_choice(args.shape, tuple(shape.value for shape in Shape), "--shape")
+    if args.keep and not args.sandbox:
+        raise DomainFailure("--keep only applies to --sandbox runs", "add --sandbox")
     return MandateOptions(
         engine=args.engine,
         model=args.model,
@@ -245,6 +263,8 @@ def _options(args: MandateArgs) -> "MandateOptions":
         depth=args.depth,
         max_turns=args.max_turns,
         shape=args.shape,
+        sandbox=args.sandbox,
+        keep_copy=args.keep,
     )
 
 
@@ -284,14 +304,21 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
             composed = prepared.composed
             shown = display_command(composed.command, composed.prompt)
             team = tuple(Line(line, Status.INFO) for line in team_lines(prepared))
+            copy_note = (
+                (Line("isolated copy: not created in a dry run", Status.INFO),)
+                if args.sandbox
+                else ()
+            )
             return Document(
                 blocks=(
                     Verbatim(composed.prompt),
                     *team,
+                    *copy_note,
                     Line(f"command: {shown}", Status.INFO),
                 ),
                 payload={
                     "dry_run": True,
+                    "sandbox": args.sandbox,
                     "prompt": composed.prompt,
                     "command": list(composed.command),
                     "scope_hint": composed.hint.option,
@@ -303,10 +330,35 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
             )
         if args.cross_engine:
             return run_cross_engine(session, container, args)
+        if args.sandbox:
+            return run_sandbox(session, container, args)
         report = run_mandate_core(session, container, args)
     finally:
         container.close()
     return _final(report)
+
+
+def run_sandbox(session: Session, container: "Container", args: MandateArgs) -> "Document":
+    from cuanta.domain.progress import Status, StepFinished, StepStarted
+
+    ledger = container.shared_ledger()
+    flow = container.mandate_flow(ledger)
+    request, signatures = _build_request(session, flow.service, args)
+
+    def started(_: "MandateFlow", prepared: "Prepared") -> None:
+        publish_team(session, prepared)
+        label = f"pounce · {prepared.engine_name} · {prepared.composed.hint.option} · isolated copy"
+        session.presenter.publish(StepStarted("mandate", label))
+
+    result = container.run_sandboxed(
+        ledger, request, signatures, _options(args), session.presenter, on_start=started
+    )
+    report = result.report
+    if report is None:
+        raise RuntimeError("sandbox run ended without a report")
+    status = Status.OK if report.ok else Status.FAIL
+    session.presenter.publish(StepFinished("mandate", status, f"{report.tool_calls} tool calls"))
+    return _final(report, result)
 
 
 def run_cross_engine(session: Session, container: "Container", args: MandateArgs) -> "Document":
@@ -348,8 +400,23 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
     max_turns = resolve_max_turns(
         options, profile(parse_depth(options.depth), request.type), container.config.max_turns
     )
-    pipeline = container.cross_engine(container.shared_ledger(), args.cross_budget, max_turns)
-    report = pipeline.run(request, plan, session.presenter)
+    isolated: SandboxResult | None = None
+    if args.sandbox:
+        isolated = container.run_sandboxed_cross(
+            container.shared_ledger(),
+            request,
+            plan,
+            session.presenter,
+            args.cross_budget,
+            max_turns,
+            args.keep,
+        )
+        if isolated.cross is None:
+            raise RuntimeError("sandbox cross-engine run ended without a report")
+        report = isolated.cross
+    else:
+        pipeline = container.cross_engine(container.shared_ledger(), args.cross_budget, max_turns)
+        report = pipeline.run(request, plan, session.presenter)
     rows = tuple(
         (
             step.role.value,
@@ -378,6 +445,8 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
     ]
     if report.stopped is not None:
         blocks.append(Line(english(report.stopped), Status.WARN))
+    if isolated is not None:
+        blocks.extend(sandbox_blocks(isolated))
     payload: dict[str, object] = {
         "experimental": True,
         "ok": report.ok,
@@ -396,7 +465,10 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
             for step in report.steps
         ],
     }
-    return Document(blocks=tuple(blocks), payload=payload, exit_code=0 if report.ok else 1)
+    if isolated is not None:
+        payload["sandbox"] = sandbox_payload(isolated)
+    ok = report.ok and not guard_tripped(isolated)
+    return Document(blocks=tuple(blocks), payload=payload, exit_code=0 if ok else 1)
 
 
 def team_lines(prepared: "Prepared") -> list[str]:
@@ -450,7 +522,81 @@ def audit_rows(report: "MandateReport") -> tuple[tuple[str, str], ...]:
     return tuple(rows)
 
 
-def _final(report: "MandateReport") -> "Document":
+def sandbox_payload(result: "SandboxResult") -> dict[str, object]:
+    from cuanta.application.trials import trial_payload
+
+    return {
+        "copy_root": result.copy_root,
+        "removed": result.removed,
+        "trial": trial_payload(result.trial) if result.trial is not None else None,
+    }
+
+
+def sandbox_blocks(result: "SandboxResult") -> "list[Block]":
+    from cuanta.application.trials import STATE_HINT
+    from cuanta.cli.document import Hint, KeyValues, Line
+    from cuanta.domain.progress import Status
+
+    trial = result.trial
+    where = "removed" if result.removed else f"kept at {result.copy_root}"
+    rows = [("isolated copy", where)]
+    blocks: list[Block] = []
+    if trial is not None:
+        rows.append(("changes", f"{len(trial.changes)} files · +{trial.added} −{trial.removed}"))
+        if trial.changes:
+            rows.append(("patch", f".cuanta/trials/{trial.run_id}/change.patch"))
+        if trial.dependencies_changed_count:
+            blocks.append(
+                Line(
+                    "node_modules in the project changed during the run "
+                    f"({trial.dependencies_changed_count} files): run npm ci in the project",
+                    Status.FAIL,
+                )
+            )
+        if trial.state_changed_count:
+            blocks.append(
+                Line(
+                    "cuanta's own files in the project changed during the run: "
+                    f"{', '.join(trial.state_changed[:5])}; {STATE_HINT}",
+                    Status.FAIL,
+                )
+            )
+        if trial.base_missing:
+            blocks.append(
+                Line(
+                    f"{len(trial.base_missing)} files changed in the project while the run "
+                    "worked; this run cannot be applied",
+                    Status.WARN,
+                )
+            )
+        if trial.read_only_breach:
+            blocks.append(
+                Line("the investigation changed files in the copy; nothing to apply", Status.WARN)
+            )
+        if trial.ignored_changes_count:
+            shown = ", ".join(trial.ignored_changes[:5])
+            blocks.append(
+                Line(
+                    f"{trial.ignored_changes_count} files ignored by .gitignore changed in the "
+                    f"copy and were left out: {shown}",
+                    Status.WARN,
+                )
+            )
+        if trial.applicable:
+            blocks.append(
+                Hint(
+                    f"cuanta runs apply {trial.run_id} · cuanta runs branch {trial.run_id} "
+                    f"· cuanta runs discard {trial.run_id}"
+                )
+            )
+    return [KeyValues(tuple(rows)), *blocks]
+
+
+def guard_tripped(result: "SandboxResult | None") -> bool:
+    return result is not None and result.trial is not None and result.trial.guard_tripped
+
+
+def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> "Document":
     from cuanta.application.mandate import report_payload
     from cuanta.cli.document import Document, Hint, KeyValues, MarkdownText, MascotBlock, Panel
     from cuanta.cli.fmt import compact, percent, usd
@@ -471,11 +617,13 @@ def _final(report: "MandateReport") -> "Document":
         count = f"{run.turns}/{run.max_turns}" if run.max_turns > 0 else str(run.turns)
         cut = " · cut by turn limit" if run.end_reason == TURN_LIMIT_SUBTYPE else ""
         turn_rows = (("turns", f"{count}{cut}"),)
+    trial = isolated.trial if isolated is not None else None
+    changed = len(trial.changes) if trial is not None else len(report.changed_files)
     rows = (
         ("run", run.id),
         ("status", run.status),
         ("scope hint", report.hint.option),
-        ("files changed", str(len(report.changed_files))),
+        ("files changed", str(changed)),
         ("tests", report.tests),
         ("tokens by agent", agents or "-"),
         ("cost", usd(run.cost_usd, run.cost_source)),
@@ -497,5 +645,10 @@ def _final(report: "MandateReport") -> "Document":
         blocks.append(MarkdownText(report.text))
     if report.report_path:
         blocks.append(Hint(f"report saved: {report.report_path} · cuanta runs show {run.id}"))
+    if isolated is not None:
+        blocks.extend(sandbox_blocks(isolated))
     payload = {**report_payload(report), "report_text": report.text}
-    return Document(blocks=tuple(blocks), payload=payload, exit_code=0 if report.ok else 1)
+    if isolated is not None:
+        payload["sandbox"] = sandbox_payload(isolated)
+    ok = report.ok and not guard_tripped(isolated)
+    return Document(blocks=tuple(blocks), payload=payload, exit_code=0 if ok else 1)

@@ -19,6 +19,7 @@ class Config:
     listener_mode: str = "auto"
     mandate_layout: str = "guided"
     run_session: str = "lean"
+    git_workflow: str = "branches"
     onboarded: bool = False
     port: int = DEFAULT_PORT
     test_command: str = ""
@@ -50,6 +51,7 @@ KEY_MAP: dict[str, str] = {
     "ui.listener": "listener_mode",
     "ui.mandate_layout": "mandate_layout",
     "runs.session": "run_session",
+    "git.workflow": "git_workflow",
     "ui.onboarded": "onboarded",
     "listener.port": "port",
     "test.command": "test_command",
@@ -80,6 +82,7 @@ ENV_MAP: dict[str, str] = {
 }
 
 LAYOUTS = ("guided", "one_page")
+GIT_WORKFLOWS = ("branches", "trunk")
 LEGACY_LAYOUT_KEY = "ui.expert_mandate"
 REPLACED_KEYS: dict[str, str] = {"ui.mandate_layout": LEGACY_LAYOUT_KEY}
 _TRUE = {"1", "true", "yes", "on"}
@@ -164,6 +167,8 @@ def layer_from_table(table: Mapping[str, object]) -> dict[str, object]:
         layer["mandate_layout"] = legacy
     if layer.get("mandate_layout") not in (None, *LAYOUTS):
         del layer["mandate_layout"]
+    if layer.get("git_workflow") not in (None, *GIT_WORKFLOWS):
+        del layer["git_workflow"]
     return layer
 
 

@@ -293,6 +293,11 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_decisions_run ON decisions(run_id);
     CREATE INDEX idx_decisions_hash ON decisions(request_hash, question)
     """,
+    """
+    ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT '';
+    ALTER TABLE runs ADD COLUMN outcome TEXT NOT NULL DEFAULT '';
+    ALTER TABLE runs ADD COLUMN outcome_at TEXT NOT NULL DEFAULT ''
+    """,
 )
 
 LATEST_VERSION = len(MIGRATIONS)

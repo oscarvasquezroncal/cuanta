@@ -26,6 +26,9 @@ class Run:
     turns: int = 0
     end_reason: str = ""
     cost_source: CostSource = "unknown"
+    mode: str = ""
+    outcome: str = ""
+    outcome_at: str = ""
 
 
 @dataclass(frozen=True, slots=True)

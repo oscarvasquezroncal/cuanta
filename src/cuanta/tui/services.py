@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -45,11 +46,13 @@ from cuanta.domain.capsules import Level
 from cuanta.domain.config import Config
 from cuanta.domain.drafts import Draft
 from cuanta.domain.engine import EngineEvent
-from cuanta.domain.errors import NotAvailable
+from cuanta.domain.errors import DomainFailure, NotAvailable
 from cuanta.domain.fixes import Fix, FixAction
+from cuanta.domain.handoff import Handoff, parse_workflow
 from cuanta.domain.ledger import Decision, Run
 from cuanta.domain.loop import LOOP_OUT_OF_SCOPE, LoopGate, loop_gate
 from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.messages import english, msg
 from cuanta.domain.models import ModelEntry
 from cuanta.domain.progress import ProgressEvent
 from cuanta.domain.routing import RoutingPolicy
@@ -66,6 +69,7 @@ PREVIEW_WHERE = "src/auth/session.py"
 PREVIEW_TYPE = "bug"
 
 if TYPE_CHECKING:
+    from cuanta.application.trials import TrialStore
     from cuanta.bootstrap import Container
 
 
@@ -127,6 +131,12 @@ class Services(Protocol):
     def stop_mandate(self) -> bool: ...
 
     def result_view(self, run_id: str) -> ResultView | None: ...
+
+    def trial_handoff(self, run_id: str) -> Handoff | None: ...
+
+    def apply_trial(self, run_id: str) -> int: ...
+
+    def discard_trial(self, run_id: str) -> None: ...
 
     def save_result(self, run_id: str) -> str: ...
 
@@ -243,6 +253,9 @@ class ContainerServices:
     def __init__(self, project: Path) -> None:
         self._project = project
         self._flow: MandateFlow | None = None
+        self._starting = False
+        self._stop_requested = False
+        self._stop_lock = threading.Lock()
         self._clarity: dict[str, Clarity] = {}
 
     @property
@@ -376,6 +389,10 @@ class ContainerServices:
     ) -> MandateReport:
         container = self._container()
         try:
+            if options.sandbox:
+                return self._run_sandboxed(
+                    container, request, signatures, options, observer, progress
+                )
             flow = container.mandate_flow(container.shared_ledger())
             prepared = flow.prepare(request, signatures, options)
             self._flow = flow
@@ -384,9 +401,67 @@ class ContainerServices:
             self._flow = None
             container.close()
 
+    def _run_sandboxed(
+        self,
+        container: Container,
+        request: MandateRequest,
+        signatures: int,
+        options: MandateOptions,
+        observer: EventSink,
+        progress: ProgressCallback,
+    ) -> MandateReport:
+        def started(flow: MandateFlow, _: object) -> None:
+            with self._stop_lock:
+                if self._stop_requested:
+                    raise DomainFailure(english(msg("sandbox.stopped_before_launch")))
+                self._flow = flow
+
+        self._starting, self._stop_requested = True, False
+        try:
+            result = container.run_sandboxed(
+                container.shared_ledger(),
+                request,
+                signatures,
+                options,
+                CallbackSink(progress),
+                observer,
+                on_start=started,
+            )
+        finally:
+            self._starting = False
+        if result.report is None:
+            raise NotAvailable("the isolated run ended without a report", "check the ledger")
+        return result.report
+
+    def _trials[T](self, action: Callable[[Container, TrialStore], T]) -> T:
+        container = self._container()
+        try:
+            return action(container, container.trial_store(container.shared_ledger()))
+        finally:
+            container.close()
+
+    def trial_handoff(self, run_id: str) -> Handoff | None:
+        return self._trials(
+            lambda container, store: store.handoff(
+                run_id, parse_workflow(container.config.git_workflow), container.shell()
+            )
+        )
+
+    def apply_trial(self, run_id: str) -> int:
+        return self._trials(lambda _, store: len(store.apply(run_id).changes))
+
+    def discard_trial(self, run_id: str) -> None:
+        self._trials(lambda _, store: store.discard(run_id))
+
     def stop_mandate(self) -> bool:
-        flow = self._flow
-        return flow.stop() if flow is not None else False
+        with self._stop_lock:
+            flow = self._flow
+            if flow is None:
+                if self._starting:
+                    self._stop_requested = True
+                    return True
+                return False
+        return flow.stop()
 
     def _results[T](self, action: Callable[[ResultQuery], T]) -> T:
         container = self._container()

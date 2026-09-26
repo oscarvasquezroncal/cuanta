@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from cuanta.application.run_reports import RunReports
+from cuanta.application.trials import BASE_DIR, FILES_DIR, TrialStore, TrialSummary
 from cuanta.domain.cache import FirstRequestCache, cache_message
 from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
 from cuanta.domain.ledger import Run
@@ -23,6 +24,7 @@ from cuanta.domain.report import (
     strip_preamble,
     unified_diff,
 )
+from cuanta.domain.sandbox import trial_folder
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.workspace import Workspace
 
@@ -61,6 +63,7 @@ class ResultView:
     fallback_from: str = ""
     single: bool = False
     shape_known: bool = True
+    trial: TrialSummary | None = None
 
     @property
     def cache(self) -> FirstRequestCache | None:
@@ -149,6 +152,13 @@ def run_markdown(view: ResultView) -> str:
         )
     if view.cache is not None:
         lines.append(f"- {english(cache_message(view.cache))}")
+    if view.trial is not None:
+        trial = view.trial.trial
+        outcome = view.trial.outcome or "pending"
+        lines.append(
+            f"- Isolated copy: {len(trial.changes)} files · +{trial.added} −{trial.removed} "
+            f"· {outcome}"
+        )
     if view.changed_files:
         lines += ["", "## Changed files", "", *(f"- `{path}`" for path in view.changed_files)]
     if view.tokens_by_agent:
@@ -168,6 +178,7 @@ class ResultQuery:
         self._workspace = workspace
         self._ledger = ledger
         self._reports = RunReports(workspace)
+        self._trials = TrialStore(workspace, ledger, lambda: "")
         self._today = today
 
     def load(self, run_id: str) -> ResultView | None:
@@ -185,13 +196,15 @@ class ResultQuery:
         )
         overhead = session_overhead(events, prompt_chars if isinstance(prompt_chars, int) else 0)
         single, shape_known = stored_shape(meta, run, task_type)
+        trial = self._trials.summary(run.id)
+        changed = trial.trial.paths if trial is not None else _strings(meta.get("changed_files"))
         return ResultView(
             run=run,
             task_type=task_type,
             simple=meta.get("simple") is True,
             text=text,
             sections=parse_sections(text),
-            changed_files=_strings(meta.get("changed_files")),
+            changed_files=changed,
             tokens_by_agent=_counts(meta.get("tokens_by_agent")),
             tests=str(meta.get("tests") or ""),
             split=overhead.split,
@@ -203,6 +216,7 @@ class ResultQuery:
             fallback_from=fallback.fallback_from if fallback is not None else "",
             single=single,
             shape_known=shape_known,
+            trial=trial,
         )
 
     def before(self, run_id: str, path: str) -> str | None:
@@ -215,6 +229,14 @@ class ResultQuery:
         return self._workspace.read_text(path)
 
     def file(self, run_id: str, path: str) -> RunFile:
+        trial = self._trials.load(run_id)
+        if trial is not None and path in trial.paths:
+            folder = trial_folder(run_id)
+            return RunFile(
+                path,
+                self._workspace.read_text(f"{folder}/{BASE_DIR}/{path}"),
+                self._workspace.read_text(f"{folder}/{FILES_DIR}/{path}"),
+            )
         return RunFile(path, self.before(run_id, path), self.current(path))
 
     def save_to_docs(self, view: ResultView) -> str:

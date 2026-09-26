@@ -2,12 +2,42 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
+import shutil
+import stat
+from collections.abc import Callable
+from contextlib import suppress
+from functools import partial
 from pathlib import Path
 
 from cuanta.domain.detection import is_excluded_dir, is_source_file
 from cuanta.ports.workspace import ScanResult
 
 MAX_ENTRY_CANDIDATES = 12
+EXECUTE_BITS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+BINARY_FLAG = getattr(os, "O_BINARY", 0)
+
+
+def _unlocked(path: Path, action: Callable[[], object]) -> None:
+    try:
+        action()
+        return
+    except PermissionError:
+        if os.name != "nt":
+            raise
+        try:
+            mode = os.stat(path).st_mode
+        except OSError:
+            mode = stat.S_IWRITE
+        if mode & stat.S_IWRITE:
+            raise
+    os.chmod(path, mode | stat.S_IWRITE)
+    try:
+        action()
+    except BaseException:
+        with suppress(OSError):
+            os.chmod(path, stat.S_IMODE(mode))
+        raise
 
 
 def _test_kind(name: str, in_tests_dir: bool) -> str | None:
@@ -70,6 +100,33 @@ class LocalWorkspace:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8", newline="\n")
 
+    def read_bytes(self, relative: str) -> bytes | None:
+        try:
+            return self._path(relative).read_bytes()
+        except OSError:
+            return None
+
+    def write_bytes(self, relative: str, content: bytes, executable: bool | None = None) -> None:
+        path = self._path(relative)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        staged = path.with_name(f".cuanta-{secrets.token_hex(4)}.tmp")
+        handle = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | BINARY_FLAG, 0o666)
+        try:
+            with os.fdopen(handle, "wb") as writer:
+                writer.write(content)
+            if path.is_file():
+                shutil.copymode(path, staged)
+            if executable is not None:
+                mode = os.stat(staged).st_mode
+                os.chmod(staged, mode | EXECUTE_BITS if executable else mode & ~EXECUTE_BITS)
+            _unlocked(path, partial(os.replace, staged, path))
+        except BaseException:
+            with suppress(OSError):
+                os.chmod(staged, stat.S_IREAD | stat.S_IWRITE)
+            with suppress(OSError):
+                staged.unlink(missing_ok=True)
+            raise
+
     def sha256(self, relative: str) -> str | None:
         digest = hashlib.sha256()
         try:
@@ -103,7 +160,7 @@ class LocalWorkspace:
     def remove(self, relative: str) -> None:
         path = self._path(relative)
         if path.is_file():
-            path.unlink()
+            _unlocked(path, path.unlink)
 
     def scan(self, extra_exclusions: frozenset[str], collect_files: bool = False) -> ScanResult:
         count = 0

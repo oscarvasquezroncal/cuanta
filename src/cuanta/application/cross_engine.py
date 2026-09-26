@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from cuanta.application.engine_run import EngineLauncher, LaunchSpec
 from cuanta.application.routing import RoutePlan
@@ -19,6 +19,7 @@ from cuanta.domain.mandate import (
 from cuanta.domain.messages import Message, msg
 from cuanta.domain.progress import Status, finished, note, started
 from cuanta.domain.routing import Role
+from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch
 from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.progress import ProgressSink
 
@@ -92,13 +93,36 @@ class CrossEnginePipeline:
         cwd: str,
         budget_usd: float,
         max_turns: int = 0,
+        sandbox: SandboxLaunch | None = None,
+        checkpoint: Callable[[], Message | None] | None = None,
     ) -> None:
+        self._sandbox = sandbox
+        self._checkpoint = checkpoint
+        self.completed: list[CrossStep] = []
+        self.current = ""
         self._launchers = launchers
         self._definitions = definitions
         self._capsules = capsules
         self._cwd = cwd
         self._budget = budget_usd
         self._max_turns = max_turns if max_turns > 0 else MAX_TURNS[DEFAULT_DEPTH]
+
+    def _started(self, run_id: str) -> None:
+        self.current = run_id
+
+    def _isolated(self, spec: LaunchSpec, engine: str) -> LaunchSpec:
+        sandbox = self._sandbox
+        if sandbox is None:
+            return spec
+        denied = sandbox.denied if engine == "claude" else ()
+        return replace(
+            spec,
+            prompt=f"{spec.prompt}\n\n{sandbox.note}" if sandbox.note else spec.prompt,
+            temporary_copy=True,
+            mode=SANDBOX_MODE,
+            env=sandbox.env,
+            disallowed_tools=(*spec.disallowed_tools, *denied),
+        )
 
     def _handoff(self, text: str) -> str:
         if len(text) <= INLINE_EVIDENCE_LIMIT:
@@ -109,6 +133,7 @@ class CrossEnginePipeline:
     def run(self, request: MandateRequest, plan: RoutePlan, progress: ProgressSink) -> CrossReport:
         definitions = self._definitions()
         steps: list[CrossStep] = []
+        self.completed = steps
         spent: float | None = 0.0
         handoff = ""
         parent = ""
@@ -138,20 +163,20 @@ class CrossEnginePipeline:
             progress.publish(
                 started(key, msg("cross.step", role=role.value, engine=route.engine, model=model))
             )
+            spec = LaunchSpec(
+                kind=CROSS_KIND,
+                prompt=role_prompt(body, role, request, handoff),
+                cwd=self._cwd,
+                allowed_tools=tools_of(definition) if route.engine == "claude" else (),
+                model=model,
+                max_budget_usd=remaining if self._budget > 0 else 0.0,
+                max_turns=self._max_turns if route.engine == "claude" else 0,
+                scope=role.value,
+                parent_id=parent,
+                read_only=read_only,
+            )
             launch = launcher.launch(
-                LaunchSpec(
-                    kind=CROSS_KIND,
-                    prompt=role_prompt(body, role, request, handoff),
-                    cwd=self._cwd,
-                    allowed_tools=tools_of(definition) if route.engine == "claude" else (),
-                    model=model,
-                    max_budget_usd=remaining if self._budget > 0 else 0.0,
-                    max_turns=self._max_turns if route.engine == "claude" else 0,
-                    scope=role.value,
-                    parent_id=parent,
-                    read_only=read_only,
-                ),
-                lambda _: None,
+                self._isolated(spec, route.engine), lambda _: None, self._started
             )
             parent = parent or launch.run.id
             outcome = launch.outcome
@@ -177,6 +202,9 @@ class CrossEnginePipeline:
                     key, Status.OK if ok else Status.FAIL, msg("cross.done", run=launch.run.id)
                 )
             )
+            stop = self._checkpoint() if self._checkpoint is not None else None
+            if stop is not None:
+                return CrossReport(tuple(steps), False, spent, stop)
             if not ok:
                 if outcome.result is not None and outcome.result.subtype == "error_cost_unknown":
                     return CrossReport(tuple(steps), False, spent, msg("engine.cost_unknown"))

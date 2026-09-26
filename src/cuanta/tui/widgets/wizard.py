@@ -124,6 +124,7 @@ class MandateWizard(Vertical):
         self.depth = DEFAULT_DEPTH.value
         self.custom_cap = False
         self.no_cap = False
+        self.sandbox = False
         self.understanding: Understanding | None = None
         self.plan: RoutePlan | None = None
         self.estimate: Estimate | None = None
@@ -259,6 +260,9 @@ class MandateWizard(Vertical):
         yield Select([], allow_blank=True, disabled=True, id="wiz-engine")
         yield Static("", id="wiz-guarantees")
         yield Static("", id="wiz-guarantee-warning")
+        with Horizontal(id="sandbox-row"):
+            yield Checkbox(t("wizard.sandbox"), False, id="wiz-sandbox", compact=True)
+        yield Static(Content.styled(t("wizard.sandbox_note"), "$text-muted"), id="wiz-sandbox-note")
         with Vertical(id="team-cards"):
             yield Static("", id="team-simple-note")
         yield Static(t("wizard.depth_title"), classes="card-title")
@@ -296,6 +300,7 @@ class MandateWizard(Vertical):
         self.query_one("#wiz-cap-field").display = False
         self.query_one("#team-cards").display = False
         self.query_one("#team-simple-note").display = False
+        self.query_one("#wiz-sandbox-note").display = False
         self._size_nav()
         self._show_example()
         self._paint()
@@ -439,6 +444,7 @@ class MandateWizard(Vertical):
             max_turns=self.max_turns,
             no_cap=self.no_cap,
             intake_scope=understood.intake_scope if understood is not None else "",
+            sandbox=self.sandbox,
         )
 
     def _paint(self) -> None:
@@ -763,6 +769,10 @@ class MandateWizard(Vertical):
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         event.stop()
+        if event.checkbox.id == "wiz-sandbox":
+            self.sandbox = event.value
+            self.query_one("#wiz-sandbox-note").display = event.value
+            return
         if event.checkbox.id != "wiz-no-cap":
             return
         if not event.value:

@@ -149,7 +149,7 @@ class MandateRouting:
         options: RouteOptions | None = None,
     ) -> RouteInputs:
         chosen = options or RouteOptions(clarity=clarity)
-        latest = self._ledger.test_runs(limit=1)
+        latest = self._ledger.test_runs(limit=1, project_only=True)
         status = latest[0].status if latest else "unknown"
         return RouteInputs(
             task_type=request.type,

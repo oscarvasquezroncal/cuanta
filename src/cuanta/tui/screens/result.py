@@ -22,8 +22,10 @@ from textual.widgets import (
 )
 
 from cuanta.application.results import ResultView
+from cuanta.application.trials import REJECTED
 from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
 from cuanta.domain.guarantees import budget_stop_reason
+from cuanta.domain.handoff import Handoff
 from cuanta.domain.mandate import MandateRequest, MandateType
 from cuanta.domain.messages import msg
 from cuanta.domain.overhead import overhead_messages
@@ -31,6 +33,7 @@ from cuanta.domain.report import link_file_refs
 from cuanta.tui.cache_text import first_request_content
 from cuanta.tui.fmt import run_money
 from cuanta.tui.i18n import Catalog
+from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.screens.run_file import RunFileScreen
 from cuanta.tui.services import Services
 from cuanta.tui.widgets.flow import FlowRow
@@ -67,6 +70,7 @@ class ResultScreen(Screen[None]):
         self._services = services
         self._t = catalog
         self.view = view
+        self._handoff: Handoff | None = None
 
     @property
     def investigation(self) -> bool:
@@ -107,6 +111,17 @@ class ResultScreen(Screen[None]):
             yield Static(Content.styled(t("result.simple_note"), "$warning"), id="result-simple")
         yield Static(self._split(), id="result-split")
         yield Static(first_request_content(t, view.cache), id="result-cache")
+        if view.trial is not None:
+            with Vertical(id="result-trial"):
+                yield Static("", id="result-trial-line")
+                yield Static("", id="result-trial-notes")
+                yield Static("", id="result-trial-handoff")
+                with FlowRow(id="result-trial-actions", classes="button-row"):
+                    yield Button(
+                        t("result.apply"), id="result-apply", variant="primary", compact=True
+                    )
+                    yield Button(t("result.discard"), id="result-discard", compact=True)
+                    yield Button(t("result.copy_commands"), id="result-copy-commands", compact=True)
         with FlowRow(id="result-actions", classes="button-row"):
             yield Button(
                 t("result.save_docs"),
@@ -248,6 +263,174 @@ class ResultScreen(Screen[None]):
         for agent, tokens in self.view.tokens_by_agent.items():
             agents.add_row(agent, f"{tokens:,}")
         self.query_one("#result-continue", Button).disabled = self.view.follow_up is None
+        if self.view.trial is not None:
+            self._paint_trial()
+            self.load_handoff()
+
+    def _paint_trial(self) -> None:
+        t = self._t
+        summary = self.view.trial
+        if summary is None:
+            return
+        trial = summary.trial
+        if summary.applied_at:
+            state = t("result.trial_applied", at=summary.applied_at[:16].replace("T", " "))
+        elif summary.pending:
+            state = t("result.trial_pending")
+        else:
+            when = summary.outcome_at[:16].replace("T", " ")
+            state = t(f"result.trial_{summary.outcome}", at=when)
+        counts = t(
+            "result.trial_summary",
+            files=len(trial.changes),
+            added=trial.added,
+            removed=trial.removed,
+        )
+        self.query_one("#result-trial-line", Static).update(
+            Content.assemble(
+                (f"{t('result.trial_title')}  ", "bold $accent"),
+                (f"{counts}  ", ""),
+                (state, "$text-muted"),
+            )
+        )
+        notes: list[tuple[str, str]] = []
+        if trial.dependencies_changed_count:
+            notes.append(
+                (t("result.trial_dependencies", count=trial.dependencies_changed_count), "$error")
+            )
+        if trial.state_changed_count:
+            notes.append(
+                (t("result.trial_state", paths=", ".join(trial.state_changed[:5])), "$error")
+            )
+        if trial.base_missing:
+            notes.append(
+                (t("result.trial_base_missing", count=len(trial.base_missing)), "$warning")
+            )
+        if trial.read_only_breach:
+            notes.append((t("result.trial_breach"), "$warning"))
+        if summary.drift:
+            notes.append((t("result.trial_drift", paths=", ".join(summary.drift[:5])), "$warning"))
+        if trial.ignored_changes_count:
+            ignored = t(
+                "result.trial_ignored",
+                count=trial.ignored_changes_count,
+                paths=", ".join(trial.ignored_changes[:5]),
+            )
+            notes.append((ignored, "$warning"))
+        if trial.kept:
+            notes.append((t("result.trial_kept", path=trial.copy_root), "$text-muted"))
+        body = self.query_one("#result-trial-notes", Static)
+        body.update(Content("\n").join(Content.styled(text, style) for text, style in notes))
+        body.display = bool(notes)
+        rejected = summary.outcome == REJECTED
+        open_apply = trial.applicable and not summary.applied_at and not rejected
+        apply = self.query_one("#result-apply", Button)
+        apply.display = open_apply
+        apply.disabled = bool(summary.drift)
+        self.query_one("#result-discard", Button).display = (
+            summary.pending and not summary.applied_at
+        )
+        self.query_one("#result-copy-commands", Button).display = trial.applicable and not rejected
+        actions = self.query_one("#result-trial-actions", FlowRow)
+        actions.display = any(button.display for button in actions.query(Button))
+        actions.reflow()
+
+    def _paint_handoff(self, handoff: Handoff | None) -> None:
+        t = self._t
+        self._handoff = handoff
+        widget = self.query_one("#result-trial-handoff", Static)
+        if handoff is None:
+            widget.display = False
+            return
+        lines = [t("result.trial_commit", subject=handoff.subject)]
+        if handoff.branch:
+            lines.append(t("result.trial_branch", branch=handoff.branch))
+        elif handoff.current_branch:
+            lines.append(t("result.trial_current", branch=handoff.current_branch))
+        content = Content.styled("\n".join(lines), "$text-muted")
+        if handoff.uncommitted:
+            warning = t("result.trial_uncommitted", paths=", ".join(handoff.uncommitted[:5]))
+            content = Content("\n").join((content, Content.styled(warning, "$warning")))
+        if handoff.untracked:
+            warning = t("result.trial_untracked", paths=", ".join(handoff.untracked[:5]))
+            content = Content("\n").join((content, Content.styled(warning, "$warning")))
+        widget.update(content)
+        widget.display = True
+
+    @work(thread=True, exclusive=True, group="trial-handoff", exit_on_error=False)
+    def load_handoff(self) -> None:
+        try:
+            handoff = self._services.trial_handoff(self.view.run.id)
+        except Exception:
+            handoff = None
+        self.app.call_from_thread(self._paint_handoff, handoff)
+
+    def confirm_apply(self) -> None:
+        summary = self.view.trial
+        if summary is None:
+            return
+        trial = summary.trial
+        shown = tuple(f"{change.kind.value}  {change.path}" for change in trial.changes[:12])
+        extra = (f"… +{len(trial.changes) - 12}",) if len(trial.changes) > 12 else ()
+        self.app.push_screen(
+            ConfirmScreen(
+                self._t,
+                "result.apply_title",
+                "result.apply_body",
+                "result.apply_confirm",
+                "result.apply_cancel",
+                {"files": len(trial.changes), "added": trial.added, "removed": trial.removed},
+                (*shown, *extra),
+            ),
+            self.apply_answer,
+        )
+
+    def apply_answer(self, confirmed: bool | None) -> None:
+        if confirmed:
+            self.apply_trial()
+
+    def _refresh(self, view: ResultView | None) -> None:
+        if view is None:
+            return
+        self.view = view
+        self._paint_trial()
+        self.load_handoff()
+
+    @work(thread=True, exclusive=True, group="trial", exit_on_error=False)
+    def apply_trial(self) -> None:
+        run_id = self.view.run.id
+        try:
+            files = self._services.apply_trial(run_id)
+        except Exception as error:
+            self.app.call_from_thread(self.app.notify, str(error), severity="error")
+            return
+        self.app.call_from_thread(self.app.notify, self._t("result.applied", files=files))
+        self.app.call_from_thread(self._refresh, self._services.result_view(run_id))
+
+    @work(thread=True, exclusive=True, group="trial", exit_on_error=False)
+    def discard_trial(self) -> None:
+        run_id = self.view.run.id
+        try:
+            self._services.discard_trial(run_id)
+        except Exception as error:
+            self.app.call_from_thread(self.app.notify, str(error), severity="error")
+            return
+        self.app.call_from_thread(self.app.notify, self._t("result.discarded"))
+        self.app.call_from_thread(self._refresh, self._services.result_view(run_id))
+
+    @work(thread=True, exclusive=True, group="trial-copy", exit_on_error=False)
+    def copy_commands(self) -> None:
+        try:
+            handoff = self._services.trial_handoff(self.view.run.id)
+            if handoff is None:
+                return
+            text = handoff.chained
+            self.app.call_from_thread(self.app.copy_to_clipboard, text)
+            self._services.copy(text)
+        except Exception as error:
+            self.app.call_from_thread(self.app.notify, str(error), severity="error")
+            return
+        self.app.call_from_thread(self.app.notify, self._t("result.commands_copied"))
 
     def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
         event.stop()
@@ -283,6 +466,12 @@ class ResultScreen(Screen[None]):
             self.dismiss(None)
         elif button == "result-export":
             self.export()
+        elif button == "result-apply":
+            self.confirm_apply()
+        elif button == "result-discard":
+            self.discard_trial()
+        elif button == "result-copy-commands":
+            self.copy_commands()
 
     @work(thread=True, exit_on_error=False)
     def save(self) -> None:

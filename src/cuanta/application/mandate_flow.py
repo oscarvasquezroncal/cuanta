@@ -37,12 +37,15 @@ from cuanta.domain.mandate import (
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.progress import Status, finished, started
 from cuanta.domain.routing import Role
+from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, sandbox_launch
 from cuanta.ports.engine import Engine
 from cuanta.ports.progress import ProgressSink
 
 PROMPT_PLACEHOLDER = "<prompt>"
 RUN_PLACEHOLDER = "<run id>"
 TRACE_PLACEHOLDER = "<trace>"
+PREVIEW_COPY = "<isolated copy>"
+PACKAGE_MANIFEST = "package.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +64,21 @@ class MandateOptions:
     intake_scope: str = ""
     max_turns: int = 0
     temporary_copy: bool = False
+    sandbox: bool = False
+    keep_copy: bool = False
+
+
+def isolated(spec: LaunchSpec, sandbox: SandboxLaunch | None, claude: bool) -> LaunchSpec:
+    if sandbox is None:
+        return spec
+    denied = sandbox.denied if claude else ()
+    return replace(
+        spec,
+        temporary_copy=True,
+        mode=SANDBOX_MODE,
+        env=sandbox.env,
+        disallowed_tools=(*spec.disallowed_tools, *denied),
+    )
 
 
 def resolve_budget(options: MandateOptions, task_type: str, default: float) -> float:
@@ -147,7 +165,9 @@ class MandateFlow:
         scope: DecisionScope | None = None,
         new_run_id: Callable[[], str] | None = None,
         graph_mode: Callable[[], GraphMode] = lambda: GraphMode.NONE,
+        sandbox: SandboxLaunch | None = None,
     ) -> None:
+        self._sandbox = sandbox
         self._has_agents = has_agents
         self._scope = scope or DecisionScope()
         self._new_run_id = new_run_id
@@ -249,6 +269,8 @@ class MandateFlow:
             read_only=investigation,
             temporary_copy=options.temporary_copy,
         )
+        sandbox = self._launch(options)
+        base = isolated(base, sandbox, claude)
 
         def command(prompt: str) -> list[str]:
             preview = launcher.request(
@@ -257,6 +279,8 @@ class MandateFlow:
             return engine.command(preview)
 
         extra = "" if system or not options.depth else budget_line
+        if sandbox is not None and sandbox.note:
+            extra = f"{extra}\n{sandbox.note}" if extra else sandbox.note
         composed = self._service.compose(
             request,
             signatures,
@@ -273,6 +297,12 @@ class MandateFlow:
                 self._service.link_decisions(options.intake_scope, run_id)
         spec = replace(base, prompt=composed.prompt, scope=composed.hint.option)
         return Prepared(composed, engine_name, launcher, spec, applied)
+
+    def _launch(self, options: MandateOptions) -> SandboxLaunch | None:
+        if self._sandbox is not None or not options.sandbox:
+            return self._sandbox
+        linked = PACKAGE_MANIFEST in self._stack().manifests
+        return sandbox_launch(self._cwd, PREVIEW_COPY, linked)
 
     def _depth(self, depth: str, task_type: str) -> DepthProfile | None:
         if not depth and task_type != INVESTIGATION:
@@ -296,15 +326,15 @@ class MandateFlow:
     ) -> MandateReport:
         engine = prepared.launcher.engine
         name = prepared.engine_name
-        if not engine.available():
-            raise NotAvailable(f"{name} not found on PATH", "install it or pick another engine")
-        missing = engine.missing_flags()
-        if missing:
-            raise NotAvailable(
-                f"{name} lacks flags cuanta needs: {', '.join(missing)}", f"upgrade {name}"
-            )
         self._active = engine
         try:
+            if not engine.available():
+                raise NotAvailable(f"{name} not found on PATH", "install it or pick another engine")
+            missing = engine.missing_flags()
+            if missing:
+                raise NotAvailable(
+                    f"{name} lacks flags cuanta needs: {', '.join(missing)}", f"upgrade {name}"
+                )
             report = self._service.run(
                 prepared.composed,
                 prepared.launcher,
