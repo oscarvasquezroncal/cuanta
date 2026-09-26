@@ -68,6 +68,20 @@ def test_cancel_terminates_a_running_engine(
     )
 
 
+def test_a_cancel_before_launch_ends_a_silent_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = tmp_path / "silent.py"
+    script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    monkeypatch.setenv("CUANTA_CLAUDE_BIN", f'"{sys.executable}" "{script}"')
+    engine = ClaudeCodeEngine(SubprocessRunner())
+    engine.cancel()
+    started = time.monotonic()
+    outcome = engine.run(EngineRequest(prompt="x", cwd=str(tmp_path), env={}), lambda event: None)
+    assert time.monotonic() - started < 20
+    assert not outcome.ok
+
+
 def test_opencode_step_cap_reaps_an_engine_and_its_children(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
