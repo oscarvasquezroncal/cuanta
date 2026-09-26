@@ -59,6 +59,13 @@ def test_spectrum_json_contract(seeded: Path) -> None:
     kinds = {leak["kind"] for leak in document["leaks"]}
     assert {"repeated_read", "test_output", "amplification"} <= kinds
     assert document["tree"]["children"][0]["label"] == "main"
+    assert document["overhead"]["first_request_cache"] == {
+        "state": "warm",
+        "cache_read_tokens": 20_000,
+        "cache_write_tokens": 3_000,
+        "context_tokens": 27_000,
+        "share": 0.7407,
+    }
     assert_golden("spectrum.json", json.dumps(document, indent=2, sort_keys=True))
 
 

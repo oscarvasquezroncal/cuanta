@@ -62,6 +62,19 @@ def test_doctor_json(tmp_path: Path, fake_runner: FakeRunner) -> None:
     assert document["healthy"] is True
 
 
+def test_doctor_json_reports_home_agents_md_size(
+    tmp_path: Path, isolated_user_dirs: Path, fake_runner: FakeRunner
+) -> None:
+    (isolated_user_dirs / "AGENTS.md").write_bytes(b"x" * 230)
+    root = copy_repo("python_strong", tmp_path)
+    result = invoke(["doctor", "--json", "--project", str(root)])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    assert checks["agents-md"]["status"] == "info"
+    assert "~/AGENTS.md: 230 bytes" in checks["agents-md"]["detail"]
+    assert "unavailable" in checks["agents-md"]["detail"]
+
+
 def test_purr_alias_pretty(tmp_path: Path, fake_runner: FakeRunner) -> None:
     root = copy_repo("python_strong", tmp_path)
     result = invoke(["purr", "--project", str(root), "--no-emoji"], pretty=True)

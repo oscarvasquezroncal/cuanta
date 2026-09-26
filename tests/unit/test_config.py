@@ -48,6 +48,16 @@ def test_lists_and_bools_coerce() -> None:
     assert layer_from_env({"CUANTA_BUDGET_USD": "2.5"}) == {"budget_usd": 2.5}
 
 
+def test_max_turns_reads_settings_and_env() -> None:
+    settings = layer_from_table({"runs": {"max_turns": 30}})
+    environment = layer_from_env({"CUANTA_MAX_TURNS": "40"})
+    assert settings == {"max_turns": 30}
+    assert environment == {"max_turns": 40}
+    assert merge([settings, environment]).max_turns == 40
+    assert merge([]).max_turns == 0
+    assert layer_from_env({"CUANTA_MAX_TURNS": "abc"}) == {}
+
+
 @pytest.mark.parametrize(
     ("platform", "environ", "expected"),
     [

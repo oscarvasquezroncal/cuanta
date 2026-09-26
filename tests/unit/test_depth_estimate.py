@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from cuanta.application.estimate import estimate, similar_costs
-from cuanta.application.mandate_flow import MandateOptions, resolve_budget
+from cuanta.application.mandate_flow import MandateOptions, resolve_budget, resolve_max_turns
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.depth import (
     Depth,
@@ -13,6 +13,7 @@ from cuanta.domain.depth import (
     plan_cost,
     profile,
     read_budget_line,
+    turn_limit,
 )
 from cuanta.domain.ledger import Run
 from cuanta.domain.messages import english
@@ -50,6 +51,27 @@ def test_depth_maps_to_caps_effort_and_budgets() -> None:
     assert parse_depth("DEEP") is Depth.DEEP
     assert parse_depth("whatever") is Depth.NORMAL
     assert "open at most 20 files" in read_budget_line(normal)
+
+
+def test_depth_sets_turn_limits_with_headroom() -> None:
+    for depth, expected in ((Depth.QUICK, 20), (Depth.NORMAL, 40), (Depth.DEEP, 80)):
+        for kind in ("investigation", "bug"):
+            chosen = profile(depth, kind)
+            assert chosen.max_turns == expected
+            assert chosen.max_turns >= chosen.read_budget * 2
+            assert turn_limit(chosen) == expected
+    assert turn_limit(profile(Depth.NORMAL, "investigation"), 30) == 30
+    assert turn_limit(None) == 0
+
+
+def test_resolve_max_turns_prefers_option_then_setting_then_depth() -> None:
+    chosen = profile(Depth.NORMAL, "investigation")
+    assert resolve_max_turns(MandateOptions(max_turns=5), chosen, 30) == 5
+    assert resolve_max_turns(MandateOptions(), chosen, 30) == 30
+    assert resolve_max_turns(MandateOptions(no_cap=True), chosen, 0) == 40
+    assert resolve_max_turns(MandateOptions(), None, 0) == 40
+    assert resolve_max_turns(MandateOptions(), None, 30) == 30
+    assert resolve_max_turns(MandateOptions(max_turns=5), None, 30) == 5
 
 
 @pytest.mark.parametrize(

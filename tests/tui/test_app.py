@@ -5,6 +5,8 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import replace
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from textual.pilot import Pilot
@@ -12,6 +14,7 @@ from textual.widgets import Button, ContentSwitcher, DataTable, Static
 from textual.worker import WorkerCancelled
 
 from cuanta.application.doctor import result
+from cuanta.domain.cache import PrefixState, PrefixWindow
 from cuanta.domain.ledger import Run
 from cuanta.domain.messages import msg
 from cuanta.domain.progress import Status
@@ -330,6 +333,25 @@ def test_an_unpriced_run_shows_na_not_zero_dollars() -> None:
             cost = str(row[3])
             assert cost == shown
             assert "$0.00" not in cost
+
+        drive(make_app(services, language), scenario)
+
+
+def test_home_shows_the_measured_prefix_window_or_unknown() -> None:
+    until = datetime(2026, 1, 5, 10, 10, tzinfo=UTC)
+    for language, prefix, expected in (
+        (
+            "en",
+            PrefixWindow(PrefixState.WARM, until),
+            "last observed Claude prefix warm until",
+        ),
+        ("es", PrefixWindow(PrefixState.UNKNOWN), "último prefijo observado: desconocido"),
+    ):
+        services = FakeServices(home_snapshot=replace(snapshot(), prefix=prefix))
+
+        async def scenario(app: CuantaApp, pilot: Pilot[None], expected: str = expected) -> None:
+            await settle(app, pilot)
+            assert expected in str(app.query_one("#home-prefix", Static).render())
 
         drive(make_app(services, language), scenario)
 

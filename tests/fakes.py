@@ -46,7 +46,9 @@ class FakeRunner:
     binaries: dict[str, str] = field(default_factory=dict)
     responses: dict[str, Completed] = field(default_factory=dict)
     streams: dict[str, FakeStream] = field(default_factory=dict)
+    queued: dict[str, list[FakeStream]] = field(default_factory=dict)
     calls: list[tuple[str, ...]] = field(default_factory=list)
+    cwds: list[Path | None] = field(default_factory=list)
     envs: list[Mapping[str, str] | None] = field(default_factory=list)
     stdins: list[str | None] = field(default_factory=list)
     unsets: list[tuple[str, ...]] = field(default_factory=list)
@@ -69,6 +71,7 @@ class FakeRunner:
         timeout: float | None = None,
     ) -> Completed:
         self.calls.append(tuple(args))
+        self.cwds.append(cwd)
         self.envs.append(env)
         return self._key(args)
 
@@ -81,10 +84,14 @@ class FakeRunner:
         unset: Sequence[str] = (),
     ) -> FakeStream:
         self.calls.append(tuple(args))
+        self.cwds.append(cwd)
         self.envs.append(env)
         self.stdins.append(stdin_text)
         self.unsets.append(tuple(unset))
         joined = " ".join(args)
+        for prefix in sorted(self.queued, key=len, reverse=True):
+            if joined.startswith(prefix) and self.queued[prefix]:
+                return self.queued[prefix].pop(0)
         for prefix in sorted(self.streams, key=len, reverse=True):
             if joined.startswith(prefix):
                 return self.streams[prefix]

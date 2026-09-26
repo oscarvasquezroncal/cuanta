@@ -8,6 +8,7 @@ source       telemetry
 
 == session overhead ==
 the first request carried 27,000 tokens of context
+the first request hit a warm cache: 20,000 of 27,000 tokens read from cache (74%)
 
 run 01KFIXTURERUN0000000000000 · mandate · HU-007  98.8K · 100.0%
   - main  86.0K · 87.0%

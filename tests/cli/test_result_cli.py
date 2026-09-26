@@ -69,6 +69,7 @@ def test_a_fresh_project_stops_the_pipeline_and_simple_mode_keeps_the_report(
     assert (folder / "report.md").read_text(encoding="utf-8").rstrip("\n") == REPORT.rstrip("\n")
     meta = json.loads((folder / "run.json").read_text(encoding="utf-8"))
     assert meta["simple"] is True
+    assert meta["shape"] == "single"
     assert meta["task_type"] == "investigation"
 
 
@@ -105,6 +106,7 @@ def test_runs_list_show_and_markdown_read_the_stored_report(
     )
     assert shown["run_id"] == run_id
     assert shown["simple"] is True
+    assert shown["shape"] == "single"
     assert shown["report"].rstrip("\n") == REPORT.rstrip("\n")
     assert shown["sections"] == []
     plain = invoke(["runs", "show", run_id, "--plain", "--project", str(root)], env=env)
@@ -115,9 +117,50 @@ def test_runs_list_show_and_markdown_read_the_stored_report(
     )
     assert human.stdout.startswith(f"# Run {run_id}")
     assert "## Report" in human.stdout
+    meta_path = root / ".cuanta" / "runs" / run_id / "run.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta.pop("shape")
+    meta.pop("simple")
+    meta["handoffs"] = []
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    legacy = invoke(["runs", "show", run_id, "--json", "--project", str(root)], env=env)
+    assert json.loads(legacy.stdout)["shape"] == "unknown"
+    legacy_plain = invoke(["runs", "show", run_id, "--plain", "--project", str(root)], env=env)
+    assert "unknown shape" in legacy_plain.stdout
     missing = invoke(["runs", "show", "ZZZ", "--json", "--project", str(root)], env=env)
     assert missing.exit_code == 1
     assert "no run matches ZZZ" in json.loads(missing.stdout)["error"]["message"]
+
+
+def test_runs_show_drops_preamble_from_a_stored_report(tmp_path: Path, env: dict[str, str]) -> None:
+    root = copy_repo("bugfix", tmp_path)
+    ran = invoke(
+        [
+            "mandate",
+            "--type",
+            "investigation",
+            "--what",
+            "review the code",
+            "--why",
+            "find duplicate work",
+            "--out-of-scope",
+            "changes",
+            "--simple",
+            "--json",
+            "--project",
+            str(root),
+        ],
+        env=env,
+    )
+    assert ran.exit_code == 0, ran.stdout + ran.stderr
+    run_id = json.loads(ran.stdout)["run_id"]
+    raw = "I have enough evidence.\n\n## SUMMARY\nok\n\n## NEXT STEP\n- none\n"
+    (root / ".cuanta" / "runs" / run_id / "report.md").write_text(raw, encoding="utf-8")
+    shown = invoke(["runs", "show", run_id, "--json", "--project", str(root)], env=env)
+    assert shown.exit_code == 0, shown.stdout + shown.stderr
+    payload = json.loads(shown.stdout)
+    assert payload["report"].startswith("## SUMMARY")
+    assert payload["sections"][0] == "summary"
 
 
 def test_runs_open_launches_the_app_on_that_run(

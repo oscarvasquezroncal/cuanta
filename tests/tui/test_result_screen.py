@@ -5,6 +5,8 @@ from dataclasses import replace
 from textual.pilot import Pilot
 from textual.widgets import Button, DataTable, Input, Markdown, Static, TextArea
 
+from cuanta.domain.ledger import LedgerEvent
+from cuanta.domain.overhead import session_overhead
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.screens.result import ResultScreen, parse_file_link
 from cuanta.tui.screens.run_file import RunFileScreen
@@ -35,6 +37,85 @@ def test_result_shows_jev_fallback_reason() -> None:
         await settle(app, pilot)
         visible = render(screen.query_one("#result-instinct-fallback", Static))
         assert "Jev failed: jev answered HTTP 503; heuristic answered" in visible
+
+    drive(make_app(), scenario, size=(120, 40))
+
+
+def test_result_header_names_the_run_shape() -> None:
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        for view, expected in (
+            (sample_result(), "single context"),
+            (replace(sample_result(), single=False), "pipeline"),
+            (sample_result(simple=True), "simple mode"),
+            (replace(sample_result(), shape_known=False), "unknown shape"),
+        ):
+            app.push_screen(ResultScreen(app.services, app.catalog, view))
+            await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
+            await settle(app, pilot)
+            assert expected in render(app.screen.query_one("#result-facts", Static))
+            app.pop_screen()
+            await pilot.pause()
+
+    drive(make_app(), scenario, size=(120, 40))
+
+
+def test_result_shows_first_request_cache_state() -> None:
+    overhead = session_overhead(
+        [
+            LedgerEvent(
+                kind="api_request",
+                ts="2026-01-05T10:00:00Z",
+                input_tokens=4_000,
+                cache_read_tokens=20_000,
+                cache_write_tokens=3_000,
+            )
+        ],
+        0,
+    )
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        for view, expected in (
+            (replace(sample_result(), overhead=overhead), "warm cache · 20,000 tokens read (74%)"),
+            (sample_result(), "cache unknown"),
+        ):
+            app.push_screen(ResultScreen(app.services, app.catalog, view))
+            await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
+            await settle(app, pilot)
+            assert expected in render(app.screen.query_one("#result-cache", Static))
+            app.pop_screen()
+            await pilot.pause()
+
+    drive(make_app(), scenario, size=(120, 40))
+
+
+def test_result_header_shape_in_spanish() -> None:
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        app.push_screen(ResultScreen(app.services, app.catalog, sample_result()))
+        await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
+        await settle(app, pilot)
+        facts = render(app.screen.query_one("#result-facts", Static))
+        assert "contexto único" in facts
+        assert "pipeline" not in facts
+
+    drive(make_app(language="es"), scenario, size=(120, 40))
+
+
+def test_result_shows_turns_and_marks_a_turn_limit_cut() -> None:
+    normal = sample_result()
+    stopped = replace(
+        normal,
+        run=replace(
+            normal.run, max_turns=40, turns=40, end_reason="error_max_turns", status="failed"
+        ),
+    )
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        app.push_screen(ResultScreen(app.services, app.catalog, stopped))
+        await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
+        await settle(app, pilot)
+        facts = render(app.screen.query_one("#result-facts", Static))
+        assert "turns 40/40" in facts
+        assert "cut by turn limit" in render(app.screen.query_one("#result-turns-cut", Static))
 
     drive(make_app(), scenario, size=(120, 40))
 

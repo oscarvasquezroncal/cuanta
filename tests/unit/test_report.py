@@ -8,10 +8,12 @@ from cuanta.domain.report import (
     context_split,
     docs_path,
     file_refs,
+    first_request_event,
     link_file_refs,
     next_request,
     parse_sections,
     slug,
+    strip_preamble,
     unified_diff,
 )
 
@@ -49,6 +51,27 @@ def test_forge_final_report_splits_into_its_sections() -> None:
 
 def test_plain_text_is_not_split() -> None:
     assert parse_sections("All good.\nNext I would look at the tests.") == ()
+
+
+def test_report_preamble_is_stripped_at_the_first_heading() -> None:
+    text = "I have enough evidence.\n\n## SUMMARY\nok\n\n## FINDINGS\n- src/x.py:1\n"
+    cleaned = strip_preamble(text)
+    assert cleaned == text[text.index("## SUMMARY") :]
+    assert parse_sections(cleaned)[0].key == "summary"
+    assert strip_preamble(cleaned) == cleaned
+    assert strip_preamble(FORGE_REPORT).startswith("## FINAL REPORT")
+    assert strip_preamble("Done.\n\n## SUMMARY\nok\n") == "## SUMMARY\nok\n"
+
+
+def test_report_preamble_skips_fenced_headings_and_preserves_narratives() -> None:
+    fenced = "Ran:\n```\n# command\n```\n## SUMMARY\nok\n## NEXT\n- n\n"
+    assert strip_preamble(fenced) == "## SUMMARY\nok\n## NEXT\n- n\n"
+    numbered = "Done.\n\n1. **WHAT WAS DONE** - x\n2. **NEXT** - y\n"
+    assert strip_preamble(numbered).startswith("1. **WHAT WAS DONE**")
+    narrative = "I finished the refresh.\n\n**What was out of date**\n- x\n"
+    assert strip_preamble(narrative) == narrative
+    plain = "All good.\nNext I would look at the tests."
+    assert strip_preamble(plain) == plain
 
 
 def test_next_section_becomes_a_prefilled_request() -> None:
@@ -107,6 +130,8 @@ def test_context_split_uses_the_first_request() -> None:
     assert split.fixed == 51_701
     assert 0.97 < split.fixed_share < 0.98
     assert context_split([], 100) is None
+    assert first_request_event(events) is events[1]
+    assert first_request_event([]) is None
 
 
 def test_unified_diff_marks_changes() -> None:

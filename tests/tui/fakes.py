@@ -47,6 +47,7 @@ from cuanta.domain.assistant import (
     heuristic_clarity,
     heuristic_gaps,
 )
+from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.capsules import Level
 from cuanta.domain.config import Config
 from cuanta.domain.detection import (
@@ -300,6 +301,7 @@ def sample_result(run_id: str = "01JMANDATE0000000000000RUN1", simple: bool = Fa
         ),
         task_type="investigation",
         simple=simple,
+        single=True,
         text=text,
         sections=parse_sections(text),
         changed_files=("src/app/page.tsx",),
@@ -339,6 +341,8 @@ class FakeServices:
     home_snapshot: HomeSnapshot = field(default_factory=snapshot)
     project: Path = Path("/work/shop")
     calls: list[str] = field(default_factory=list)
+    prefix: PrefixWindow = UNKNOWN_PREFIX
+    prefix_engines: list[str] = field(default_factory=list)
     fail: str = ""
 
     latest: TestsSummary | None = None
@@ -352,6 +356,10 @@ class FakeServices:
         if self.fail:
             raise RuntimeError(self.fail)
         return self.home_snapshot
+
+    def prefix_window(self, engine: str) -> PrefixWindow:
+        self.prefix_engines.append(engine)
+        return self.prefix
 
     def latest_tests(self) -> TestsSummary | None:
         return self.latest

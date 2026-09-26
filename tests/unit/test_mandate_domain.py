@@ -6,14 +6,17 @@ import pytest
 
 from cuanta.domain.instinct import heuristic_scope, heuristic_triage, scope_hint_line
 from cuanta.domain.mandate import (
+    REPORT_LANGUAGE,
     REQUEST_MARKER,
     MandateRequest,
     Shape,
     TemplateError,
     analyst_system_prompt,
+    builtin_block,
     evidence_from_failure,
     extract_block,
     fill_request,
+    investigation_builtin_tools,
     investigation_denied,
     investigation_tools,
     missing_fields,
@@ -154,6 +157,34 @@ def test_shapes_decide_delegation() -> None:
     assert {"Agent", "Task"} <= set(investigation_denied(False, Shape.SINGLE))
     assert {"Agent", "Task"} <= set(investigation_denied(True, Shape.PIPELINE))
     assert "Agent" not in investigation_denied(False, Shape.PIPELINE)
+
+
+def test_only_single_context_investigations_name_builtin_tools() -> None:
+    assert investigation_builtin_tools(False, Shape.SINGLE) == ("Read", "Grep", "Glob", "Bash")
+    assert investigation_builtin_tools(True, Shape.PIPELINE) == ("Read", "Grep", "Glob", "Bash")
+    assert investigation_builtin_tools(False, Shape.SINGLE, False) == ("Read", "Grep", "Glob")
+    assert investigation_builtin_tools(False, Shape.PIPELINE) is None
+
+
+@pytest.mark.parametrize(
+    ("simple", "shape", "graph_available"),
+    [
+        (False, Shape.SINGLE, True),
+        (False, Shape.PIPELINE, True),
+        (True, Shape.SINGLE, True),
+        (False, Shape.SINGLE, False),
+        (False, Shape.PIPELINE, False),
+    ],
+)
+def test_every_investigation_block_asks_for_the_request_language(
+    simple: bool, shape: Shape, graph_available: bool
+) -> None:
+    block = builtin_block("investigation", simple, shape, graph_available)
+    assert block is not None
+    assert REPORT_LANGUAGE in block
+    assert block.index(REPORT_LANGUAGE) < block.index(REQUEST_MARKER)
+    assert "graph" not in REPORT_LANGUAGE.lower()
+    assert "same language as the request" in REPORT_LANGUAGE
 
 
 def test_the_analyst_prompt_falls_back_and_overrides_json_contracts() -> None:

@@ -75,6 +75,7 @@ dev = [
     "textual-dev>=1.8",
     "pytest-textual-snapshot>=1.1",
     "pytest-xdist>=3.8",
+    "pytest-timeout>=2.4",
 ]
 
 [tool.ruff]
@@ -104,7 +105,8 @@ testpaths = ["tests"]
 pythonpath = ["."]
 norecursedirs = ["tests/fixtures", ".*", "*.egg-info"]
 filterwarnings = ["ignore::pytest.PytestCollectionWarning"]
-addopts = "-q --strict-markers -p no:cacheprovider --dist=loadgroup -m \"not live\""
+addopts = "-q --strict-markers -p no:cacheprovider --dist=loadgroup --max-worker-restart=0 -m \"not live\""
+timeout = 120
 markers = [
     "live: requires real agent binaries and network; opt-in with -m live",
     "perf: performance budgets",
