@@ -25,8 +25,11 @@ from cuanta.tui.widgets.wizard import MandateWizard
 from tests.tui.fakes import (
     AGENTS,
     RED,
+    SANDBOX_RUN,
     FakeServices,
     pipeline_events,
+    sandbox_handoff,
+    sandbox_result,
     single_context_events,
     snapshot,
 )
@@ -489,6 +492,28 @@ def test_result_screen(snap_compare: SnapCompare, theme: str, size: tuple[int, i
         await wait_screen(pilot, ResultScreen)
 
     assert snap_compare(app_for(theme), terminal_size=size, run_before=result_open)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+@pytest.mark.parametrize("size", SIZES, ids=lambda size: f"{size[0]}x{size[1]}")
+def test_result_sandbox(snap_compare: SnapCompare, theme: str, size: tuple[int, int]) -> None:
+    services = FakeServices(
+        results={SANDBOX_RUN: sandbox_result()}, handoffs={SANDBOX_RUN: sandbox_handoff()}
+    )
+
+    async def result_open(pilot: Pilot[None]) -> None:
+        await loaded(pilot)
+        app = pilot.app
+        assert isinstance(app, CuantaApp)
+        app.open_result(SANDBOX_RUN)
+        await wait_screen(pilot, ResultScreen)
+        for _ in range(200):
+            if app.screen.query_one("#result-trial-handoff").display:
+                break
+            await pilot.pause(0.02)
+        await loaded(pilot)
+
+    assert snap_compare(app_for(theme, services), terminal_size=size, run_before=result_open)
 
 
 @pytest.mark.parametrize("theme", THEMES)

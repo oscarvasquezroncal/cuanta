@@ -50,6 +50,7 @@ def isolated_user_dirs(
         "CUANTA_RUN_ID",
         "CUANTA_INSTINCT",
         "CUANTA_MAX_TURNS",
+        "CUANTA_STATE_ROOT",
         "NO_COLOR",
         "COLORFGBG",
         "TYPESAFE_BASE_URL",

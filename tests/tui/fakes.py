@@ -39,6 +39,7 @@ from cuanta.application.results import ResultView, RunFile
 from cuanta.application.routing import RoleStats, RoutePlan
 from cuanta.application.spectrum import ALL_SESSIONS, Selection, SpectrumQuery, SpectrumResult
 from cuanta.application.tests_view import Hairball, TestsSummary
+from cuanta.application.trials import Trial, TrialChange, TrialSummary
 from cuanta.domain.assistant import (
     EXAMPLES,
     Clarity,
@@ -72,6 +73,7 @@ from cuanta.domain.engine import (
 )
 from cuanta.domain.fixes import Fix
 from cuanta.domain.forge_verify import Finding
+from cuanta.domain.handoff import Handoff, Workflow
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import Capsule, Decision, Run
 from cuanta.domain.loop import LoopGate, StopReason
@@ -91,6 +93,7 @@ from cuanta.domain.progress import (
 )
 from cuanta.domain.report import ContextSplit, file_refs, next_request, parse_sections
 from cuanta.domain.routing import RoutingPolicy, default_requests, plan_route, roles_that_run
+from cuanta.domain.sandbox import ChangeKind
 from cuanta.domain.telemetry import WiringPlan, WiringReport, WiringState
 from cuanta.domain.terminal import TerminalKind, TerminalReport
 from cuanta.tui.services import ALL_IMPORTED, LoopState, TelemetryPanel
@@ -314,6 +317,71 @@ def sample_result(run_id: str = "01JMANDATE0000000000000RUN1", simple: bool = Fa
     )
 
 
+SANDBOX_RUN = "01JSANDBOX00000000000000RUN"
+
+
+def sandbox_trial(
+    task_type: str = "feature",
+    kept: bool = False,
+    dependencies: int = 0,
+    base_missing: tuple[str, ...] = (),
+) -> Trial:
+    return Trial(
+        run_id=SANDBOX_RUN,
+        task_type=task_type,
+        what="Add sitemap and robots routes",
+        engine="claude",
+        subject="feat(seo): add sitemap and robots routes",
+        changes=(
+            TrialChange("src/app/sitemap.ts", ChangeKind.ADDED, None, "a" * 64, 18, 0),
+            TrialChange("src/app/robots.ts", ChangeKind.ADDED, None, "b" * 64, 12, 0),
+            TrialChange("src/app/layout.tsx", ChangeKind.MODIFIED, "c" * 64, "d" * 64, 3, 1),
+        ),
+        copy_root="/tmp/cuanta-sandbox/shop-1a2b3c4d/shop",
+        kept=kept,
+        created_at="2026-09-26T10:00:00",
+        linked=("node_modules",),
+        dependencies_changed=("node_modules/lib/index.js",) if dependencies else (),
+        dependencies_changed_count=dependencies,
+        base_missing=base_missing,
+    )
+
+
+def sandbox_result(
+    outcome: str = "", drift: tuple[str, ...] = (), trial: Trial | None = None
+) -> ResultView:
+    chosen = trial or sandbox_trial()
+    base = sample_result(SANDBOX_RUN)
+    run = replace(base.run, mode="sandbox", outcome=outcome)
+    summary = TrialSummary(chosen, outcome, "2026-09-26T10:05:00" if outcome else "", drift)
+    return replace(
+        base,
+        run=run,
+        task_type=chosen.task_type,
+        changed_files=chosen.paths,
+        trial=summary,
+        follow_up=None,
+    )
+
+
+def sandbox_handoff(uncommitted: tuple[str, ...] = ()) -> Handoff:
+    commands = (
+        'cd /d "C:\\work\\shop"',
+        "git switch -c feat/add-sitemap-and-robots-routes-0run",
+        f"cuanta runs apply {SANDBOX_RUN} --yes",
+    )
+    return Handoff(
+        Workflow.BRANCHES,
+        "feat",
+        "feat(seo): add sitemap and robots routes",
+        "feat/add-sitemap-and-robots-routes-0run",
+        "master",
+        commands,
+        " && ".join(commands),
+        uncommitted,
+    )
+
+
 def fixture_ledger(empty: bool = False) -> MemoryLedger:
     ledger = MemoryLedger()
     if not empty:
@@ -459,6 +527,37 @@ class FakeServices:
 
     def result_view(self, run_id: str) -> ResultView | None:
         return self.results.get(run_id)
+
+    handoffs: dict[str, Handoff] = field(default_factory=dict)
+    applied_trials: list[str] = field(default_factory=list)
+    discarded_trials: list[str] = field(default_factory=list)
+    trial_error: str = ""
+
+    def trial_handoff(self, run_id: str) -> Handoff | None:
+        return self.handoffs.get(run_id)
+
+    def apply_trial(self, run_id: str) -> int:
+        if self.trial_error:
+            raise RuntimeError(self.trial_error)
+        self.applied_trials.append(run_id)
+        view = self.results.get(run_id)
+        if view is not None and view.trial is not None:
+            accepted = replace(
+                view.trial,
+                outcome="accepted",
+                outcome_at="2026-09-26T10:00:00",
+                applied_at="2026-09-26T10:00:00",
+            )
+            self.results[run_id] = replace(view, trial=accepted)
+            return len(view.trial.trial.changes)
+        return 0
+
+    def discard_trial(self, run_id: str) -> None:
+        self.discarded_trials.append(run_id)
+        view = self.results.get(run_id)
+        if view is not None and view.trial is not None:
+            rejected = replace(view.trial, outcome="rejected", outcome_at="2026-09-26T10:00:00")
+            self.results[run_id] = replace(view, trial=rejected)
 
     def save_result(self, run_id: str) -> str:
         self.saved_results.append(run_id)

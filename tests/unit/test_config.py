@@ -129,3 +129,11 @@ def test_writing_the_layout_drops_the_legacy_key(tmp_path: Path) -> None:
     ui = table["ui"]
     assert isinstance(ui, dict)
     assert ui == {"theme": "dark", "mandate_layout": "one_page"}
+
+
+def test_git_workflow_reads_trunk_or_branches_and_drops_anything_else() -> None:
+    assert merge([]).git_workflow == "branches"
+    assert layer_from_table({"git": {"workflow": "trunk"}}) == {"git_workflow": "trunk"}
+    assert layer_from_table({"git": {"workflow": "gitflow"}}) == {}
+    global_layer = layer_from_table({"git": {"workflow": "trunk"}})
+    assert merge([global_layer, layer_from_table({})]).git_workflow == "trunk"
