@@ -11,6 +11,7 @@ from textual.widgets import Button, Input, Label, Log, Static
 
 from cuanta.application.loop import LoopReport
 from cuanta.domain.errors import CuantaError
+from cuanta.domain.loop import StopReason
 from cuanta.domain.progress import Note, ProgressEvent, Status, StepFinished, StepStarted
 from cuanta.tui.cells import labeled
 from cuanta.tui.fmt import glyph, money, status_style
@@ -165,7 +166,11 @@ class LoopView(VerticalScroll):
         self._reset()
         t = self._t
         status = Status.OK if report.ok else Status.WARN
-        reason = report.stop.value.replace("_", " ")
+        reason = (
+            t("loop.cost_stop")
+            if report.stop is StopReason.COST_UNKNOWN
+            else report.stop.value.replace("_", " ")
+        )
         self.query_one("#loop-summary", Static).update(
             Content("\n").join(
                 [
@@ -173,7 +178,9 @@ class LoopView(VerticalScroll):
                         (f"{glyph(status)} ", status_style(status)),
                         t("loop.finished", reason=reason),
                     ),
-                    labeled([(t("loop.spent"), money(report.spent_usd))], width=10),
+                    labeled(
+                        [(t("loop.spent"), money(report.spent_usd, t("spectrum.na")))], width=10
+                    ),
                 ]
             )
         )

@@ -455,6 +455,7 @@ invalid_budget = "Use a number, for example 5"
 restart = "Theme and language changes apply the next time the app starts."
 
 [loop]
+cost_stop = "cost n/a; remaining budget cannot be calculated"
 title = "Guarded fix loop"
 allowed = "The loop is available: VERIFY_TIER is strong and docs/LOOP.md sanctions it."
 blocked = "The loop is not available yet."
@@ -814,7 +815,10 @@ skip = "Skip"
 finish = "Start"
 
 [tips]
-run = "Launches the mandate now. It spends up to your budget."
+run = "Launches the mandate now. Check the selected engine's spend guarantee."
 probe = "Sends one tiny prompt to check the model answers. Shows the cost first."
 jev_test = "Asks Jev one tiny question to check the key, model and latency."
 improve = "An economy model rewrites your request. Shows the cost first, then a diff."
+
+[cost]
+estimated = "{cost} (estimated)"

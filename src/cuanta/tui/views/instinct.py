@@ -207,7 +207,11 @@ class InstinctView(VerticalScroll):
         self.query_one("#jev-test", Button).label = t("instinct.test")
         key = t("instinct.key_found") if card.key_present else t("instinct.key_absent")
         latency = f"{card.latency_ms:,} ms" if card.latency_ms is not None else "–"
-        spend = t("instinct.spend", cost=money(card.spend_week), count=f"{card.decisions_week:,}")
+        spend = t(
+            "instinct.spend",
+            cost=money(card.spend_week, t("spectrum.na")),
+            count=f"{card.decisions_week:,}",
+        )
         facts = [
             (t("instinct.key_label"), key),
             (t("instinct.endpoint_label"), card.endpoint),
@@ -275,6 +279,9 @@ class InstinctView(VerticalScroll):
                 Text(self._question(row.question)[:QUESTION_WIDTH]),
                 Text(self._t.message(row.answer)),
                 Text(f"{row.latency_ms:,} ms", justify="right"),
-                Text(f"${row.cost_usd:.4f}", justify="right"),
+                Text(
+                    f"${row.cost_usd:.4f}" if row.cost_usd is not None else self._t("spectrum.na"),
+                    justify="right",
+                ),
             )
         self.query_one("#probe-card").display = True

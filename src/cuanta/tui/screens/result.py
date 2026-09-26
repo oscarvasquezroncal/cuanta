@@ -23,12 +23,13 @@ from textual.widgets import (
 
 from cuanta.application.results import ResultView
 from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
+from cuanta.domain.guarantees import budget_stop_reason
 from cuanta.domain.mandate import MandateRequest, MandateType
 from cuanta.domain.messages import msg
 from cuanta.domain.overhead import overhead_messages
 from cuanta.domain.report import link_file_refs
 from cuanta.tui.cache_text import first_request_content
-from cuanta.tui.fmt import money
+from cuanta.tui.fmt import run_money
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.screens.run_file import RunFileScreen
 from cuanta.tui.services import Services
@@ -79,6 +80,11 @@ class ResultScreen(Screen[None]):
             yield Static(self._status(), id="result-status")
             yield Button(t("result.close"), id="result-close", compact=True)
         yield Static(self._facts(), id="result-facts")
+        budget_reason = budget_stop_reason(view.run.end_reason)
+        if budget_reason is not None:
+            yield Static(
+                Content.styled(t.message(budget_reason), "$warning"), id="result-budget-cut"
+            )
         if view.run.end_reason == TURN_LIMIT_SUBTYPE:
             yield Static(
                 Content.styled(t("result.cut_by_turns"), "$warning"), id="result-turns-cut"
@@ -180,7 +186,7 @@ class ResultScreen(Screen[None]):
             kind_label,
             mode,
             duration,
-            money(view.run.cost_usd, t("spectrum.na")),
+            run_money(view.run, t),
             view.run.model or t("wizard.engine_default"),
         ]
         if view.run.max_turns > 0:
@@ -212,7 +218,7 @@ class ResultScreen(Screen[None]):
         t = self._t
         run = self.view.run
         rows = [
-            t("result.cost_line", cost=money(run.cost_usd, t("spectrum.na"))),
+            t("result.cost_line", cost=run_money(run, t)),
             t("result.tests_line", tests=self.view.tests or t("spectrum.na")),
         ]
         overhead = self.view.overhead

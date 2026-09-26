@@ -1111,7 +1111,7 @@ Button.chip.depth-chip.-current, Button.chip.layout-chip.-current {
     margin-right: 1;
 }
 
-#wiz-improve-note, #wiz-sent-body, #wiz-estimate, #wiz-prefix {
+#wiz-improve-note, #wiz-sent-body, #wiz-estimate, #wiz-prefix, #wiz-guarantees, #wiz-guarantee-warning {
     height: auto;
 }
 

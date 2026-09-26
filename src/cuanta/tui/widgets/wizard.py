@@ -24,6 +24,7 @@ from cuanta.application.routing import RoutePlan
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile, turn_limit
 from cuanta.domain.drafts import Draft
+from cuanta.domain.guarantees import cap_warning, engine_guarantees, readonly_unavailable
 from cuanta.domain.intake import GAP_ANSWERS, GAP_FIELD
 from cuanta.domain.mandate import (
     DELIVERABLES,
@@ -256,6 +257,8 @@ class MandateWizard(Vertical):
         yield Static(t("wizard.team_title"), classes="card-title")
         yield Label(t("wizard.team_engine"), id="wiz-engine-label")
         yield Select([], allow_blank=True, disabled=True, id="wiz-engine")
+        yield Static("", id="wiz-guarantees")
+        yield Static("", id="wiz-guarantee-warning")
         with Vertical(id="team-cards"):
             yield Static("", id="team-simple-note")
         yield Static(t("wizard.depth_title"), classes="card-title")
@@ -501,6 +504,23 @@ class MandateWizard(Vertical):
             note = f"{note}  ·  {t('wizard.turn_limit', turns=limit)}"
         self.query_one("#wiz-cap-note", Static).update(Content.styled(note, "$text-muted"))
         self.query_one("#wiz-cap-field").display = self.custom_cap and not self.no_cap
+        self._paint_guarantees()
+
+    def _paint_guarantees(self) -> None:
+        t = self._t
+        guarantees = engine_guarantees(self.engine) if self.engine else ()
+        self.query_one("#wiz-guarantees", Static).update(
+            Content("\n").join(Content(t.message(row.message)) for row in guarantees)
+        )
+        reason = readonly_unavailable(self.engine) if self.kind == INVESTIGATION else None
+        warning = reason or cap_warning(self.engine, self.cap() or 0.0)
+        self.query_one("#wiz-guarantee-warning", Static).update(
+            Content.styled(t.message(warning), "$error" if reason else "$warning")
+        )
+        self.query_one("#wiz-launch", Button).disabled = reason is not None
+        self.query_one("#wiz-next", Button).disabled = (
+            reason is not None and self.step == len(STEPS) - 1
+        )
 
     def _paint_summary(self) -> None:
         if not self.one_page:
@@ -649,6 +669,12 @@ class MandateWizard(Vertical):
             self.error("wizard.gate_required")
             return
         if not self.check_request():
+            return
+        reason = readonly_unavailable(self.engine) if self.kind == INVESTIGATION else None
+        if reason is not None:
+            self.query_one("#wiz-error", Static).update(
+                Content.styled(self._t.message(reason), "$error")
+            )
             return
         story = self.story or self.request().what
         self.post_message(self.Launch(self.request(), self.options()))
@@ -822,8 +848,8 @@ class MandateWizard(Vertical):
         if understanding.is_read_only:
             parts.append((f"  · {t('wizard.read_only_badge')}", "$accent"))
         by = t("wizard.detected_by", backend=understanding.backend)
-        if understanding.cost_usd > 0:
-            by = f"{by} · {money(understanding.cost_usd)}"
+        if understanding.cost_usd is None or understanding.cost_usd > 0:
+            by = f"{by} · {money(understanding.cost_usd, t('spectrum.na'))}"
         parts.append((f"\n{by}", "$text-muted"))
         if understanding.fallback_error:
             fallback = t.message(
