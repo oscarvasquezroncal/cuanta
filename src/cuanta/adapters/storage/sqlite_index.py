@@ -10,6 +10,7 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
+from cuanta.adapters.storage.readonly_snapshot import closed_snapshot_uri
 from cuanta.domain.code_index import (
     INDEX_TABLES,
     INDEX_VERSION,
@@ -60,9 +61,13 @@ def _row(item: IndexRow) -> IndexRow:
 
 
 class SqliteIndex:
-    def __init__(self, path: Path, *, rebuild: bool = False) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, path: Path, *, rebuild: bool = False, read_only: bool = False) -> None:
+        if read_only and rebuild:
+            raise ValueError("A read-only code index cannot be rebuilt")
+        if not read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
+        self._read_only = read_only
         self._lock = threading.RLock()
         self._closed = False
         self.recovered = False
@@ -73,6 +78,8 @@ class SqliteIndex:
             self._initialize()
         except sqlite3.DatabaseError as error:
             self._connection.close()
+            if read_only:
+                raise
             if not any(
                 wording in str(error).lower()
                 for wording in (
@@ -105,8 +112,13 @@ class SqliteIndex:
                 sidecar.rename(backup.with_name(backup.name + suffix))
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._path, timeout=30, check_same_thread=False)
+        database = closed_snapshot_uri(self._path, "code index") if self._read_only else self._path
+        connection = sqlite3.connect(
+            database, uri=self._read_only, timeout=30, check_same_thread=False
+        )
         connection.row_factory = sqlite3.Row
+        if self._read_only:
+            connection.execute("PRAGMA query_only=ON")
         return connection
 
     def _initialize(self) -> None:
@@ -139,6 +151,8 @@ class SqliteIndex:
             if version is None or str(version[0]) != str(INDEX_VERSION):
                 raise sqlite3.DatabaseError("The code index version is incompatible")
             return
+        if self._read_only:
+            raise sqlite3.DatabaseError("The code index schema is incompatible")
         with self._transaction() as connection:
             connection.execute(
                 "CREATE TABLE files (path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, "
@@ -164,6 +178,7 @@ class SqliteIndex:
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
+        self._require_write()
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
@@ -172,6 +187,10 @@ class SqliteIndex:
             except BaseException:
                 self._connection.rollback()
                 raise
+
+    def _require_write(self) -> None:
+        if self._read_only:
+            raise sqlite3.OperationalError("The code index is read-only")
 
     def files(self) -> tuple[IndexedFile, ...]:
         with self._lock:
@@ -214,6 +233,7 @@ class SqliteIndex:
         )
 
     def replace_files(self, files: Sequence[IndexedFile], removed: Sequence[str]) -> None:
+        self._require_write()
         prepared = tuple(_file(item) for item in files)
         deleted = tuple(index_path(path) for path in removed)
         paths = [item.path for item in prepared]
@@ -254,6 +274,7 @@ class SqliteIndex:
                     connection.execute(f"UPDATE {table} SET stale = 1 WHERE path = ?", (path,))
 
     def put_rows(self, table: IndexTable, rows: Sequence[IndexRow]) -> None:
+        self._require_write()
         selected = _table(table)
         prepared = tuple(_row(item) for item in rows)
         with self._transaction() as connection:
@@ -287,6 +308,7 @@ class SqliteIndex:
             }
 
     def replace_rows(self, table: IndexTable, path: str, rows: Sequence[IndexRow]) -> None:
+        self._require_write()
         selected = _table(table)
         normalized = index_path(path)
         prepared = tuple(_row(item) for item in rows)
@@ -317,6 +339,7 @@ class SqliteIndex:
                 )
 
     def set_meta(self, values: Mapping[str, str]) -> None:
+        self._require_write()
         if "schema_version" in values and values["schema_version"] != str(INDEX_VERSION):
             raise ValueError("The index schema version is managed by its storage adapter")
         with self._transaction() as connection:

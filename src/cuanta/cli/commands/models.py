@@ -39,8 +39,13 @@ def tier_command(
 
 
 @models_app.command("stats", help="Runs, success and cost per model, from the ledger.")
-def stats_command(ctx: typer.Context) -> None:
-    execute(ctx, _stats)
+def stats_command(
+    ctx: typer.Context,
+    files: Annotated[
+        bool, typer.Option("--files", help="Read-only file/task priors and allocated known costs.")
+    ] = False,
+) -> None:
+    execute(ctx, _file_stats if files else _stats)
 
 
 @models_app.command("probe", help="Send one tiny prompt to a model; shows the cost first.")
@@ -232,6 +237,81 @@ def _stats(session: Session) -> "Document":
             for row in roles
         ],
     }
+    return Document(blocks=tuple(blocks), payload=payload)
+
+
+def _file_stats(session: Session) -> "Document":
+    from dataclasses import asdict
+
+    from cuanta.bootstrap import Container
+    from cuanta.cli.document import Column, Document, Hint, Line, Table
+    from cuanta.cli.fmt import usd
+
+    view = Container.for_project(session.project).file_costs_query().report()
+    report = view.report
+    payload: dict[str, object] = {
+        **asdict(report),
+        "available": view.available,
+        "unavailable_reason": view.unavailable_reason,
+        "rows": [
+            {
+                **asdict(row),
+                "allocated_cost_usd": row.allocated_cost_usd,
+                "estimated": row.estimated,
+            }
+            for row in report.rows
+        ],
+    }
+    blocks: list[Block] = [Hint(report.heuristic)]
+    if not view.available:
+        blocks.append(
+            Hint(
+                f"{view.unavailable_reason}: requires an existing compatible "
+                "closed index and ledger; "
+                "no files were created, migrated or repaired"
+            )
+        )
+    else:
+        blocks.extend(
+            (
+                Line(
+                    f"known {usd(report.known_cost_usd)}; "
+                    f"allocated {usd(report.allocated_known_usd)}; "
+                    f"unallocated {usd(report.unallocated_known_usd)}; "
+                    f"unknown attempts {report.unknown_attempts}"
+                ),
+                Table(
+                    "per file, task and mix",
+                    (
+                        Column("file"),
+                        Column("task"),
+                        Column("mix"),
+                        Column("prior", numeric=True),
+                        Column("allocated $", numeric=True),
+                        Column("known subtotal", numeric=True),
+                        Column("samples", numeric=True),
+                        Column("unknown", numeric=True),
+                        Column("stale", numeric=True),
+                        Column("estimated", numeric=True),
+                    ),
+                    tuple(
+                        (
+                            row.path,
+                            row.task_type,
+                            row.mix,
+                            f"{row.prior:.3f}",
+                            usd(row.allocated_cost_usd),
+                            usd(row.known_allocated_usd),
+                            str(row.samples),
+                            str(row.unknown_samples),
+                            str(row.stale_samples),
+                            str(row.estimated_samples),
+                        )
+                        for row in report.rows
+                    ),
+                ),
+            )
+        )
     return Document(blocks=tuple(blocks), payload=payload)
 
 
