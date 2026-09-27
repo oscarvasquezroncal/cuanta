@@ -193,12 +193,13 @@ class MandateService:
         extra: str = "",
         shape: Shape = Shape.PIPELINE,
         graph_available: bool = True,
+        context: str = "",
     ) -> Composed:
         block = builtin_block(request.type, simple, shape, graph_available) or self.template_block()
         if not graph_available:
             block = graphless_prompt(block)
         request = replace(request, why=self.bounded(request.why))
-        context = {
+        decision_context = {
             "kind": "scope",
             "type": request.type,
             "what": request.what,
@@ -207,12 +208,12 @@ class MandateService:
             "clarity": clarity,
         }
         choice, decided = self._decisions.choose(
-            english(msg("question.mandate_scope")), SCOPES, context
+            english(msg("question.mandate_scope")), SCOPES, decision_context
         )
         hint = scope_hint_line(choice, decided.receipt.backend)
         if extra:
             hint = f"{hint}\n{extra}"
-        prompt = fill_request(block, request, hint)
+        prompt = fill_request(block, request, hint, context)
         return Composed(
             prompt,
             choice,

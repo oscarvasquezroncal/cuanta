@@ -198,3 +198,21 @@ def guarded_agents(agents: AgentsPlan, plan: ChangePlan) -> AgentsPlan:
         spec["disallowedTools"] = list(dict.fromkeys((*denied, *deny_rules(effective), *EXECUTION)))
         protected[name] = spec
     return AgentsPlan(protected, agents.roles)
+
+
+def contextual_agents(agents: AgentsPlan, contexts: Mapping[Role, str]) -> AgentsPlan:
+    enriched: dict[str, Mapping[str, object]] = {}
+    changed = False
+    for name, original in agents.agents.items():
+        role = agents.roles.get(name)
+        context = contexts.get(role, "") if role is not None else ""
+        if not context:
+            enriched[name] = original
+            continue
+        spec = dict(original)
+        prompt = spec.get("prompt")
+        body = prompt if isinstance(prompt, str) else ""
+        spec["prompt"] = "\n\n".join(part for part in (body, context) if part)
+        enriched[name] = spec
+        changed = True
+    return AgentsPlan(enriched, agents.roles) if changed else agents

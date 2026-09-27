@@ -121,6 +121,7 @@ if TYPE_CHECKING:
     from cuanta.domain.ledger import Run
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
+    from cuanta.domain.pack import ContextPack
     from cuanta.domain.routing import CostRange, Role, RoutingPolicy
     from cuanta.domain.sandbox import SandboxLaunch
     from cuanta.domain.shells import Shell
@@ -155,6 +156,7 @@ class Container:
     _shared: Ledger | None = field(default=None, repr=False)
     _opened: list[Ledger] = field(default_factory=list, repr=False)
     decision_scope: DecisionScope = field(default_factory=_new_scope, repr=False)
+    _pack_cache: dict[str, ContextPack] = field(default_factory=dict, repr=False)
 
     @classmethod
     def for_project(cls, project: Path) -> Container:
@@ -261,6 +263,22 @@ class Container:
         try:
             reader.update()
             return IndexChangePlan(reader.service.index, self.clock.now_iso).compile(request)
+        finally:
+            reader.close()
+
+    def context_pack(
+        self,
+        request: MandateRequest,
+        depth: str = "",
+        role: str = "",
+        plan: ChangePlan | None = None,
+    ) -> ContextPack:
+        from cuanta.application.context_pack import IndexContextPack
+
+        reader = self.index_reader()
+        try:
+            reader.update()
+            return IndexContextPack(reader, self._pack_cache).compile(request, depth, role, plan)
         finally:
             reader.close()
 
@@ -964,6 +982,7 @@ class Container:
             change_plan=self.change_plan,
             snapshot=self.project_snapshot,
             save_metrics=save_metrics,
+            context_pack=self.context_pack,
         )
 
     def project_snapshot(self) -> dict[str, str]:
@@ -1179,6 +1198,7 @@ class Container:
             shape_estimator=self.run_estimate,
             refresh_index=self.refresh_index,
             change_plan=self.change_plan,
+            context_pack=self.context_pack,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:

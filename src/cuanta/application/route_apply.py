@@ -10,6 +10,7 @@ from cuanta.domain.agents import (
     AgentRoute,
     AgentsPlan,
     build_agents,
+    contextual_agents,
     guarded_agents,
     parse_agent,
 )
@@ -240,6 +241,14 @@ class MandateRouting:
         ):
             return applied
         agents = guarded_agents(applied.agents, plan)
+        return replace(applied, agents=agents, agents_file=self._write(agents))
+
+    def enrich(self, applied: Applied, contexts: Mapping[Role, str]) -> Applied:
+        if applied.engine != CLAUDE or applied.agents is None:
+            return applied
+        agents = contextual_agents(applied.agents, contexts)
+        if agents is applied.agents:
+            return applied
         return replace(applied, agents=agents, agents_file=self._write(agents))
 
     def close(self, run_id: str, tests: str, cost_usd: float | None) -> None:
