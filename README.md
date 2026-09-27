@@ -249,7 +249,7 @@ flowchart LR
 
 For Claude roles in this experimental path, read-only is **not available**: write tools are denied, but there is no filesystem check between cross-engine roles. The **checked after the run** entry above applies to ordinary mandates, which compare file snapshots. Codex sandbox enforcement and the OpenCode read-only refusal apply in both paths. With `--sandbox`, the whole pipeline runs in one isolated copy and its changes are checked once, after the last role.
 
-Each role shows its engine guarantees before launch. Codex costs use the requested model's published standard price row and are labelled **estimated**, not actual subscription billing. Missing prices or incomplete usage show **n/a** (JSON `null`). A capped cross-engine run stops before its next role when remaining spend cannot be calculated. An OpenCode step can overshoot its cap before reporting cost; cuanta records the reported overshoot and budget termination. A capped OpenCode run also stops when a step omits cost, with an explicit reason. Failed attempts and retries count toward totals and cost per accepted change.
+Each role shows its engine guarantees before launch. Codex costs use the requested model's published standard price row and are labelled **estimated**, not actual subscription billing. Missing prices or incomplete usage show **n/a** (JSON `null`). A capped cross-engine run stops before its next role when remaining spend cannot be calculated. An OpenCode step can overshoot its cap before reporting cost; cuanta records the reported overshoot and budget termination. A capped OpenCode run also stops when a step omits cost, with an explicit reason. Failed attempts and retries count toward totals and cost per accepted change: `cuanta costs` divides the spend of every attempt of a type, failed and rejected ones included, by the runs you accepted. Runs without a cost are never counted as zero: sums use the known costs, say how many runs had none, and are marked as a lower bound (≥); estimated costs keep their label (*). The docs row stays empty until a docs task type exists; mandates today are audits, fixes, features or refactors.
 
 New ledger records distinguish reported zero from missing cost and retain cost provenance. Migration preserves historical numeric values; older zero values without provenance cannot be reliably classified retroactively.
 
@@ -287,7 +287,10 @@ Use `--help` on any command. Global `--plain` and `--json` control CLI output; `
 | `cuanta refresh` | Refresh Forge's knowledge, reindex the graph, report tier drift |
 | `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--max-turns` for Claude, `--dry-run`, `--sandbox` to work in an isolated copy (`--keep` keeps the copy) |
 | `cuanta route --dry-run` | Show the routing plan for a request |
-| `cuanta runs list \| show \| open` | Stored runs and their reports |
+| `cuanta runs list \| show \| open` | Stored runs and their reports, with the estimate shown at launch, the cap, the estimate error and the outcome |
+| `cuanta runs accept <id>` | Record that a run's change or report was useful; an isolated-copy run is only marked, never applied, and a role of a cross-engine run resolves to its pipeline |
+| `cuanta runs reject <id> [--reason TEXT]` | Record that a run was not useful; rejecting an isolated-copy run discards it |
+| `cuanta costs [--since YYYY-MM-DD]` | Real costs for the last 30 days (UTC) by type and by engine mix: runs, accepted, spend, median cost and time, cost per accepted change and the median estimate error |
 | `cuanta runs apply \| discard \| branch` | For isolated-copy runs: apply the changes after a drift check, reject them, or print the suggested branch or commit and the git commands for your shell |
 | `cuanta test` | Gateway: one run, failures clustered into signatures |
 | `cuanta cat <capsule>` | Page through a stored log by level or line range |
