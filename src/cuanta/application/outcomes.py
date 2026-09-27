@@ -26,7 +26,14 @@ class OutcomeChange:
 
 
 class RunOutcomes:
-    def __init__(self, ledger: Ledger, trials: TrialStore, clock_iso: Callable[[], str]) -> None:
+    def __init__(
+        self,
+        ledger: Ledger,
+        trials: TrialStore,
+        clock_iso: Callable[[], str],
+        learn_run: Callable[[str], None] | None = None,
+    ) -> None:
+        self._learn_run = learn_run
         self._ledger = ledger
         self._trials = trials
         self._clock_iso = clock_iso
@@ -64,6 +71,8 @@ class RunOutcomes:
         if not self._ledger.set_run_outcome(run.id, outcome, now, reason):
             raise DomainFailure(f"run {run.id} was decided meanwhile", "check cuanta runs show")
         self._ledger.set_routing_accepted(run.id, outcome == ACCEPTED)
+        if self._learn_run is not None:
+            self._learn_run(run.id)
         return OutcomeChange(run.id, outcome, now, reason)
 
     def accept(self, run_id: str, reason: str = "") -> OutcomeChange:
@@ -74,5 +83,7 @@ class RunOutcomes:
         if run.mode != SANDBOX_MODE or run.end_reason == "error_sandbox_record":
             return self._mark(run, REJECTED, reason)
         self._trials.discard(run.id, reason)
+        if self._learn_run is not None:
+            self._learn_run(run.id)
         stored = self._ledger.get_run(run.id)
         return OutcomeChange(run.id, REJECTED, stored.outcome_at if stored else "", reason)

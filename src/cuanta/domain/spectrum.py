@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from cuanta.domain.costs import sum_costs
+from cuanta.domain.index_metrics import IndexMetrics, index_metrics
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pricing import CostEstimate, PriceTable, estimate_cost
@@ -553,6 +554,7 @@ class SpectrumReport:
     calibration: Mapping[str, float] = field(default_factory=dict)
     cost: CostEstimate = field(default_factory=lambda: CostEstimate(None, "not computed"))
     title: Message | None = None
+    index: IndexMetrics = field(default_factory=IndexMetrics)
 
 
 def analyze(
@@ -585,4 +587,5 @@ def analyze(
         source=source,
         calibration=ratios,
         cost=estimate_cost(usage, prices),
+        index=index_metrics(events),
     )

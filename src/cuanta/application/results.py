@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
+from cuanta.application.index_reporting import run_index_metrics
 from cuanta.application.run_reports import RunReports
 from cuanta.application.trials import BASE_DIR, FILES_DIR, TrialStore, TrialSummary
 from cuanta.domain.cache import FirstRequestCache, cache_message
 from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
 from cuanta.domain.estimates import estimate_error
+from cuanta.domain.index_metrics import IndexMetrics
 from cuanta.domain.ledger import Run
 from cuanta.domain.mandate import INVESTIGATION, MandateRequest, Shape
 from cuanta.domain.messages import english
@@ -72,6 +74,7 @@ class ResultView:
     in_flight: bool = False
     pipeline_seconds: float | None = None
     estimate_factor: float | None = None
+    index: IndexMetrics = field(default_factory=IndexMetrics)
 
     @property
     def decidable(self) -> bool:
@@ -233,6 +236,9 @@ class ResultQuery:
         single, shape_known = stored_shape(meta, run, task_type)
         trial = self._trials.summary(run.id)
         changed = trial.trial.paths if trial is not None else _strings(meta.get("changed_files"))
+        index_events = list(events)
+        for role in roles:
+            index_events.extend(self._ledger.events(EventQuery(run_id=role.id)))
         return ResultView(
             run=run,
             task_type=task_type,
@@ -261,6 +267,7 @@ class ResultQuery:
                 if isinstance(factor := meta.get("estimate_factor"), int | float)
                 else None
             ),
+            index=run_index_metrics(index_events, (run, *roles), self._reports.meta),
         )
 
     def _roles(self, run: Run) -> tuple[Run, ...]:

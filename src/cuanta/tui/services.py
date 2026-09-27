@@ -34,6 +34,7 @@ from cuanta.application.mandate_flow import (
     preview_of,
     resolve_budget,
 )
+from cuanta.application.map import MapFile, MapQuery, MapStatus
 from cuanta.application.models import CatalogView, ProbeOutcome
 from cuanta.application.new_files import NewFilePair
 from cuanta.application.results import ResultQuery, ResultView, RunFile
@@ -44,6 +45,7 @@ from cuanta.domain.assistant import Clarity, Suggestions, content_key
 from cuanta.domain.cache import PrefixWindow
 from cuanta.domain.capsules import Level
 from cuanta.domain.change_plan import ChangePlan
+from cuanta.domain.code_index import SearchHit
 from cuanta.domain.config import Config
 from cuanta.domain.drafts import Draft
 from cuanta.domain.engine import EngineEvent
@@ -155,6 +157,14 @@ class Services(Protocol):
     def recent_runs(self) -> tuple[Run, ...]: ...
 
     def spectrum(self, run_id: str) -> SpectrumResult: ...
+
+    def map_status(self, rebuild: bool = False) -> MapStatus: ...
+
+    def map_search(self, query: str) -> tuple[SearchHit, ...]: ...
+
+    def map_file(self, path: str) -> MapFile: ...
+
+    def map_revalidate(self) -> MapStatus: ...
 
     def import_sessions(self) -> dict[str, int]: ...
 
@@ -487,6 +497,27 @@ class ContainerServices:
 
     def result_view(self, run_id: str) -> ResultView | None:
         return self._results(lambda query: query.load(run_id))
+
+    def _map[T](self, action: Callable[[MapQuery], T], rebuild: bool = False) -> T:
+        container = self._container()
+        query = container.map_query(rebuild)
+        try:
+            return action(query)
+        finally:
+            query.close()
+            container.close()
+
+    def map_status(self, rebuild: bool = False) -> MapStatus:
+        return self._map(lambda query: query.status(), rebuild)
+
+    def map_search(self, query: str) -> tuple[SearchHit, ...]:
+        return self._map(lambda current: current.search(query))
+
+    def map_file(self, path: str) -> MapFile:
+        return self._map(lambda query: query.file(path))
+
+    def map_revalidate(self) -> MapStatus:
+        return self._map(lambda query: query.revalidate())
 
     def _view(self, query: ResultQuery, run_id: str) -> ResultView:
         view = query.load(run_id)

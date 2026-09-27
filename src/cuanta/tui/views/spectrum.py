@@ -24,6 +24,7 @@ from cuanta.tui.bars import bar_lines
 from cuanta.tui.cache_text import first_request_text
 from cuanta.tui.fmt import compact, glyph, money, status_style
 from cuanta.tui.i18n import Catalog
+from cuanta.tui.index_text import index_content
 from cuanta.tui.services import ALL_IMPORTED, Services
 from cuanta.tui.widgets.flow import FlowRow
 
@@ -84,6 +85,7 @@ class SpectrumView(VerticalScroll):
         yield Static("", id="spectrum-label")
         yield Static("", id="spectrum-audit")
         yield Static("", id="spectrum-overhead")
+        yield Static("", id="spectrum-index")
         yield Static(Content.styled(t("spectrum.empty"), "$text-muted"), id="spectrum-empty")
         with Horizontal(id="metrics"):
             for key in ("tokens", "cache", "cost", "utilization"):
@@ -178,6 +180,7 @@ class SpectrumView(VerticalScroll):
     def _set_loaded(self, loaded: bool) -> None:
         self.query_one("#spectrum-empty").display = not loaded
         self.query_one("#metrics").display = loaded
+        self.query_one("#spectrum-index").display = loaded
         self.query_one("#spectrum-tabs").display = loaded
 
     def _failed(self, error: str, hint: str) -> None:
@@ -198,6 +201,7 @@ class SpectrumView(VerticalScroll):
         report = result.report
         totals = report.totals
         self._set_loaded(True)
+        self.query_one("#spectrum-index", Static).update(index_content(t, report.index))
         self.query_one("#spectrum-label", Static).update(self._label(result))
         audit = self.query_one("#spectrum-audit", Static)
         audit.update(self._audit(result))

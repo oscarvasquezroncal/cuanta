@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 
+from cuanta.application.index_reporting import run_index_metrics
 from cuanta.domain.errors import DomainFailure
+from cuanta.domain.index_metrics import IndexMetrics
 from cuanta.domain.ledger import LedgerEvent, RouteAudit, Run
 from cuanta.domain.messages import Message, english, msg
+from cuanta.domain.outcomes import CROSS_KIND
 from cuanta.domain.overhead import SessionOverhead, session_overhead
 from cuanta.domain.pricing import PriceTable
 from cuanta.domain.spectrum import (
@@ -59,9 +63,15 @@ ALL_SESSIONS = "0"
 
 
 class SpectrumQuery:
-    def __init__(self, ledger: Ledger, prices: PriceTable | None = None) -> None:
+    def __init__(
+        self,
+        ledger: Ledger,
+        prices: PriceTable | None = None,
+        metadata: Callable[[str], Mapping[str, object] | None] | None = None,
+    ) -> None:
         self._ledger = ledger
         self._prices = prices
+        self._metadata = metadata
 
     def _runs(self, selection: Selection) -> tuple[Run, ...]:
         if selection.run and HU_PATTERN.match(selection.run):
@@ -119,8 +129,26 @@ class SpectrumQuery:
         report = analyze(
             english(title), events, changed, resolved, snapshotted, self._prices, title
         )
+        report = replace(report, index=self._index_metrics(events, runs))
         audits = self._ledger.route_audits(runs[0].id) if len(runs) == 1 else ()
         return SpectrumResult(report, runs, tuple(events), audits)
+
+    def _index_metrics(self, events: list[LedgerEvent], runs: tuple[Run, ...]) -> IndexMetrics:
+        index_runs = {run.id: run for run in runs}
+        for event in events:
+            if event.run_id and event.run_id not in index_runs:
+                run = self._ledger.get_run(event.run_id)
+                if run is not None:
+                    index_runs[run.id] = run
+        index_events = list(events)
+        for run in tuple(index_runs.values()):
+            if run.kind != CROSS_KIND or run.parent_id:
+                continue
+            for child in self._ledger.runs(kind=CROSS_KIND, since=run.started_at):
+                if child.parent_id == run.id and child.id not in index_runs:
+                    index_runs[child.id] = child
+                    index_events.extend(self._ledger.events(EventQuery(run_id=child.id)))
+        return run_index_metrics(index_events, tuple(index_runs.values()), self._metadata)
 
     def _resolved(self, run_id: str) -> bool:
         test_runs = self._ledger.test_runs(run_id=run_id)

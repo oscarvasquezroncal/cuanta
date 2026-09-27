@@ -123,7 +123,9 @@ class CrossEnginePipeline:
         save_metrics: Callable[[str, Mapping[str, object]], None] | None = None,
         context_pack: Callable[[MandateRequest, str, str, ChangePlan | None], ContextPack]
         | None = None,
+        learn_run: Callable[[str], None] | None = None,
     ) -> None:
+        self._learn_run = learn_run
         self._refresh_index = refresh_index
         self._change_plan = change_plan
         self._context_pack = context_pack
@@ -212,6 +214,8 @@ class CrossEnginePipeline:
         )
         if result.steps and protection is not None and self._save_metrics is not None:
             self._save_metrics(result.steps[0].run_id, cross_metrics(result))
+        if result.steps and self._learn_run is not None:
+            self._learn_run(result.steps[0].run_id)
         return result
 
     def _run(
