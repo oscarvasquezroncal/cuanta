@@ -5,8 +5,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from cuanta.application.index_reporting import run_index_metrics
+from cuanta.domain.anatomy import analyze_anatomy
 from cuanta.domain.errors import DomainFailure
-from cuanta.domain.index_metrics import IndexMetrics
 from cuanta.domain.ledger import LedgerEvent, RouteAudit, Run
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.outcomes import CROSS_KIND
@@ -127,13 +127,27 @@ class SpectrumQuery:
             resolved = resolved or self._resolved(run.id)
         title = self._label(selection, runs)
         report = analyze(
-            english(title), events, changed, resolved, snapshotted, self._prices, title
+            english(title),
+            events,
+            changed,
+            resolved,
+            snapshotted,
+            self._prices,
+            title,
+            runs[0].task_type if len(runs) == 1 else "",
         )
-        report = replace(report, index=self._index_metrics(events, runs))
+        index_events, index_runs = self._metric_inputs(events, runs)
+        report = replace(
+            report,
+            index=run_index_metrics(index_events, index_runs, self._metadata),
+            anatomy=analyze_anatomy(resolve_agents(index_events)),
+        )
         audits = self._ledger.route_audits(runs[0].id) if len(runs) == 1 else ()
         return SpectrumResult(report, runs, tuple(events), audits)
 
-    def _index_metrics(self, events: list[LedgerEvent], runs: tuple[Run, ...]) -> IndexMetrics:
+    def _metric_inputs(
+        self, events: list[LedgerEvent], runs: tuple[Run, ...]
+    ) -> tuple[list[LedgerEvent], tuple[Run, ...]]:
         index_runs = {run.id: run for run in runs}
         for event in events:
             if event.run_id and event.run_id not in index_runs:
@@ -148,7 +162,7 @@ class SpectrumQuery:
                 if child.parent_id == run.id and child.id not in index_runs:
                     index_runs[child.id] = child
                     index_events.extend(self._ledger.events(EventQuery(run_id=child.id)))
-        return run_index_metrics(index_events, tuple(index_runs.values()), self._metadata)
+        return index_events, tuple(index_runs.values())
 
     def _resolved(self, run_id: str) -> bool:
         test_runs = self._ledger.test_runs(run_id=run_id)

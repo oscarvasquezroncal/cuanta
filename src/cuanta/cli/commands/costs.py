@@ -6,7 +6,7 @@ from cuanta.cli.runtime import Session, execute
 
 if TYPE_CHECKING:
     from cuanta.cli.document import Block, Document, Table
-    from cuanta.domain.real_costs import CostReport, CostRow
+    from cuanta.domain.real_costs import CostReport, CostRow, PhaseCostRow
 
 TYPE_LABELS = {
     "investigation": "audit",
@@ -57,6 +57,14 @@ def _costs(session: Session, since: str) -> "Document":
         _table(f"by type since {report.since[:10]} UTC", report.by_type, TYPE_LABELS),
         _table("by engine mix", report.by_mix, MIX_LABELS),
     ]
+    if report.phase_medians and not report.empty:
+        blocks.append(_phase_table(report.phase_medians))
+        blocks.append(
+            Hint(
+                "Phase medians use observed priced requests, separate from billed attempt costs. "
+                "Missing requests or costs exclude an attempt; covered absent phases count zero."
+            )
+        )
     if report.empty:
         blocks.append(Hint("no mandates in this window · run cuanta mandate"))
     else:
@@ -120,6 +128,47 @@ def _table(title: str, rows: "tuple[CostRow, ...]", labels: dict[str, str]) -> "
     return Table(title, columns, cells)
 
 
+def _phase_table(rows: "tuple[PhaseCostRow, ...]") -> "Table":
+    from cuanta.cli.document import Column, Table
+    from cuanta.domain.anatomy import Phase
+
+    return Table(
+        "observed phase cost medians by type",
+        (
+            Column("type"),
+            Column("covered", numeric=True),
+            Column("missing", numeric=True),
+            *(Column(phase.value, numeric=True) for phase in Phase),
+        ),
+        tuple(
+            (
+                TYPE_LABELS.get(row.key, row.key),
+                f"{row.covered}/{row.runs}",
+                str(row.missing),
+                *(money(item.median_cost_usd) for item in row.medians),
+            )
+            for row in rows
+        ),
+    )
+
+
+def phase_payload(row: "PhaseCostRow") -> dict[str, object]:
+    return {
+        "key": row.key,
+        "runs": row.runs,
+        "covered_attempts": row.covered,
+        "missing_attempts": row.missing,
+        "phases": [
+            {
+                "phase": item.phase.value,
+                "median_cost_usd": item.median_cost_usd,
+                "samples": item.samples,
+            }
+            for item in row.medians
+        ],
+    }
+
+
 def row_payload(row: "CostRow") -> dict[str, object]:
     spend = row.spend
     return {
@@ -150,4 +199,5 @@ def costs_payload(report: "CostReport") -> dict[str, object]:
         "by_type": [row_payload(row) for row in report.by_type],
         "by_engine_mix": [row_payload(row) for row in report.by_mix],
         "total": row_payload(report.total),
+        "phase_medians": [phase_payload(row) for row in report.phase_medians],
     }

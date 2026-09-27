@@ -157,6 +157,7 @@ def _spectrum(
         header,
         *(_overhead(result) if totals.total else []),
         *_index_exploration(report.index),
+        *_anatomy(report.anatomy),
     ]
     if totals.total == 0:
         blocks.append(Line("no token events for this selection · nap", Status.INFO))
@@ -295,6 +296,35 @@ def _index_exploration(metrics: "IndexMetrics") -> "list[Block]":
     ]
 
 
+def _anatomy(report: Any) -> "list[Block]":
+    from cuanta.cli.document import Column, Line, Table
+    from cuanta.cli.fmt import usd
+
+    if not report.totals.requests:
+        return [Line("Cost anatomy: no usage events for this selection")]
+    return [
+        Table(
+            "cost anatomy (observed requests)",
+            (
+                Column("phase"),
+                Column("tokens", numeric=True),
+                Column("requests", numeric=True),
+                Column("cost", numeric=True),
+            ),
+            tuple(
+                (
+                    item.phase.value,
+                    f"{item.totals.total:,}",
+                    str(item.totals.requests),
+                    usd(item.totals.cost_usd),
+                )
+                for item in report.phases
+            ),
+        ),
+        Line(report.heuristic),
+    ]
+
+
 def _payload(result: Any, view: Any, plan: bool, imported: dict[str, Any]) -> dict[str, Any]:
     from dataclasses import asdict
 
@@ -309,6 +339,7 @@ def _payload(result: Any, view: Any, plan: bool, imported: dict[str, Any]) -> di
         "runs": [item.id for item in result.runs],
         "overhead": overhead_payload(result.overhead),
         "index": asdict(report.index),
+        "anatomy": asdict(report.anatomy),
         "audit": [
             {
                 "agent": audit.agent,

@@ -38,6 +38,13 @@ def render(template: str, values: Mapping[str, str]) -> str:
 
 
 ENGLISH: dict[str, str] = {
+    "leak.second_context": (
+        "Delegated context initialized with {tokens} fresh/cache-write tokens (observed)."
+    ),
+    "leak.re_summary": "Possible child handoff adds {tokens} cache-write tokens (heuristic).",
+    "suggest.second_context": "Check whether {agent} needs a separate context.",
+    "suggest.re_summary": "Keep the child handoff concise; this match is heuristic.",
+    "suggest.single_context": "Run the investigation as a single context.",
     "index_metrics.title": "Map exploration",
     "index_metrics.hit_rate": "Index hit rate: {value}",
     "index_metrics.exploration": "{index} index calls, {raw} raw reads, {total} exploration calls",
@@ -328,6 +335,8 @@ ENGLISH: dict[str, str] = {
     "leak_kind.test_output": "test output",
     "leak_kind.compaction": "compaction",
     "leak_kind.model_switch": "model switch",
+    "leak_kind.second_context": "second context",
+    "leak_kind.re_summary": "possible handoff",
     "check.python": "python",
     "check.engine": "engine",
     "check.whiskers": "whiskers",

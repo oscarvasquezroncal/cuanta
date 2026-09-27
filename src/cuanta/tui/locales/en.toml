@@ -982,6 +982,20 @@ role_component = "Component"
 role_config = "Configuration"
 role_code = "Code"
 
+[anatomy]
+title = "Cost anatomy"
+empty = "No request telemetry to classify."
+no_tokens = "Recorded requests have no token counts."
+start = "Start"
+exploration = "Exploration"
+writing = "Writing"
+handoff = "Handoff"
+col_phase = "Phase"
+col_tokens = "Tokens"
+col_cost = "Cost"
+col_requests = "Requests"
+heuristic = "Observed phases, not causal attribution. Writing excludes cache reads; handoff matches child output to parent cache write (±50% + 256 tokens)."
+
 [index_metrics]
 title = "Map exploration"
 hit_rate = "Index hit rate: {value}"

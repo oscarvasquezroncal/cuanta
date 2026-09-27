@@ -7,6 +7,7 @@ from datetime import date
 from cuanta.application.index_reporting import run_index_metrics
 from cuanta.application.run_reports import RunReports
 from cuanta.application.trials import BASE_DIR, FILES_DIR, TrialStore, TrialSummary
+from cuanta.domain.anatomy import AnatomyReport, analyze_anatomy
 from cuanta.domain.cache import FirstRequestCache, cache_message
 from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
 from cuanta.domain.estimates import estimate_error
@@ -30,6 +31,7 @@ from cuanta.domain.report import (
     unified_diff,
 )
 from cuanta.domain.sandbox import trial_folder
+from cuanta.domain.spectrum import resolve_agents
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.workspace import Workspace
 
@@ -75,6 +77,7 @@ class ResultView:
     pipeline_seconds: float | None = None
     estimate_factor: float | None = None
     index: IndexMetrics = field(default_factory=IndexMetrics)
+    anatomy: AnatomyReport = field(default_factory=AnatomyReport)
 
     @property
     def decidable(self) -> bool:
@@ -268,6 +271,7 @@ class ResultQuery:
                 else None
             ),
             index=run_index_metrics(index_events, (run, *roles), self._reports.meta),
+            anatomy=analyze_anatomy(resolve_agents(index_events)),
         )
 
     def _roles(self, run: Run) -> tuple[Run, ...]:

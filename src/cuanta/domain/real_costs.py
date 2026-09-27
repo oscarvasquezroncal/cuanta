@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
+from cuanta.domain.anatomy import AnatomyReport, Phase
 from cuanta.domain.costs import ESTIMATED, CostTotal, median, sum_costs, total_costs
 from cuanta.domain.estimates import estimate_error
 from cuanta.domain.ledger import Run
@@ -30,6 +31,7 @@ class Attempt:
     seconds: float | None
     type: str
     mix: str
+    run_ids: tuple[str, ...] = ()
 
     @property
     def accepted(self) -> bool:
@@ -76,11 +78,31 @@ class CostRow:
 
 
 @dataclass(frozen=True, slots=True)
+class PhaseMedian:
+    phase: Phase
+    median_cost_usd: float | None
+    samples: int
+
+
+@dataclass(frozen=True, slots=True)
+class PhaseCostRow:
+    key: str
+    runs: int
+    covered: int
+    medians: tuple[PhaseMedian, ...]
+
+    @property
+    def missing(self) -> int:
+        return self.runs - self.covered
+
+
+@dataclass(frozen=True, slots=True)
 class CostReport:
     since: str
     by_type: tuple[CostRow, ...]
     by_mix: tuple[CostRow, ...]
     total: CostRow
+    phase_medians: tuple[PhaseCostRow, ...] = ()
 
     @property
     def empty(self) -> bool:
@@ -153,6 +175,7 @@ def attempts(runs: Iterable[Run], now_iso: str = "") -> tuple[Attempt, ...]:
                 seconds_between(run.started_at, max(ends)) if ends else None,
                 type_key(run.task_type),
                 mix_key(run),
+                tuple(dict.fromkeys(role.id for role in roles)),
             )
         )
     return tuple(found)
@@ -184,11 +207,49 @@ def _rows(items: Sequence[Attempt], keys: Sequence[str], attribute: str) -> tupl
     return tuple(cost_row(key, grouped[key]) for key in grouped)
 
 
-def cost_report(runs: Iterable[Run], since: str, now_iso: str = "") -> CostReport:
-    items = attempts(runs, now_iso)
+def phase_cost_rows(
+    items: Sequence[Attempt], reports: Mapping[str, AnatomyReport]
+) -> tuple[PhaseCostRow, ...]:
+    grouped: dict[str, list[Attempt]] = {key: [] for key in TYPE_ORDER}
+    for item in items:
+        grouped.setdefault(item.type, []).append(item)
+    rows: list[PhaseCostRow] = []
+    for key, group in grouped.items():
+        covered = [
+            report
+            for item in group
+            if (report := reports.get(item.run.id)) is not None
+            and report.totals.requests > 0
+            and report.totals.cost_usd is not None
+        ]
+        medians = tuple(
+            PhaseMedian(
+                phase,
+                median(
+                    summary.totals.cost_usd
+                    for report in covered
+                    for summary in report.phases
+                    if summary.phase == phase and summary.totals.cost_usd is not None
+                ),
+                len(covered),
+            )
+            for phase in Phase
+        )
+        rows.append(PhaseCostRow(key, len(group), len(covered), medians))
+    return tuple(rows)
+
+
+def report_attempts(
+    items: Sequence[Attempt], since: str, phases: Mapping[str, AnatomyReport] | None = None
+) -> CostReport:
     return CostReport(
         since=since,
         by_type=_rows(items, TYPE_ORDER, "type"),
         by_mix=_rows(items, MIX_ORDER, "mix"),
         total=cost_row(ALL, items),
+        phase_medians=phase_cost_rows(items, phases) if phases is not None else (),
     )
+
+
+def cost_report(runs: Iterable[Run], since: str, now_iso: str = "") -> CostReport:
+    return report_attempts(attempts(runs, now_iso), since)
