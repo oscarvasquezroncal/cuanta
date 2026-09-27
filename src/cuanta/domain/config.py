@@ -37,12 +37,14 @@ class Config:
     loop_max_iterations: int = 3
     model_tiers: tuple[tuple[str, str], ...] = ()
     routing: tuple[tuple[str, object], ...] = ()
+    instinct_share_paths: bool = False
 
 
 KEY_MAP: dict[str, str] = {
     "engine": "engine",
     "instinct.backend": "instinct",
     "instinct.consent": "remote_consent",
+    "instinct.share_paths": "instinct_share_paths",
     "ui.emoji": "emoji",
     "ui.theme": "theme",
     "ui.language": "language",

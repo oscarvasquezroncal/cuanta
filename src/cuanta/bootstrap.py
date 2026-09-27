@@ -90,6 +90,8 @@ if TYPE_CHECKING:
     from cuanta.application.estimate import Estimate
     from cuanta.application.gateway import RunGateway
     from cuanta.application.home import HomeQuery
+    from cuanta.application.index_read import IndexRead
+    from cuanta.application.index_summaries import SummaryResult
     from cuanta.application.init_project import InitProject
     from cuanta.application.instinct import DecisionMaker, DecisionScope
     from cuanta.application.instinct_view import JevCard
@@ -245,6 +247,69 @@ class Container:
             service.update()
         finally:
             service.close()
+
+    def index_reader(self) -> IndexRead:
+        from cuanta.application.index_read import IndexRead
+
+        return IndexRead(self.index_service(), self.clock.now_iso)
+
+    def index_reranker(self) -> DecisionMaker | None:
+        from cuanta.application.instinct import consent_ok
+        from cuanta.ports.instinct import BatchInstinct
+
+        if not self.config.instinct_share_paths or self.config.instinct != "jev":
+            return None
+        backend = self.instinct_backend()
+        if (
+            not isinstance(backend, BatchInstinct)
+            or not consent_ok(backend, self.config.remote_consent)
+            or not backend.available()[0]
+        ):
+            return None
+        return self.decisions(self.ledger())
+
+    def index_summaries(self, service: IndexService, confirmed: bool) -> SummaryResult:
+        from cuanta.application.engine_run import LaunchSpec
+        from cuanta.application.index_summaries import IndexSummaries
+        from cuanta.domain.errors import NotAvailable
+        from cuanta.domain.models import Tier, probe_cost
+        from cuanta.domain.routing import candidates
+
+        entries = self.model_service().view().entries
+        available = candidates(entries, ("claude",), Tier.ECONOMY)
+        chosen = available[0] if available else None
+        if chosen is None:
+            raise NotAvailable("no economy-tier model in the catalog", "run cuanta models refresh")
+
+        def launch(prompt: str, cap: float) -> tuple[str, float | None]:
+            engine = self.engine(chosen.engine)
+            if engine is None or not engine.available():
+                raise NotAvailable(f"{chosen.engine} not found on PATH", "install it first")
+            ledger = self.ledger()
+            result = self.launcher(engine, ledger, telemetry=False).launch(
+                LaunchSpec(
+                    kind="index-summary",
+                    prompt=prompt,
+                    cwd=str(self.project),
+                    allowed_tools=(),
+                    tools=(),
+                    read_only=False,
+                    persist_session=False,
+                    model=chosen.resolved or chosen.id,
+                    max_budget_usd=cap,
+                    max_turns=1,
+                ),
+                lambda _: None,
+            )
+            text = result.outcome.result.text if result.outcome and result.outcome.result else ""
+            return text, result.run.cost_usd
+
+        return IndexSummaries(
+            service,
+            chosen.key,
+            lambda prompt, output: probe_cost(chosen, len(prompt.encode()) // 4 + 1, output),
+            launch,
+        ).run(confirmed)
 
     def state_project(self) -> Path:
         return self.state_root or self.project

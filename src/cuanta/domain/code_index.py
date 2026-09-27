@@ -90,3 +90,23 @@ class IndexHistory:
     outcome: str = ""
     retries: int = 0
     signature: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class HandlingCard:
+    path: str
+    text: str
+    estimated_tokens: int
+    role: str
+    purpose: str
+
+
+@dataclass(frozen=True, slots=True)
+class SearchHit:
+    path: str
+    score: float
+    matched_terms: tuple[str, ...] = ()
+    edges: tuple[str, ...] = ()
+    facts: tuple[str, ...] = ()
+    prior: float = 0.0
+    reasons: tuple[str, ...] = ()
