@@ -36,7 +36,9 @@ Read-only rechecks: `claude --version`, `claude --help`, `codex --version`, `cod
 
 | ID | Contract | Engine / version | Status | Date | Evidence |
 |---|---|---|---|---|---|
-| MCP-01 | A future `cuanta mcp serve` negotiates a protocol version supported by the connecting Claude client | Claude Code 2.1.283 client | unverified | 2026-09-25 | Cuanta has no MCP server or live `initialize` exchange. The [MCP 2025-11-25 lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) describes client and server version exchange; newer protocol revisions have different lifecycle rules. The server must select from the client's offer rather than hard-code a guessed version. |
+| MCP-01 | `cuanta mcp serve` negotiates a supported client protocol version | Claude Code 2.1.283 | verified | 2026-09-27 | The sandbox probe recorded the real initialize exchange with protocol 2025-11-25 and six successful find/page/note calls. Supported revisions follow the [MCP lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle). Actual stdio and installed-wheel tests exercise all seven tools, notifications, ping and clean EOF with JSON-only stdout. |
+| MCP-02 | Owned index tools work in the parent and a delegated read-only role while writer protection remains enforced | Claude Code 2.1.283 | unverified | 2026-09-27 | Parent and analyst find/page/note calls were observed. The $0.05 probe reported $0.05157085 and stopped before its protected-write attempt and final artifact. Complete writer coverage is unverified; `runs.index_tools` stays off by default. |
+| MCP-03 | Codex loads and calls the owned stdio server | Codex CLI 0.156.1 and desktop CLI 0.155.0-alpha.9.2 | unverified | 2026-09-27 | Both installed CLIs parse an ephemeral `mcp_servers` entry with `mcp get --json`. Startup, negotiation and tool calls were not exercised. Codex roles retain the text-pack fallback. |
 
 ## Codex CLI
 
