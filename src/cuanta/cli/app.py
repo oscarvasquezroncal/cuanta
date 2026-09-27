@@ -22,6 +22,7 @@ from cuanta.cli.commands import (
     mandate,
     meow,
     models,
+    pack,
     plan,
     probe,
     refresh,
@@ -85,6 +86,9 @@ app.command("index", help="Update the deterministic local file index at zero mod
 )
 app.command("plan", help="Compile edit, read, protected and verify sets at zero spend.")(
     plan.plan_command
+)
+app.command("pack", help="Build bounded indexed context with reasons at zero spend.")(
+    pack.pack_command
 )
 app.command("find", help="Find indexed files with visible ranking reasons.")(
     index_read.find_command

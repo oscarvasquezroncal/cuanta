@@ -20,6 +20,7 @@ from cuanta.domain.mandate import (
     clip_evidence,
 )
 from cuanta.domain.messages import Message, msg
+from cuanta.domain.pack import ContextPack
 from cuanta.domain.progress import Status, finished, note, started
 from cuanta.domain.role_budgets import allocate_budget
 from cuanta.domain.routing import Role
@@ -75,12 +76,16 @@ def request_block(request: MandateRequest) -> str:
     return "\n".join(lines)
 
 
-def role_prompt(body: str, role: Role, request: MandateRequest, handoff: str) -> str:
+def role_prompt(
+    body: str, role: Role, request: MandateRequest, handoff: str, context: str = ""
+) -> str:
     previous = handoff or "none: you are the first role."
+    context_line = f"{context}\n\n" if context else ""
     return (
         f"{body.strip()}\n\n"
         f"You are the {role.value} of a pipeline where every role runs separately. "
         "Do only your role's part.\n\n"
+        f"{context_line}"
         f"=== REQUEST ===\n{request_block(request)}\n\n"
         f"=== HANDOFF FROM THE PREVIOUS ROLE ===\n{previous}\n\n"
         "End your answer with one JSON object: your handoff for the next role."
@@ -116,9 +121,12 @@ class CrossEnginePipeline:
         change_plan: Callable[[MandateRequest], ChangePlan] | None = None,
         snapshot: Callable[[], Mapping[str, str]] | None = None,
         save_metrics: Callable[[str, Mapping[str, object]], None] | None = None,
+        context_pack: Callable[[MandateRequest, str, str, ChangePlan | None], ContextPack]
+        | None = None,
     ) -> None:
         self._refresh_index = refresh_index
         self._change_plan = change_plan
+        self._context_pack = context_pack
         self._snapshot = snapshot
         self._save_metrics = save_metrics
         self._estimator = estimator
@@ -162,6 +170,26 @@ class CrossEnginePipeline:
             return text
         digest, _, _ = self._capsules.put(text)
         return clip_evidence(text, capsule_id(digest))
+
+    def _prompt(
+        self,
+        body: str,
+        role: Role,
+        request: MandateRequest,
+        handoff: str,
+        protection: ChangePlan | None,
+    ) -> tuple[str, bool]:
+        pack = (
+            self._context_pack(request, self._depth, role.value, protection)
+            if self._context_pack is not None
+            else None
+        )
+        context = (
+            "\n\n".join(part for part in (pack.stable_prefix, pack.excerpts) if part)
+            if pack is not None
+            else ""
+        )
+        return role_prompt(body, role, request, handoff, context), pack is not None
 
     def run(self, request: MandateRequest, plan: RoutePlan, progress: ProgressSink) -> CrossReport:
         if self._refresh_index is not None:
@@ -249,9 +277,15 @@ class CrossEnginePipeline:
                 progress.publish(
                     note(Status.INFO, msg("cross.share", role=role.value, cap=f"{role_cap:.4f}"))
                 )
+            effective = (
+                replace(protection, read_only=True, edit=())
+                if protection is not None and read_only
+                else protection
+            )
+            prompt, stable_prefix = self._prompt(body, role, request, handoff, effective)
             spec = LaunchSpec(
                 kind=CROSS_KIND,
-                prompt=role_prompt(body, role, request, handoff),
+                prompt=prompt,
                 cwd=self._cwd,
                 allowed_tools=tools_of(definition) if route.engine == "claude" else (),
                 model=model,
@@ -264,9 +298,8 @@ class CrossEnginePipeline:
                 depth=self._depth,
                 estimate=None if parent else self._estimate(plan, request.type),
                 pipeline_budget_usd=self._budget if not parent else 0.0,
-                change_plan=replace(protection, read_only=True, edit=())
-                if protection is not None and read_only
-                else protection,
+                change_plan=effective,
+                stable_prefix=stable_prefix,
             )
             launch = launcher.launch(
                 self._isolated(spec, route.engine), lambda _: None, self._started

@@ -39,6 +39,7 @@ from cuanta.domain.mandate import (
     single_context,
 )
 from cuanta.domain.messages import Message, english, msg
+from cuanta.domain.pack import ContextPack
 from cuanta.domain.progress import Status, finished, started
 from cuanta.domain.routing import Role
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, sandbox_launch
@@ -176,9 +177,12 @@ class MandateFlow:
         shape_estimator: ShapeEstimator | None = None,
         refresh_index: Callable[[], None] | None = None,
         change_plan: Callable[[MandateRequest], ChangePlan] | None = None,
+        context_pack: Callable[[MandateRequest, str, str, ChangePlan | None], ContextPack]
+        | None = None,
     ) -> None:
         self._refresh_index = refresh_index
         self._change_plan = change_plan
+        self._context_pack = context_pack
         self._shape_estimator = shape_estimator
         self._sandbox = sandbox
         self._estimator = estimator
@@ -263,7 +267,12 @@ class MandateFlow:
         protection = self._protection(request, options.plan_overrides)
         if claude and applied is not None and protection is not None and self._routing is not None:
             applied = self._routing.protect(applied, protection)
-        routed = applied.orchestrator or applied.single if applied is not None else ""
+        pack = (
+            self._context_pack(request, options.depth, Role.ORCHESTRATOR.value, protection)
+            if self._context_pack is not None
+            else None
+        )
+        applied = self._enrich(applied, request, options.depth, protection)
         depth = self._depth(options.depth, request.type)
         cap = resolve_budget(options, request.type, self._default_budget)
         guess = self._estimate(options, applied, request.type, preview)
@@ -281,7 +290,8 @@ class MandateFlow:
             disallowed_tools=(
                 investigation_denied(options.simple, shape) if investigation else DEFAULT_DENIED
             ),
-            model=options.model or routed,
+            model=options.model
+            or (applied.orchestrator or applied.single if applied is not None else ""),
             agents_file=applied.agents_file if applied is not None else "",
             effort=depth.effort if depth is not None and claude else "",
             append_system_prompt=system,
@@ -304,13 +314,17 @@ class MandateFlow:
             estimate=guess,
             shape=(Shape.SINGLE if options.simple or single else Shape.PIPELINE).value,
             change_plan=protection,
+            stable_prefix=pack is not None,
         )
         sandbox = self._launch(options)
         base = isolated(base, sandbox, claude)
 
         def command(prompt: str) -> list[str]:
             preview = launcher.request(
-                replace(base, prompt=prompt), RUN_PLACEHOLDER, TRACE_PLACEHOLDER, None
+                replace(base, prompt=prompt),
+                RUN_PLACEHOLDER,
+                TRACE_PLACEHOLDER,
+                None,
             )
             return engine.command(preview)
 
@@ -326,6 +340,7 @@ class MandateFlow:
             extra,
             shape,
             graph_available,
+            self._packed_prompt(pack, ""),
         )
         if run_id:
             self._service.link_decisions(key, run_id)
@@ -333,6 +348,34 @@ class MandateFlow:
                 self._service.link_decisions(options.intake_scope, run_id)
         spec = replace(base, prompt=composed.prompt, scope=composed.hint.option)
         return Prepared(composed, engine_name, launcher, spec, applied)
+
+    def _enrich(
+        self,
+        applied: Applied | None,
+        request: MandateRequest,
+        depth: str,
+        protection: ChangePlan | None,
+    ) -> Applied | None:
+        if (
+            applied is None
+            or applied.agents is None
+            or self._routing is None
+            or self._context_pack is None
+        ):
+            return applied
+        contexts = {
+            role: self._packed_prompt(
+                self._context_pack(request, depth, role.value, protection), ""
+            )
+            for role in (Role.SENIOR, Role.TESTER)
+            if role in applied.agents.roles.values()
+        }
+        return self._routing.enrich(applied, contexts)
+
+    def _packed_prompt(self, pack: ContextPack | None, prompt: str) -> str:
+        if pack is None:
+            return prompt
+        return "\n\n".join(part for part in (pack.stable_prefix, pack.excerpts, prompt) if part)
 
     def _protection(
         self, request: MandateRequest, overrides: tuple[tuple[str, str], ...]

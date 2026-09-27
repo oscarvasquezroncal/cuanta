@@ -91,7 +91,7 @@ def _format_value(label: str, value: str, column: int) -> list[str]:
     return [head, *rest]
 
 
-def fill_request(block: str, request: MandateRequest, hint: str = "") -> str:
+def fill_request(block: str, request: MandateRequest, hint: str = "", context: str = "") -> str:
     marker = block.find(REQUEST_MARKER)
     if marker == -1:
         raise TemplateError("block has no === REQUEST === marker")
@@ -102,7 +102,8 @@ def fill_request(block: str, request: MandateRequest, hint: str = "") -> str:
     for name, label in LABELS.items():
         body.extend(_format_value(label, getattr(filled, name), column))
     hint_line = f"{hint}\n\n" if hint else ""
-    return f"{above}{hint_line}" + "\n".join(body) + "\n"
+    context_line = f"{context}\n\n" if context else ""
+    return f"{above}{context_line}{hint_line}" + "\n".join(body) + "\n"
 
 
 def evidence_from_failure(
