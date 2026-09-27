@@ -20,6 +20,7 @@ from cuanta.domain.depth import parse_depth, profile
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import LedgerEvent, RouteAudit
 from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.plugins import LEAN
 from cuanta.domain.routing import (
     Role,
     RouteMode,
@@ -124,6 +125,8 @@ class MandateRouting:
         settings_env: Callable[[], Mapping[str, str]],
         blast_radius: Callable[[str], int],
         clock_iso: Callable[[], str],
+        index_tools: bool = False,
+        default_session: str = LEAN,
     ) -> None:
         self._advisor = advisor
         self._policy = policy
@@ -133,6 +136,8 @@ class MandateRouting:
         self._settings_env = settings_env
         self._blast_radius = blast_radius
         self._clock_iso = clock_iso
+        self._index_tools = index_tools
+        self._default_session = default_session
 
     def definitions(self) -> tuple[AgentDefinition, ...]:
         found: list[AgentDefinition] = []
@@ -233,14 +238,18 @@ class MandateRouting:
         if applied.active:
             self._advisor.record(run_id, task_type, applied.plan)
 
-    def protect(self, applied: Applied, plan: ChangePlan) -> Applied:
-        if (
-            applied.engine != CLAUDE
-            or applied.agents is None
-            or (not plan.guard and not plan.read_only)
-        ):
+    def protect(self, applied: Applied, plan: ChangePlan, session: str = "") -> Applied:
+        if applied.engine != CLAUDE or applied.agents is None:
             return applied
         agents = guarded_agents(applied.agents, plan)
+        if self._index_tools and (
+            (session or self._default_session) == LEAN or plan.guard or plan.read_only
+        ):
+            from cuanta.domain.agents import indexed_agents
+
+            agents = indexed_agents(agents)
+        if agents is applied.agents:
+            return applied
         return replace(applied, agents=agents, agents_file=self._write(agents))
 
     def enrich(self, applied: Applied, contexts: Mapping[Role, str]) -> Applied:

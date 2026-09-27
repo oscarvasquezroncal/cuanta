@@ -266,7 +266,7 @@ class MandateFlow:
             applied = replace(applied, agents=None, agents_file="")
         protection = self._protection(request, options.plan_overrides)
         if claude and applied is not None and protection is not None and self._routing is not None:
-            applied = self._routing.protect(applied, protection)
+            applied = self._routing.protect(applied, protection, options.session)
         pack = (
             self._context_pack(request, options.depth, Role.ORCHESTRATOR.value, protection)
             if self._context_pack is not None

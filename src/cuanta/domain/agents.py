@@ -216,3 +216,21 @@ def contextual_agents(agents: AgentsPlan, contexts: Mapping[Role, str]) -> Agent
         enriched[name] = spec
         changed = True
     return AgentsPlan(enriched, agents.roles) if changed else agents
+
+
+def indexed_agents(agents: AgentsPlan) -> AgentsPlan:
+    from cuanta.domain.index_tools import INDEX_CONTRACT, INDEX_TOOLS
+
+    enriched: dict[str, Mapping[str, object]] = {}
+    for name, original in agents.agents.items():
+        spec = dict(original)
+        prompt = spec.get("prompt")
+        body = prompt if isinstance(prompt, str) else ""
+        spec["prompt"] = "\n\n".join(part for part in (body, INDEX_CONTRACT) if part)
+        tools = spec.get("tools")
+        if isinstance(tools, list):
+            spec["tools"] = list(
+                dict.fromkeys((*(tool for tool in tools if isinstance(tool, str)), *INDEX_TOOLS))
+            )
+        enriched[name] = spec
+    return AgentsPlan(enriched, agents.roles)

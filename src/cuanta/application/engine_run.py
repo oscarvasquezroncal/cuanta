@@ -87,9 +87,11 @@ class EngineLauncher:
         lean_files: Callable[[], tuple[str, str]] | None = None,
         default_session: str = FULL,
         guard_files: Callable[[LaunchSpec], tuple[str, str]] | None = None,
+        index_tools: bool = False,
     ) -> None:
         self._lean_files = lean_files
         self._guard_files = guard_files
+        self._index_tools = index_tools
         self._default_session = default_session
         self._reports = reports
         self._engine = engine
@@ -144,6 +146,12 @@ class EngineLauncher:
             )
             allowed = tools
             denied = tuple(dict.fromkeys((*denied, *deny_rules(plan), *EXECUTION)))
+        system = spec.append_system_prompt
+        if own_profile and self._index_tools:
+            from cuanta.domain.index_tools import INDEX_CONTRACT, INDEX_TOOLS
+
+            allowed = tuple(dict.fromkeys((*allowed, *INDEX_TOOLS)))
+            system = "\n\n".join(part for part in (system, INDEX_CONTRACT) if part)
         return EngineRequest(
             prompt=spec.prompt,
             cwd=spec.cwd,
@@ -154,7 +162,7 @@ class EngineLauncher:
             max_budget_usd=spec.max_budget_usd,
             agents_file=spec.agents_file,
             effort=spec.effort,
-            append_system_prompt=spec.append_system_prompt,
+            append_system_prompt=system,
             unset_env=spec.unset_env,
             mcp_config=mcp_config,
             settings_file=settings_file,
