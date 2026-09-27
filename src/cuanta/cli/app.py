@@ -13,6 +13,7 @@ from cuanta.cli.commands import (
     costs,
     doctor,
     index,
+    index_read,
     init,
     instinct,
     ledger,
@@ -80,6 +81,18 @@ app.command("test", help="Gateway: run the suite once, cluster failures into hai
 app.command("cat", help="Page through a stored capsule by level or line range.")(cat.cat_command)
 app.command("index", help="Update the deterministic local file index at zero model spend.")(
     index.index_command
+)
+app.command("find", help="Find indexed files with visible ranking reasons.")(
+    index_read.find_command
+)
+app.command("card", help="Show a bounded handling card for an indexed file.")(
+    index_read.card_command
+)
+app.command("impact", help="Show connected files and the edges that link them.")(
+    index_read.impact_command
+)
+app.command("facts", help="Show fresh anchored knowledge, or stale records to revalidate.")(
+    index_read.facts_command
 )
 app.command("listen", help="Local OTLP/JSON collector (--background, --status, --stop).")(
     listen.listen_command
