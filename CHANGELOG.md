@@ -7,6 +7,10 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Mandates and cross-engine roles receive deterministic indexed context packs before
+  volatile request data. Senior and tester roles receive editable-file cards and fresh
+  anchored facts; protected write suggestions are excluded. The local `pack --for`
+  command shows bounded excerpts, estimated tokens and inclusion reasons at zero spend.
 - Native trial specifications normalize matching engine-qualified role model references
   before routing, so resolved model IDs do not silently fall back to the default policy.
 - Cross-engine pipelines reserve a budget share for each role, carry unused shares forward,
