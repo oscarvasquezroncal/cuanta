@@ -148,7 +148,7 @@ def role_history(
             and run.model in names
             and run.task_type == task_type
             and (run.depth or DEFAULT_DEPTH.value) == (depth or DEFAULT_DEPTH.value)
-            and run.status == "ok"
+            and (run.status == "ok" or run.end_reason == "error_max_budget_usd")
             and run.cost_usd is not None
         ]
     return samples

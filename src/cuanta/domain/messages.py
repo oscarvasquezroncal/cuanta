@@ -452,6 +452,17 @@ ENGLISH: dict[str, str] = {
     "team.context_index": "Context: index tools and the anchored handoff chain",
     "team.context_text": "Context: a text pack and the anchored handoff chain",
     "team.warning": "Warning: {warning}",
+    "team.recommended": (
+        "Measured {type} runs recommend {mix}: ${cost} per accepted change (attempts: {attempts})"
+    ),
+    "cross.blocked": "{role} reported that it is blocked: {reason}",
+    "cross.writer_salvaged": (
+        "{role} stopped at its budget share before finishing; the change may be incomplete"
+    ),
+    "cross.verify_unresolved": "the checks still fail after {role}; the change is not verified",
+    "cross.role_budget_overrun": (
+        "{role} has no remaining budget because {other} on {engine} overran its share by ${over}"
+    ),
     "cross.salvaged": (
         "{role} stopped at its budget share; cuanta saved a partial handoff and the next role "
         "continues"

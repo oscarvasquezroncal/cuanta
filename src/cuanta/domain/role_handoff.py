@@ -294,6 +294,7 @@ def build_handoff(
             plan=_plan(plan if isinstance(plan, dict) else data),
             open_questions=_texts(data.get("open_questions") or data.get("questions")),
             next_step=_clip(data.get("next_step") or data.get("next") or ""),
+            reason=_clip(data.get("blocked_reason") or data.get("reason") or ""),
         )
     if stopped:
         handoff = replace(

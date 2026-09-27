@@ -465,7 +465,7 @@ def publish_cross_team(
 ) -> None:
     from cuanta.domain.messages import english, msg
     from cuanta.domain.progress import Note, Status
-    from cuanta.domain.team import team_cards
+    from cuanta.domain.team import advice_message, mix_attempts, recommend_mix, team_cards
 
     shares = container.role_budget(plan, request.type, depth, budget)
     for card in team_cards(
@@ -482,6 +482,9 @@ def publish_cross_team(
         for warning in card.warnings:
             text = english(msg("team.warning", warning=warning))
             session.presenter.publish(Note(Status.WARN, f"  {text}"))
+    advice = recommend_mix(mix_attempts(container.shared_ledger().runs()), request.type)
+    if advice is not None:
+        session.presenter.publish(Note(Status.INFO, english(advice_message(advice, request.type))))
     verify = container.change_plan(request).verify
     if verify:
         commands = ", ".join(verify)

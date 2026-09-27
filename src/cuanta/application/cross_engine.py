@@ -34,6 +34,7 @@ from cuanta.domain.role_budgets import (
 )
 from cuanta.domain.role_handoff import (
     HandoffChain,
+    HandoffStatus,
     RoleHandoff,
     VerifyResult,
     build_handoff,
@@ -198,7 +199,7 @@ def request_block(request: MandateRequest) -> str:
     return "\n".join(lines)
 
 
-def guidance(role: Role, index_tools: bool, verify: Sequence[str]) -> str:
+def guidance(role: Role, index_tools: bool, verify: Sequence[str], partial: bool = False) -> str:
     opener = " with Cuanta page (path and lines as start:end)" if index_tools else ""
     finder = " Use Cuanta find before Glob or Grep." if index_tools else ""
     lines = [
@@ -206,6 +207,13 @@ def guidance(role: Role, index_tools: bool, verify: Sequence[str]) -> str:
         f"Open those ranges{opener} instead of whole files, and do not re-read files the chain "
         f"covers unless an anchor is marked stale.{finder}"
     ]
+    if partial:
+        lines.append(
+            "An earlier role's handoff is partial: it stopped early or returned no structured "
+            "handoff. That does not block you: treat the request, the anchored facts and the plan "
+            "sets in the chain as the plan your instructions expect, fill any gap by opening only "
+            "the cited ranges, and do your part."
+        )
     if verify and role in WRITING_ROLES:
         commands = ", ".join(f"`{command}`" for command in verify)
         lines.append(
@@ -533,7 +541,13 @@ class CrossEnginePipeline:
         if not state.steps:
             return state.report(CompletionState.FAILED)
         salvaged = any(step.salvaged and step.role is Role.SENIOR for step in state.steps)
-        return state.report(final_state(bool(state.skipped), state.last_round, salvaged))
+        final = final_state(bool(state.skipped), state.last_round, salvaged)
+        cause = None
+        if final is CompletionState.PARTIAL and salvaged:
+            cause = msg("cross.writer_salvaged", role=Role.SENIOR.value)
+        elif final is CompletionState.PARTIAL and state.last_round is not None:
+            cause = msg("cross.verify_unresolved", role=state.last_round.role.value)
+        return state.report(final, cause)
 
     def _admit(
         self, state: _Pass, role: Role, definitions: Sequence[AgentDefinition]
@@ -565,7 +579,19 @@ class CrossEnginePipeline:
             state.progress.publish(note(Status.SKIP, reason))
             return None
         if self._budget > 0 and role_cap <= BUDGET_EPSILON:
-            return state.report(CompletionState.PARTIAL, msg("cross.role_budget", role=role.value))
+            over = next((step for step in reversed(state.steps) if step.overrun_usd > 0), None)
+            reason = (
+                msg(
+                    "cross.role_budget_overrun",
+                    role=role.value,
+                    other=over.role.value,
+                    engine=over.engine,
+                    over=f"{over.overrun_usd:.4f}",
+                )
+                if over is not None
+                else msg("cross.role_budget", role=role.value)
+            )
+            return state.report(CompletionState.PARTIAL, reason)
         read_only = role is Role.ANALYST or state.request.type == INVESTIGATION
         refusal = readonly_unavailable(route.engine) if read_only else None
         if refusal is not None:
@@ -622,7 +648,8 @@ class CrossEnginePipeline:
         indexed = self._index_tools(engine) if self._index_tools is not None else False
         chain_text = render_chain(self._refresh(merge_chain(state.handoffs)), state.budget_tokens)
         stable, volatile, packed = self._context(state.request, role, effective)
-        advice = guidance(role, indexed, state.verify if not read_only else ())
+        partial = any(item.status is not HandoffStatus.DONE for item in state.handoffs)
+        advice = guidance(role, indexed, state.verify if not read_only else (), partial)
         body = definition.prompt if definition is not None else ""
         return LaunchSpec(
             kind=CROSS_KIND,
@@ -816,6 +843,12 @@ class CrossEnginePipeline:
             if subtype == "error_cost_unknown":
                 return state.report(CompletionState.FAILED, msg("engine.cost_unknown"))
             return state.report(CompletionState.FAILED, msg("cross.failed", role=role.value))
+        if handoff.status is HandoffStatus.BLOCKED and role not in OPTIONAL_ROLES:
+            state.handoffs.append(handoff)
+            reason = handoff.reason or handoff.summary or "no reason given"
+            return state.report(
+                CompletionState.PARTIAL, msg("cross.blocked", role=role.value, reason=reason)
+            )
         if not budget_stop or carried:
             return None
         left = self._budget - state.spent if state.spent is not None else 0.0
