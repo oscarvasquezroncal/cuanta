@@ -7,6 +7,11 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Cross-engine pipelines reserve a budget share for each role, carry unused shares forward,
+  and show the complete pipeline duration. Estimates use completed runs of the same shape
+  and depth, with a historical calibration factor when direct history is unavailable.
+- Windows Team identifies unverified Codex builds and keeps the default cross-engine tester
+  on Claude. Unreadable sandbox results retain their copy and cost without becoming applicable.
 - The maintainer's Git workflow, verification gates and release steps move from
   `CONTRIBUTING.md` to `docs/DEVELOPMENT.md`, and the README's Contributing section becomes
   Maintenance.

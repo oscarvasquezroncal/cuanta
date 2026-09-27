@@ -163,18 +163,20 @@ scripts\dev\gate.cmd --static
 scripts\dev\gate.cmd --no-perf
 scripts\dev\focus.cmd
 scripts\dev\focus.cmd src/cuanta/domain/example.py tests/unit/test_example.py
+scripts\dev\focus.cmd tests/tui/test_snapshots.py --snapshot-update
 scripts\dev\trial.cmd .cuanta\specs\t1.toml --dry-run
 scripts\dev\trial.cmd .cuanta\specs\t1.toml --only T1b-1
 ```
 
 Focus reads staged, unstaged and untracked paths from Git status, checks the Python files
 with ruff and format, then runs incremental mypy, architecture tests and test modules that
-import changed modules, including changed tests. It stops at the first failure. Config and
+import changed modules, including changed tests. It stops at the first failure. Snapshot updates
+require explicit TUI test paths and are used only for intended visual changes. Config and
 shared conftest changes select all tests. Deleted and renamed modules remain in the selection.
 
 Trial specs are private TOML files with `project`, `total_cap_usd` and `[[trials]]` tables.
 Every trial requires `name`, `type`, `what`, `why`, `tests`, `out_of_scope`, `depth`, `engine`
-and `cap_usd`. Optional keys are `shape`, `model`, `cross_engine`, `role_models` (a list of
+and `cap_usd`. Optional keys are `shape`, `model`, `cross_engine`, `simple`, `role_models` (a list of
 `role=model` strings), `acceptance` (command strings), `checks` (tables with `file` and
 `regex`), and `recovery_note`. Paths in checks are relative to the acceptance copy.
 Keep client paths and original requests under ignored `.cuanta/`. Mark reconstructed fields
