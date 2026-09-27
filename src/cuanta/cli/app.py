@@ -22,6 +22,7 @@ from cuanta.cli.commands import (
     mandate,
     meow,
     models,
+    plan,
     probe,
     refresh,
     route,
@@ -81,6 +82,9 @@ app.command("test", help="Gateway: run the suite once, cluster failures into hai
 app.command("cat", help="Page through a stored capsule by level or line range.")(cat.cat_command)
 app.command("index", help="Update the deterministic local file index at zero model spend.")(
     index.index_command
+)
+app.command("plan", help="Compile edit, read, protected and verify sets at zero spend.")(
+    plan.plan_command
 )
 app.command("find", help="Find indexed files with visible ranking reasons.")(
     index_read.find_command

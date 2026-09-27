@@ -6,6 +6,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 
 from cuanta.application.run_reports import RunReports
+from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules, strict_tools
 from cuanta.domain.engine import (
     TURN_LIMIT_SUBTYPE,
     EngineEvent,
@@ -61,6 +62,7 @@ class LaunchSpec:
     estimate: RunEstimate | None = None
     shape: str = ""
     pipeline_budget_usd: float = 0.0
+    change_plan: ChangePlan | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,8 +86,10 @@ class EngineLauncher:
         reports: RunReports | None = None,
         lean_files: Callable[[], tuple[str, str]] | None = None,
         default_session: str = FULL,
+        guard_files: Callable[[LaunchSpec], tuple[str, str]] | None = None,
     ) -> None:
         self._lean_files = lean_files
+        self._guard_files = guard_files
         self._default_session = default_session
         self._reports = reports
         self._engine = engine
@@ -119,14 +123,33 @@ class EngineLauncher:
         env.update(dict(spec.env))
         mcp_config, settings_file = "", ""
         session = spec.session or self._default_session
-        if session == LEAN and self._engine.name == "claude" and self._lean_files is not None:
+        plan = spec.change_plan or (ChangePlan(read_only=True) if spec.read_only else None)
+        strict = plan is not None and (plan.read_only or bool(plan.guard))
+        own_profile = (
+            self._engine.name == "claude"
+            and self._guard_files is not None
+            and (strict or (session == LEAN and spec.kind in {"mandate", "cross"}))
+        )
+        if own_profile and self._guard_files is not None:
+            mcp_config, settings_file = self._guard_files(spec)
+        elif session == LEAN and self._engine.name == "claude" and self._lean_files is not None:
             mcp_config, settings_file = self._lean_files()
+        denied = spec.disallowed_tools
+        tools = spec.tools
+        allowed = spec.allowed_tools
+        if strict and plan is not None and self._engine.name == "claude":
+            delegation = bool(spec.agents_file) or bool({"Agent", "Task"} & set(allowed))
+            tools = tuple(
+                tool for tool in strict_tools(plan) if delegation or tool not in {"Agent", "Task"}
+            )
+            allowed = tools
+            denied = tuple(dict.fromkeys((*denied, *deny_rules(plan), *EXECUTION)))
         return EngineRequest(
             prompt=spec.prompt,
             cwd=spec.cwd,
             env=env,
-            allowed_tools=spec.allowed_tools,
-            disallowed_tools=spec.disallowed_tools,
+            allowed_tools=allowed,
+            disallowed_tools=denied,
             model=spec.model,
             max_budget_usd=spec.max_budget_usd,
             agents_file=spec.agents_file,
@@ -135,12 +158,14 @@ class EngineLauncher:
             unset_env=spec.unset_env,
             mcp_config=mcp_config,
             settings_file=settings_file,
-            tools=spec.tools,
+            tools=tools,
             max_turns=spec.max_turns,
             stable_prefix=spec.stable_prefix,
             persist_session=spec.persist_session,
-            read_only=spec.read_only,
+            read_only=spec.read_only or (plan is not None and plan.read_only),
             temporary_copy=spec.temporary_copy,
+            setting_sources=() if own_profile else None,
+            strict_guard=strict and self._engine.name == "claude",
         )
 
     @contextmanager

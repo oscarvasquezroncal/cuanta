@@ -9,6 +9,7 @@ from cuanta.application.instinct import DecisionMaker
 from cuanta.application.run_reports import RunReports
 from cuanta.domain.audit import AuditRow
 from cuanta.domain.capsules import capsule_id
+from cuanta.domain.change_plan import ChangePlan, plan_metrics
 from cuanta.domain.detection import Stack
 from cuanta.domain.engine import AssistantText, EngineEvent, RunResult, ToolCall
 from cuanta.domain.errors import DomainFailure
@@ -116,6 +117,7 @@ class MandateReport:
     simple: bool = False
     single: bool = False
     prompt_chars: int = 0
+    change_plan: ChangePlan | None = None
 
 
 class MandateService:
@@ -137,6 +139,7 @@ class MandateService:
         self._decisions = decisions
         self._clock_iso = clock_iso
         self._exclusions = exclusions
+        self._snapshot_modes: dict[tuple[str, str], dict[str, int]] = {}
 
     def template_block(self) -> str:
         text = self._workspace.read_text(TEMPLATE_PATH)
@@ -227,7 +230,8 @@ class MandateService:
         self._ledger.close_run_decisions(run_id, outcome)
 
     def snapshot(self, run_id: str, phase: str) -> dict[str, str]:
-        scan = self._scanned.scan(self._exclusions, collect_files=True)
+        scan = self._scanned.scan(self._exclusions, collect_files=True, all_files=True)
+        self._snapshot_modes[(run_id, phase)] = dict(scan.modes)
         hashes: dict[str, str] = {}
         for path in scan.files:
             digest = self._scanned.sha256(path)
@@ -260,8 +264,14 @@ class MandateService:
         run = launch.run
         end = self.snapshot(run.id, "end")
         start = {item.path: item.sha256 for item in self._ledger.snapshots(run.id, "start")}
+        start_modes = self._snapshot_modes.pop((run.id, "start"), {})
+        end_modes = self._snapshot_modes.pop((run.id, "end"), {})
         changed = tuple(
-            sorted(path for path in set(start) | set(end) if start.get(path) != end.get(path))
+            sorted(
+                path
+                for path in set(start) | set(end)
+                if start.get(path) != end.get(path) or start_modes.get(path) != end_modes.get(path)
+            )
         )
         tests = self._ledger.test_runs(run_id=run.id, limit=1)
         tests_text = tests[0].status if tests else "not run"
@@ -270,11 +280,14 @@ class MandateService:
         raw_text = result.text if result is not None else ""
         report_path = self._reports.save_report(run.id, raw_text) if raw_text else ""
         text = strip_preamble(raw_text)
-        outcome = "ok" if launch.outcome.ok else "failed"
+        protected = spec.change_plan is not None and bool(
+            plan_metrics(spec.change_plan, changed, run.engine)["guard_violations"]
+        )
+        outcome = "ok" if launch.outcome.ok and not protected else "failed"
         self._decisions.record_outcome(composed.decision_id, outcome)
         report = MandateReport(
             run=run,
-            ok=launch.outcome.ok,
+            ok=launch.outcome.ok and not protected,
             changed_files=changed,
             tests=tests_text,
             tokens_by_agent=by_agent,
@@ -289,6 +302,7 @@ class MandateService:
             simple=composed.simple,
             single=composed.single,
             prompt_chars=len(composed.prompt),
+            change_plan=spec.change_plan,
         )
         self.save_meta(report)
         return report
@@ -300,7 +314,7 @@ class MandateService:
 
 def report_payload(report: MandateReport) -> dict[str, object]:
     run = report.run
-    return {
+    payload: dict[str, object] = {
         "run_id": run.id,
         "status": run.status,
         "engine": run.engine,
@@ -338,3 +352,6 @@ def report_payload(report: MandateReport) -> dict[str, object]:
             for row in report.audit
         ],
     }
+    if report.change_plan is not None:
+        payload.update(plan_metrics(report.change_plan, report.changed_files, run.engine))
+    return payload

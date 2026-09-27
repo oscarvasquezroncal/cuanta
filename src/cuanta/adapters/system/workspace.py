@@ -16,6 +16,9 @@ from cuanta.ports.workspace import ScanResult
 MAX_ENTRY_CANDIDATES = 12
 EXECUTE_BITS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
 BINARY_FLAG = getattr(os, "O_BINARY", 0)
+SNAPSHOT_EXCLUDED = frozenset(
+    {".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache", "graphify-out"}
+)
 
 
 def _unlocked(path: Path, action: Callable[[], object]) -> None:
@@ -162,12 +165,15 @@ class LocalWorkspace:
         if path.is_file():
             _unlocked(path, path.unlink)
 
-    def scan(self, extra_exclusions: frozenset[str], collect_files: bool = False) -> ScanResult:
+    def scan(
+        self, extra_exclusions: frozenset[str], collect_files: bool = False, all_files: bool = False
+    ) -> ScanResult:
         count = 0
         nested: list[str] = []
         tests: dict[str, int] = {}
         entries: list[str] = []
         files: list[str] = []
+        modes: dict[str, int] = {}
         stack: list[tuple[str, str, bool]] = [(str(self._root), "", False)]
         while stack:
             folder, prefix, in_tests = stack.pop()
@@ -181,12 +187,23 @@ class LocalWorkspace:
                     relative = f"{prefix}{name}"
                     try:
                         is_dir = entry.is_dir(follow_symlinks=False)
+                        info = entry.stat(follow_symlinks=False) if all_files else None
                     except OSError:
                         continue
+                    if info is not None and (
+                        stat.S_ISLNK(info.st_mode)
+                        or getattr(info, "st_file_attributes", 0)
+                        & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                    ):
+                        continue
                     if is_dir:
-                        if is_excluded_dir(name, extra_exclusions) or relative in extra_exclusions:
-                            continue
-                        if name.startswith("."):
+                        if (
+                            is_excluded_dir(name, extra_exclusions)
+                            or relative in extra_exclusions
+                            or name == ".cuanta"
+                            or (name.startswith(".") and not all_files)
+                            or (all_files and name in SNAPSHOT_EXCLUDED)
+                        ):
                             continue
                         stack.append(
                             (entry.path, f"{relative}/", in_tests or name in {"tests", "test"})
@@ -194,10 +211,15 @@ class LocalWorkspace:
                         continue
                     if name == "CLAUDE.md" and prefix:
                         nested.append(relative)
+                    if all_files and collect_files:
+                        if info is None:
+                            continue
+                        files.append(relative)
+                        modes[relative] = info.st_mode & 0o777
                     if not is_source_file(name):
                         continue
                     count += 1
-                    if collect_files:
+                    if collect_files and not all_files:
                         files.append(relative)
                     kind = _test_kind(name, in_tests)
                     if kind is not None:
@@ -213,6 +235,7 @@ class LocalWorkspace:
             test_files=tests,
             entry_candidates=tuple(sorted(entries)),
             files=tuple(sorted(files)),
+            modes=modes,
         )
 
 

@@ -65,10 +65,22 @@ def older_forge(plugins: Sequence[InstalledPlugin], vendored: str) -> tuple[Inst
 BUILTIN_LEAN_OFF = ("agents-md@builtin",)
 
 
-def lean_settings(plugins: Sequence[InstalledPlugin]) -> dict[str, object]:
+def lean_settings(
+    plugins: Sequence[InstalledPlugin],
+    permissions_deny: tuple[str, ...] = (),
+    owned_hooks: dict[str, object] | None = None,
+) -> dict[str, object]:
     keys = sorted({*(plugin.key for plugin in plugins), *BUILTIN_LEAN_OFF})
     disabled: Mapping[str, bool] = dict.fromkeys(keys, False)
-    return {"disableAllHooks": True, "enabledPlugins": dict(disabled)}
+    settings: dict[str, object] = {
+        "disableAllHooks": owned_hooks is None,
+        "enabledPlugins": dict(disabled),
+    }
+    if permissions_deny:
+        settings["permissions"] = {"deny": list(dict.fromkeys(permissions_deny))}
+    if owned_hooks is not None:
+        settings["hooks"] = owned_hooks
+    return settings
 
 
 EMPTY_MCP: dict[str, object] = {"mcpServers": {}}

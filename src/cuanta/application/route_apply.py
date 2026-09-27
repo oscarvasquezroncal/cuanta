@@ -5,8 +5,16 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from cuanta.application.routing import RouteAdvisor, RouteInputs, RoutePlan, with_overrides
-from cuanta.domain.agents import AgentDefinition, AgentRoute, AgentsPlan, build_agents, parse_agent
+from cuanta.domain.agents import (
+    AgentDefinition,
+    AgentRoute,
+    AgentsPlan,
+    build_agents,
+    guarded_agents,
+    parse_agent,
+)
 from cuanta.domain.audit import MAIN_AGENT, AuditRow, audit
+from cuanta.domain.change_plan import ChangePlan
 from cuanta.domain.depth import parse_depth, profile
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import LedgerEvent, RouteAudit
@@ -223,6 +231,16 @@ class MandateRouting:
     def record(self, run_id: str, task_type: str, applied: Applied) -> None:
         if applied.active:
             self._advisor.record(run_id, task_type, applied.plan)
+
+    def protect(self, applied: Applied, plan: ChangePlan) -> Applied:
+        if (
+            applied.engine != CLAUDE
+            or applied.agents is None
+            or (not plan.guard and not plan.read_only)
+        ):
+            return applied
+        agents = guarded_agents(applied.agents, plan)
+        return replace(applied, agents=agents, agents_file=self._write(agents))
 
     def close(self, run_id: str, tests: str, cost_usd: float | None) -> None:
         self._advisor.close(run_id, tests, cost_usd, 0)

@@ -86,7 +86,7 @@ if TYPE_CHECKING:
     from cuanta.application.detect import DetectProject
     from cuanta.application.doctor import Doctor
     from cuanta.application.drafts import Drafts
-    from cuanta.application.engine_run import EngineLauncher
+    from cuanta.application.engine_run import EngineLauncher, LaunchSpec
     from cuanta.application.estimate import Estimate
     from cuanta.application.gateway import RunGateway
     from cuanta.application.home import HomeQuery
@@ -114,6 +114,7 @@ if TYPE_CHECKING:
     from cuanta.application.trials import TrialStore
     from cuanta.domain.assistant import Suggestions
     from cuanta.domain.bench import BenchTask, Condition
+    from cuanta.domain.change_plan import ChangePlan
     from cuanta.domain.engine import EngineEvent
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.instinct import Choice
@@ -252,6 +253,16 @@ class Container:
         from cuanta.application.index_read import IndexRead
 
         return IndexRead(self.index_service(), self.clock.now_iso)
+
+    def change_plan(self, request: MandateRequest) -> ChangePlan:
+        from cuanta.application.change_plan import IndexChangePlan
+
+        reader = self.index_reader()
+        try:
+            reader.update()
+            return IndexChangePlan(reader.service.index, self.clock.now_iso).compile(request)
+        finally:
+            reader.close()
 
     def index_reranker(self) -> DecisionMaker | None:
         from cuanta.application.instinct import consent_ok
@@ -440,7 +451,40 @@ class Container:
             reports=RunReports(self.state_workspace()),
             lean_files=self.lean_profile().files,
             default_session=self.config.run_session,
+            guard_files=self.guard_profile,
         )
+
+    def guard_profile(self, spec: LaunchSpec) -> tuple[str, str]:
+        import shlex
+        import subprocess
+        import sys
+
+        from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules
+
+        plan = spec.change_plan or ChangePlan(read_only=spec.read_only)
+        denied = tuple(
+            dict.fromkeys(
+                (
+                    *deny_rules(plan),
+                    *(EXECUTION if plan.guard or plan.read_only else ()),
+                )
+            )
+        )
+        hooks: dict[str, object] | None = None
+        if self.config.read_discipline:
+            hooks = {}
+            for mode, event in (("pre", "PreToolUse"), ("post", "PostToolUse")):
+                arguments = [sys.executable, "-m", "cuanta.cli.hooks", mode]
+                command = (
+                    subprocess.list2cmdline(arguments) if os.name == "nt" else shlex.join(arguments)
+                )
+                hooks[event] = [
+                    {
+                        "matcher": "Read|Grep|Bash|PowerShell",
+                        "hooks": [{"type": "command", "command": command, "timeout": 10}],
+                    }
+                ]
+        return self.lean_profile().files(permissions_deny=denied, owned_hooks=hooks)
 
     def lean_profile(self) -> LeanProfile:
         from cuanta.adapters.engines.claude_plugins import installed_plugins
@@ -891,6 +935,12 @@ class Container:
         depth: str = "",
     ) -> CrossEnginePipeline:
         from cuanta.application.cross_engine import CrossEnginePipeline
+        from cuanta.application.run_reports import RunReports
+
+        reports = RunReports(self.state_workspace())
+
+        def save_metrics(run_id: str, metrics: Mapping[str, object]) -> None:
+            reports.save_meta(run_id, {**(reports.meta(run_id) or {}), **metrics})
 
         def launcher(name: str) -> EngineLauncher | None:
             engine = self.engine(name)
@@ -911,7 +961,19 @@ class Container:
             depth=depth,
             allocator=self.role_budget,
             refresh_index=self.refresh_index,
+            change_plan=self.change_plan,
+            snapshot=self.project_snapshot,
+            save_metrics=save_metrics,
         )
+
+    def project_snapshot(self) -> dict[str, str]:
+        workspace = self.workspace()
+        scan = workspace.scan(frozenset(self.config.exclusions), collect_files=True, all_files=True)
+        return {
+            path: f"{digest}:{scan.modes.get(path, 0)}"
+            for path in scan.files
+            if (digest := workspace.sha256(path)) is not None
+        }
 
     def bench_runner(
         self, fixtures: Path, kit: Path, model: str, scratch: Path | None, keep: bool
@@ -1116,6 +1178,7 @@ class Container:
             estimator=self.run_estimate,
             shape_estimator=self.run_estimate,
             refresh_index=self.refresh_index,
+            change_plan=self.change_plan,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -1224,6 +1287,8 @@ class Container:
         keep: bool,
         depth: str = "",
     ) -> SandboxResult:
+        from cuanta.application.cross_engine import cross_metrics
+
         def pipeline_for(
             copy: SandboxCopy, launch: SandboxLaunch, checkpoint: Callable[[], Message | None]
         ) -> CrossEnginePipeline:
@@ -1234,6 +1299,7 @@ class Container:
             return {
                 "ok": report.ok,
                 "spent_usd": report.spent_usd,
+                **cross_metrics(report),
                 "steps": [
                     {
                         "role": step.role.value,

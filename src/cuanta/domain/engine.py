@@ -128,6 +128,8 @@ class EngineRequest:
     persist_session: bool = True
     read_only: bool = False
     temporary_copy: bool = False
+    setting_sources: tuple[str, ...] | None = None
+    strict_guard: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -13,6 +13,7 @@ class ScanResult:
     test_files: Mapping[str, int] = field(default_factory=dict)
     entry_candidates: tuple[str, ...] = ()
     files: tuple[str, ...] = ()
+    modes: Mapping[str, int] = field(default_factory=dict)
 
 
 class Workspace(Protocol):
@@ -35,7 +36,9 @@ class Workspace(Protocol):
         self, relative: str, content: bytes, executable: bool | None = None
     ) -> None: ...
 
-    def scan(self, extra_exclusions: frozenset[str], collect_files: bool = False) -> ScanResult: ...
+    def scan(
+        self, extra_exclusions: frozenset[str], collect_files: bool = False, all_files: bool = False
+    ) -> ScanResult: ...
 
     def sha256(self, relative: str) -> str | None: ...
 
