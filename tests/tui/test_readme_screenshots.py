@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SNAPSHOTS = next((ROOT / "tests" / "tui" / "__snapshots__").iterdir())
+SNAPSHOTS = ROOT / "tests" / "tui" / "__snapshots__" / "test_snapshots"
 SCREENSHOTS = ROOT / "docs" / "screenshots"
 SOURCES = {
     "home-dark": "test_home[120x36-calico-dark]",
