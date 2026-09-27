@@ -54,6 +54,40 @@ class RunFile:
 
 
 @dataclass(frozen=True, slots=True)
+class VerifyRound:
+    role: str
+    attempt: int
+    passed: int
+    total: int
+    seconds: float
+
+
+def verify_rounds(value: object) -> tuple[VerifyRound, ...]:
+    if not isinstance(value, list):
+        return ()
+    rounds: list[VerifyRound] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        commands = item.get("commands")
+        rows = (
+            [row for row in commands if isinstance(row, dict)] if isinstance(commands, list) else []
+        )
+        seconds = item.get("seconds")
+        attempt = item.get("attempt")
+        rounds.append(
+            VerifyRound(
+                str(item.get("role") or ""),
+                attempt if isinstance(attempt, int) else 1,
+                sum(1 for row in rows if row.get("exit_code") == 0 and not row.get("timed_out")),
+                len(rows),
+                float(seconds) if isinstance(seconds, int | float) else 0.0,
+            )
+        )
+    return tuple(rounds)
+
+
+@dataclass(frozen=True, slots=True)
 class ResultView:
     run: Run
     task_type: str
@@ -78,6 +112,8 @@ class ResultView:
     in_flight: bool = False
     pipeline_seconds: float | None = None
     estimate_factor: float | None = None
+    completion: str = ""
+    verification: tuple[VerifyRound, ...] = ()
     index: IndexMetrics = field(default_factory=IndexMetrics)
     anatomy: AnatomyReport = field(default_factory=AnatomyReport)
     read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
@@ -279,6 +315,8 @@ class ResultQuery:
                 if isinstance(factor := meta.get("estimate_factor"), int | float)
                 else None
             ),
+            completion=str(meta.get("completion") or ""),
+            verification=verify_rounds(meta.get("verification_rounds")),
             index=run_index_metrics(index_events, (run, *roles), self._reports.meta),
             anatomy=analyze_anatomy(resolve_agents(index_events)),
             read_efficiency=read_efficiency(

@@ -200,7 +200,27 @@ class ResultScreen(Screen[None]):
         run = self.view.run
         label = t.keyed("run_status", run.status)
         style = "$success" if run.status in {"ok", "completed"} else "$error"
-        return Content.styled(f" {label} ", f"bold {style}")
+        badge = Content.styled(f" {label} ", f"bold {style}")
+        if not self.view.completion:
+            return badge
+        state = t.message(msg(f"completion.{self.view.completion}"))
+        tone = "$success" if self.view.completion.startswith("complete") else "$warning"
+        return Content.assemble(badge, (f" {state}", tone))
+
+    def _verification(self) -> Content:
+        t = self._t
+        lines = [
+            t(
+                "result.verify_round",
+                role=t(f"models.role_{item.role}") if item.role else "",
+                passed=item.passed,
+                total=item.total,
+                seconds=f"{item.seconds:.1f}",
+            )
+            for item in self.view.verification
+        ]
+        failed = any(item.passed < item.total for item in self.view.verification[-1:])
+        return Content.styled("\n".join(lines), "$warning" if failed else "$text-muted")
 
     def _facts(self) -> Content:
         t = self._t
@@ -234,7 +254,10 @@ class ResultScreen(Screen[None]):
                 parts.append(t("result.terminal_turn"))
         elif view.run.end_reason == TURN_LIMIT_SUBTYPE:
             parts.append(t("result.turns_used", used=view.run.turns))
-        return Content.styled("  ·  ".join(parts), "$text-muted")
+        facts = Content.styled("  ·  ".join(parts), "$text-muted")
+        if not view.verification:
+            return facts
+        return Content("\n").join((facts, self._verification()))
 
     def _split(self) -> Content:
         t = self._t

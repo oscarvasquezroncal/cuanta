@@ -1013,7 +1013,7 @@ Button.chip.step-chip.-done, Button.chip.step-chip.-done:hover {
     color: $success;
 }
 
-Button.chip.depth-chip.-current, Button.chip.layout-chip.-current {
+Button.chip.depth-chip.-current, Button.chip.layout-chip.-current, Button.chip.mix-chip.-current {
     background: $primary;
     color: $background;
     text-style: bold;
@@ -1157,7 +1157,7 @@ Button.chip.depth-chip.-current, Button.chip.layout-chip.-current {
     margin-right: 1;
 }
 
-#wiz-improve-note, #wiz-sent-body, #wiz-estimate, #wiz-prefix, #wiz-guarantees, #wiz-guarantee-warning {
+#wiz-improve-note, #wiz-sent-body, #wiz-estimate, #wiz-prefix, #wiz-guarantees, #wiz-guarantee-warning, #wiz-mix-note, #wiz-verify-note {
     height: auto;
 }
 

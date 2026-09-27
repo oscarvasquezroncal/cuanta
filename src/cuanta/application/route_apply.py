@@ -17,9 +17,11 @@ from cuanta.domain.agents import (
 from cuanta.domain.audit import MAIN_AGENT, AuditRow, audit
 from cuanta.domain.change_plan import ChangePlan
 from cuanta.domain.depth import parse_depth, profile
+from cuanta.domain.errors import DomainFailure
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import LedgerEvent, RouteAudit
 from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.messages import english, msg
 from cuanta.domain.plugins import LEAN
 from cuanta.domain.routing import (
     Role,
@@ -200,6 +202,26 @@ class MandateRouting:
                 policy, profile(parse_depth(options.depth), request.type).tier_cap
             )
         plan = self._advisor.plan(policy, self.inputs(request, options.clarity, options))
+        pins = dict(options.role_models)
+        issues = self._advisor.pin_issues(plan, pins, (engine,))
+        if not issues and pins and engine != CLAUDE and policy.mode is not RouteMode.OFF:
+            chosen = single_model(plan.routes)
+            issues = tuple(
+                msg("route.pin_lost", role=role, model=model)
+                for role, model in pins.items()
+                if chosen is None
+                or chosen.model is None
+                or model.lower()
+                not in {
+                    chosen.model.key.lower(),
+                    chosen.model.id.lower(),
+                    chosen.model.resolved.lower(),
+                }
+            )
+        if issues:
+            raise DomainFailure(
+                english(msg("route.pins_rejected")), "; ".join(english(item) for item in issues)
+            )
         override = self.env_override()
         unset = (
             tuple(name for name in SUBAGENT_ENV if self._environ.get(name))

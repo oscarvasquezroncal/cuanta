@@ -26,7 +26,13 @@ from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.change_plan import ChangePlan, apply_overrides, move_plan, path_matches
 from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile, turn_limit
 from cuanta.domain.drafts import Draft
-from cuanta.domain.guarantees import cap_warning, engine_guarantees, readonly_unavailable
+from cuanta.domain.guarantees import (
+    Guarantee,
+    GuaranteeStatus,
+    cap_warning,
+    engine_guarantees,
+    readonly_unavailable,
+)
 from cuanta.domain.intake import GAP_ANSWERS, GAP_FIELD
 from cuanta.domain.mandate import (
     DELIVERABLES,
@@ -39,7 +45,8 @@ from cuanta.domain.mandate import (
     second_field,
 )
 from cuanta.domain.messages import msg
-from cuanta.domain.routing import ENGINE_ORDER
+from cuanta.domain.routing import ENGINE_ORDER, Mix
+from cuanta.domain.team import RoleCard
 from cuanta.tui.cache_text import prefix_content
 from cuanta.tui.fmt import money
 from cuanta.tui.i18n import Catalog
@@ -143,6 +150,7 @@ class MandateWizard(Vertical):
         self.custom_cap = False
         self.no_cap = False
         self.sandbox = False
+        self.mix = ""
         self.understanding: Understanding | None = None
         self.plan: RoutePlan | None = None
         self.estimate: Estimate | None = None
@@ -291,6 +299,17 @@ class MandateWizard(Vertical):
         yield Select([], allow_blank=True, disabled=True, id="wiz-engine")
         yield Static("", id="wiz-guarantees")
         yield Static("", id="wiz-guarantee-warning")
+        yield Label(t("wizard.mix_title"), id="wiz-mix-label")
+        with FlowRow(id="mix-row", classes="chips"):
+            for mix in Mix:
+                yield Button(
+                    t(f"wizard.mix_{mix.name.lower()}"),
+                    id=f"mix-{mix.value}",
+                    classes="chip mix-chip",
+                    compact=True,
+                )
+        yield Static("", id="wiz-mix-note")
+        yield Static("", id="wiz-verify-note")
         with Horizontal(id="sandbox-row"):
             yield Checkbox(t("wizard.sandbox"), False, id="wiz-sandbox", compact=True)
         yield Static(Content.styled(t("wizard.sandbox_note"), "$text-muted"), id="wiz-sandbox-note")
@@ -328,6 +347,7 @@ class MandateWizard(Vertical):
         self.query_one("#wiz-sent-body").display = False
         self.query_one("#forge-gate").display = False
         self.query_one("#preview-card").display = False
+        self.query_one("#wiz-verify-note").display = False
         self.query_one("#wiz-cap-field").display = False
         self.query_one("#team-cards").display = False
         self.query_one("#team-simple-note").display = False
@@ -479,6 +499,7 @@ class MandateWizard(Vertical):
             no_cap=self.no_cap,
             intake_scope=understood.intake_scope if understood is not None else "",
             sandbox=self.sandbox,
+            mix=self.mix,
             plan_overrides=tuple(
                 (path, "read" if self.kind == INVESTIGATION and role == "edit" else role)
                 for path, role in self._plan_overrides.items()
@@ -515,6 +536,10 @@ class MandateWizard(Vertical):
         for depth in DEPTHS:
             chip = self.query_one(f"#depth-{depth.value}", Button)
             chip.set_class(depth.value == self.depth, "-current")
+        for mix in Mix:
+            self.query_one(f"#mix-{mix.value}", Button).set_class(mix.value == self.mix, "-current")
+        note = t("wizard.mix_cross") if self.mix else t("wizard.mix_native")
+        self.query_one("#wiz-mix-note", Static).update(Content.styled(note, "$text-muted"))
         self.query_one("#forge-gate").display = self.gated
         mode = Content.styled(t("wizard.simple_mode"), "$warning") if self.simple else ""
         self.query_one("#wiz-mode", Static).update(mode)
@@ -1124,18 +1149,24 @@ class MandateWizard(Vertical):
             request = self.request()
             options = self.options()
             plan, estimate = self._services.team_plan(request, options)
+            cards = self._services.team_cards(plan, estimate, options)
+            verify = self._services.change_plan(request).verify if options.mix else ()
             view = self._services.models_view(False)
         except Exception as error:
             self._call(self.app.notify, str(error), severity="error")
             return
-        models = tuple(entry.id for entry in view.entries if entry.engine == options.engine)
-        self._call(self.show_team, plan, estimate, models, options.engine, revision)
+        models: dict[str, tuple[str, ...]] = {}
+        for entry in view.entries:
+            models[entry.engine] = (*models.get(entry.engine, ()), entry.id)
+        self._call(self.show_verify, verify)
+        self._call(self.show_team, plan, estimate, cards, models, options.engine, revision)
 
     async def show_team(
         self,
         plan: RoutePlan,
         estimate: Estimate,
-        models: tuple[str, ...],
+        details: tuple[RoleCard, ...],
+        models: dict[str, tuple[str, ...]],
         engine: str,
         revision: int,
     ) -> None:
@@ -1143,19 +1174,46 @@ class MandateWizard(Vertical):
             if engine != self.engine or revision != self._team_revision or not self.kind:
                 return
             with suppress(NoMatches):
-                await self._show_team(plan, estimate, models, engine, revision)
+                await self._show_team(plan, estimate, details, models, engine, revision)
+
+    def show_verify(self, commands: tuple[str, ...]) -> None:
+        with suppress(NoMatches):
+            note = self.query_one("#wiz-verify-note", Static)
+            text = self._t("wizard.verify_commands", commands=", ".join(commands))
+            note.update(Content.styled(text, "$text-muted") if commands and self.mix else "")
+            note.display = bool(commands and self.mix)
+
+    def _guarantee_line(self, guarantees: tuple[Guarantee, ...]) -> str:
+        t = self._t
+
+        def names(status: GuaranteeStatus) -> str:
+            found = [
+                t.message(msg(f"guarantee.{row.name}"))
+                for row in guarantees
+                if row.status is status
+            ]
+            return ", ".join(found) or t("wizard.card_none")
+
+        return t(
+            "wizard.card_guarantees",
+            enforced=names(GuaranteeStatus.ENFORCED),
+            checked=names(GuaranteeStatus.CHECKED),
+            unavailable=names(GuaranteeStatus.UNAVAILABLE),
+        )
 
     async def _show_team(
         self,
         plan: RoutePlan,
         estimate: Estimate,
-        models: tuple[str, ...],
+        details: tuple[RoleCard, ...],
+        models: dict[str, tuple[str, ...]],
         engine: str,
         revision: int,
     ) -> None:
         t = self._t
         costs = {item.role: item for item in estimate.roles}
-        mixed = len({route.engine for route in plan.routes if route.model is not None}) > 1
+        mixed = bool(self.mix) or len({route.engine for route in plan.routes if route.model}) > 1
+        by_role = {card.role: card for card in details}
         cards = self.query_one("#team-cards", Vertical)
         await cards.remove_children(".team-card")
         if engine != self.engine or revision != self._team_revision or not self.kind:
@@ -1166,7 +1224,11 @@ class MandateWizard(Vertical):
             model = route.model.id if route.model else t("wizard.engine_default")
             tier = t(f"models.tier_{route.tier.value}") if route.tier else "–"
             cost = costs.get(route.role)
-            warning = self._services.build_warning(route.engine)
+            card = by_role.get(route.role)
+            warnings = list(card.warnings) if card is not None else []
+            native = self._services.build_warning(route.engine) if not self.mix else None
+            if native is not None:
+                warnings.append(native)
             spread = (
                 t("wizard.role_cost", low=money(cost.low), high=money(cost.high))
                 if cost is not None and cost.low is not None
@@ -1174,17 +1236,23 @@ class MandateWizard(Vertical):
             )
             if mixed and cost is not None and cost.share > 0:
                 spread = f"{spread}  {t('wizard.role_share', cap=money(cost.share))}".strip()
-            body = Content.assemble(
+            lines: list[tuple[str, str]] = [
                 (f"{t(f'models.role_{route.role.value}')}", "bold"),
                 (f"  {spread}\n" if spread else "\n", "$text-muted"),
-                (f"{model} · {tier}\n", "$accent"),
-                (t.message(route.reason), "$text-muted"),
                 (
-                    f"\n{t.message(warning)}" if warning is not None else "",
-                    "$warning",
+                    t("wizard.card_route", engine=route.engine.capitalize(), model=model, tier=tier)
+                    + "\n",
+                    "$accent",
                 ),
-            )
-            options = [(t("wizard.keep_plan"), AUTO_MODEL), *((name, name) for name in models)]
+                (t.message(route.reason), "$text-muted"),
+            ]
+            if card is not None and self.mix:
+                lines.append((f"\n{self._guarantee_line(card.guarantees)}", "$text-muted"))
+                lines.append((f"\n{t.message(card.context)}", "$text-muted"))
+            lines.extend((f"\n{t.message(warning)}", "$warning") for warning in warnings)
+            body = Content.assemble(*lines)
+            names = models.get(route.engine, ()) if self.mix else models.get(engine, ())
+            options = [(t("wizard.keep_plan"), AUTO_MODEL), *((name, name) for name in names)]
             select = Select(
                 options,
                 id=f"override-{route.role.value}",
@@ -1223,6 +1291,12 @@ class MandateWizard(Vertical):
         note.display = True
         cards.display = True
         self.query_one("#wiz-estimate", Static).update("")
+
+    def choose_mix(self, mix: str) -> None:
+        self.mix = "" if self.mix == mix else mix
+        self._paint()
+        if self.kind and (self.one_page or STEPS[self.step] == "team"):
+            self.refresh_team()
 
     def choose_depth(self, depth: str) -> None:
         self.depth = parse_depth(depth).value
@@ -1275,6 +1349,7 @@ class MandateWizard(Vertical):
             "place-": lambda _, label: self._append("#wiz-where", label),
             "answer-": lambda rest, _: self.answer(*rest.partition("-")[::2]),
             "depth-": lambda rest, _: self.choose_depth(rest),
+            "mix-": lambda rest, _: self.choose_mix(rest),
         }
 
     def understand_now(self) -> None:

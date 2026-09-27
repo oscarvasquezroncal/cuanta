@@ -7,7 +7,7 @@ from cuanta.application.instinct import DecisionMaker
 from cuanta.domain.costs import sum_costs
 from cuanta.domain.instinct import SCOPES, Choice
 from cuanta.domain.ledger import RoutingDecision
-from cuanta.domain.messages import english, msg
+from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.models import TIER_ORDER, ModelEntry, Tier, parse_tier, tier_rank
 from cuanta.domain.routing import (
     ROLES,
@@ -24,6 +24,7 @@ from cuanta.domain.routing import (
     gated,
     investigation_policy,
     learned_tier,
+    pin_issues,
     plan_route,
     policy_reason,
     raise_for_risk,
@@ -104,6 +105,19 @@ class RouteAdvisor:
         self._ledger = ledger
         self._clock_iso = clock_iso
         self._build_blocked = build_blocked
+
+    def pin_issues(
+        self,
+        plan: RoutePlan,
+        pins: Mapping[str, str],
+        engines: Sequence[str],
+        cross: bool = False,
+    ) -> tuple[Message, ...]:
+        if not pins:
+            return ()
+        wanted = {Role(name): model for name, model in pins.items()}
+        blocked = self._build_blocked if cross else frozenset()
+        return pin_issues(wanted, tuple(self._catalog()), plan.routes, engines, blocked)
 
     def _state(self, inputs: RouteInputs, scope: str) -> dict[str, object]:
         return {
