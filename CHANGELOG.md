@@ -7,6 +7,9 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Bench runs accept `--index on|off` and report observed exploration and actual change
+  boundaries. An index suite adds a protected-path fix while preserving existing suites.
+  Disabling automatic index use retains lexical protection and explicit index commands.
 - Completed runs and outcome changes refresh indexed findings and task history. Verified
   sandbox notes survive copy removal; changed anchors remain stale for revalidation.
 - Map search shows ranked reasons, file cards, impact and fresh or stale findings. Result
