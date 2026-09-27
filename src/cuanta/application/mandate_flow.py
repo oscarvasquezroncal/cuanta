@@ -172,7 +172,9 @@ class MandateFlow:
         sandbox: SandboxLaunch | None = None,
         estimator: Estimator | None = None,
         shape_estimator: ShapeEstimator | None = None,
+        refresh_index: Callable[[], None] | None = None,
     ) -> None:
+        self._refresh_index = refresh_index
         self._shape_estimator = shape_estimator
         self._sandbox = sandbox
         self._estimator = estimator
@@ -204,12 +206,26 @@ class MandateFlow:
         options: MandateOptions,
         preview: bool = False,
     ) -> Prepared:
+        self._validate(request, options)
+        return self._prepare_validated(request, signatures, options, preview)
+
+    def _validate(self, request: MandateRequest, options: MandateOptions) -> None:
         validate(request)
+        if self._refresh_index is not None:
+            self._refresh_index()
         if not options.simple and self._has_agents is not None and not self._has_agents():
             raise DomainFailure(
                 "this project has no Forge agents yet (.claude/agents)",
                 "run cuanta init first, or use simple mode (--simple)",
             )
+
+    def _prepare_validated(
+        self,
+        request: MandateRequest,
+        signatures: int,
+        options: MandateOptions,
+        preview: bool,
+    ) -> Prepared:
         run_id = "" if preview or self._new_run_id is None else self._new_run_id()
         key = decision_key(request)
         self._scope.set(run_id, key, preview)
