@@ -7,6 +7,11 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Optional owned MCP sessions expose seven bounded local index tools, with negotiated
+  stdio lifecycle and metadata-only per-run call logging. Real Claude negotiation and
+  parent/analyst reads were observed; complete protected-write coverage remains unverified.
+- A normal MCP disconnect preserves the successful startup connection and its duration
+  instead of reporting the session's clean shutdown as a failed server.
 - Mandates and cross-engine roles receive deterministic indexed context packs before
   volatile request data. Senior and tester roles receive editable-file cards and fresh
   anchored facts; protected write suggestions are excluded. The local `pack --for`
