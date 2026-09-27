@@ -20,6 +20,7 @@ from cuanta.domain.messages import parse_english
 from cuanta.domain.overhead import overhead_messages
 from cuanta.domain.progress import Status
 from cuanta.domain.spectrum import Branch, Leak, LeakKind, View, Window
+from cuanta.tui.anatomy_text import anatomy_content
 from cuanta.tui.bars import bar_lines
 from cuanta.tui.cache_text import first_request_text
 from cuanta.tui.fmt import compact, glyph, money, status_style
@@ -111,6 +112,8 @@ class SpectrumView(VerticalScroll):
                 yield Static("", id="plan-windows", classes="bars")
                 yield Static(t("spectrum.weeks"), classes="card-title")
                 yield Static("", id="plan-weeks", classes="bars")
+            with TabPane(t("anatomy.title"), id="tab-anatomy"):
+                yield Static("", id="spectrum-anatomy", classes="bars")
 
     def on_mount(self) -> None:
         with suppress(NoMatches):
@@ -202,6 +205,7 @@ class SpectrumView(VerticalScroll):
         totals = report.totals
         self._set_loaded(True)
         self.query_one("#spectrum-index", Static).update(index_content(t, report.index))
+        self.query_one("#spectrum-anatomy", Static).update(anatomy_content(t, report.anatomy))
         self.query_one("#spectrum-label", Static).update(self._label(result))
         audit = self.query_one("#spectrum-audit", Static)
         audit.update(self._audit(result))

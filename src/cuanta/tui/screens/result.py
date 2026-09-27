@@ -32,6 +32,7 @@ from cuanta.domain.messages import msg
 from cuanta.domain.outcomes import CROSS_KIND, REJECTED, is_attempt
 from cuanta.domain.overhead import overhead_messages
 from cuanta.domain.report import link_file_refs
+from cuanta.tui.anatomy_text import anatomy_content
 from cuanta.tui.cache_text import first_request_content
 from cuanta.tui.fmt import money, run_money
 from cuanta.tui.i18n import Catalog
@@ -167,6 +168,7 @@ class ResultScreen(Screen[None]):
                 TabPane(t("result.tab_consumption"), id="tab-consumption"),
                 VerticalScroll(id="result-consumption-scroll"),
             ):
+                yield Static(anatomy_content(t, view.anatomy), id="result-anatomy", classes="bars")
                 yield DataTable(id="result-agents", cursor_type="none", zebra_stripes=True)
                 yield Static(self._consumption(), id="result-consumption")
         yield Footer()

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
+from cuanta.domain.anatomy import AnatomyReport, Phase, analyze_anatomy
 from cuanta.domain.costs import sum_costs
 from cuanta.domain.index_metrics import IndexMetrics, index_metrics
 from cuanta.domain.ledger import LedgerEvent
@@ -363,6 +364,8 @@ class LeakKind(StrEnum):
     TEST_OUTPUT = "test_output"
     COMPACTION = "compaction"
     MODEL_SWITCH = "model_switch"
+    SECOND_CONTEXT = "second_context"
+    RE_SUMMARY = "re_summary"
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,7 +392,9 @@ class Suggestion:
 
 
 def find_leaks(
-    events: Sequence[LedgerEvent], ratios: Mapping[str, float] | None = None
+    events: Sequence[LedgerEvent],
+    ratios: Mapping[str, float] | None = None,
+    anatomy: AnatomyReport | None = None,
 ) -> list[Leak]:
     ordered = sorted(events, key=lambda event: (event.ts, event.id))
     bpt = BYTES_PER_TOKEN
@@ -483,15 +488,65 @@ def find_leaks(
                 )
             )
         last[key] = event
+    if anatomy is not None:
+        windows = _agent_windows(ordered)
+        for item in anatomy.events:
+            stamp = _parse(item.ts)
+            key = item.run_id, item.session_id
+            matching = [
+                window
+                for window in windows
+                if window.session == key
+                and stamp is not None
+                and window.start < (stamp, item.event_id) < window.end
+            ]
+            if (
+                item.phase is Phase.START
+                and item.agent != "main"
+                and any(window.complete and window.agent == item.agent for window in matching)
+                and all(window.complete and window.agent == item.agent for window in matching)
+                and not any(
+                    event.id == item.event_id
+                    and event.run_id == item.run_id
+                    and event.query_source == "generate_session_title"
+                    for event in ordered
+                )
+            ):
+                amount = item.totals.fresh_input + item.totals.cache_write
+                leaks.append(
+                    Leak(
+                        LeakKind.SECOND_CONTEXT,
+                        item.agent,
+                        item.agent,
+                        amount,
+                        msg("leak.second_context", tokens=f"{amount:,}"),
+                    )
+                )
+            elif item.phase is Phase.HANDOFF:
+                leaks.append(
+                    Leak(
+                        LeakKind.RE_SUMMARY,
+                        item.agent,
+                        item.agent,
+                        item.totals.cache_write,
+                        msg("leak.re_summary", tokens=f"{item.totals.cache_write:,}"),
+                    )
+                )
     leaks.sort(key=lambda leak: leak.tokens, reverse=True)
     return leaks
 
 
-def suggest(leaks: Sequence[Leak]) -> list[Suggestion]:
+def suggest(leaks: Sequence[Leak], task_type: str = "") -> list[Suggestion]:
     suggestions: list[Suggestion] = []
     seen: set[tuple[LeakKind, str]] = set()
     for leak in leaks:
-        action = msg(f"suggest.{leak.kind.value}", agent=leak.agent, subject=leak.subject)
+        key_name = (
+            "suggest.single_context"
+            if task_type == "investigation"
+            and leak.kind in {LeakKind.SECOND_CONTEXT, LeakKind.RE_SUMMARY}
+            else f"suggest.{leak.kind.value}"
+        )
+        action = msg(key_name, agent=leak.agent, subject=leak.subject)
         key = (leak.kind, english(action))
         if key not in seen:
             seen.add(key)
@@ -729,6 +784,7 @@ class SpectrumReport:
     cost: CostEstimate = field(default_factory=lambda: CostEstimate(None, "not computed"))
     title: Message | None = None
     index: IndexMetrics = field(default_factory=IndexMetrics)
+    anatomy: AnatomyReport = field(default_factory=AnatomyReport)
 
 
 def analyze(
@@ -739,13 +795,21 @@ def analyze(
     snapshots: bool = True,
     prices: PriceTable | None = None,
     title: Message | None = None,
+    task_type: str = "",
 ) -> SpectrumReport:
     resolved = resolve_agents(events)
     usage = usage_events(resolved)
     tools = tool_events(resolved)
     totals = totals_of(usage)
     ratios = calibrate(resolved)
-    leaks = find_leaks(resolved, ratios)
+    anatomy = analyze_anatomy(resolved, usage)
+    leaks = find_leaks(resolved, ratios, anatomy)
+    visible = leaks[:5]
+    for kind in (LeakKind.SECOND_CONTEXT, LeakKind.RE_SUMMARY):
+        if not any(leak.kind is kind for leak in visible):
+            marker = next((leak for leak in leaks if leak.kind is kind), None)
+            if marker is not None:
+                visible.append(marker)
     source = "telemetry" if any(event.kind in USAGE_KINDS for event in usage) else "stream result"
     if not usage:
         source = "none"
@@ -754,12 +818,13 @@ def analyze(
         title=title,
         totals=totals,
         tree=build_tree(label, usage, tools),
-        leaks=tuple(leaks[:5]),
-        suggestions=tuple(suggest(leaks[:5])),
+        leaks=tuple(visible),
+        suggestions=tuple(suggest(visible, task_type)),
         utilization=utilization(tools, changed_files, resolved_tests, totals.total, snapshots),
         events=len(events),
         source=source,
         calibration=ratios,
         cost=estimate_cost(usage, prices),
         index=index_metrics(events),
+        anatomy=anatomy,
     )
