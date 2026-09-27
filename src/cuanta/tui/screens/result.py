@@ -215,6 +215,8 @@ class ResultScreen(Screen[None]):
         ]
         if view.run.max_turns > 0:
             parts.append(t("result.turns", used=view.run.turns, limit=view.run.max_turns))
+            if view.terminal_turn:
+                parts.append(t("result.terminal_turn"))
         elif view.run.end_reason == TURN_LIMIT_SUBTYPE:
             parts.append(t("result.turns_used", used=view.run.turns))
         return Content.styled("  ·  ".join(parts), "$text-muted")

@@ -264,6 +264,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
             "low_usd": run.estimate_low,
             "high_usd": run.estimate_high,
             "samples": run.estimate_samples,
+            "factor": view.estimate_factor,
             "error": view.estimate_error,
         },
         "cap_usd": run.cap_usd,
@@ -271,6 +272,8 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "outcome_at": run.outcome_at or None,
         "outcome_reason": run.outcome_reason or None,
         "duration_s": view.duration_s,
+        "estimate_factor": view.estimate_factor,
+        "turn_count_includes_terminal": view.terminal_turn,
         "changed_files": list(view.changed_files),
         "report": view.text,
         "report_path": view.report_path or None,
@@ -289,6 +292,10 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         count = f"{run.turns}/{run.max_turns}" if run.max_turns > 0 else str(run.turns)
         cut = " · cut by turn limit" if run.end_reason == TURN_LIMIT_SUBTYPE else ""
         turn_rows = (("turns", f"{count}{cut}"),)
+        if view.terminal_turn:
+            turn_rows += (
+                ("turn counting", "raw engine count includes terminal turn-limit result"),
+            )
     rows = (
         ("run", run.id),
         ("type", view.task_type or run.kind),

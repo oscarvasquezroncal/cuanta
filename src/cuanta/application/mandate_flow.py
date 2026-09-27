@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 from cuanta.application.engine_run import DEFAULT_DENIED, EngineLauncher, LaunchSpec
-from cuanta.application.estimate import Estimator
+from cuanta.application.estimate import Estimator, ShapeEstimator
 from cuanta.application.instinct import DecisionScope
 from cuanta.application.mandate import Composed, MandateReport, MandateService, allowed_tools
 from cuanta.application.route_apply import Applied, MandateRouting, RouteOptions
@@ -27,6 +27,7 @@ from cuanta.domain.mandate import (
     INVESTIGATION,
     MandateRequest,
     MandateType,
+    Shape,
     analyst_system_prompt,
     decision_key,
     investigation_builtin_tools,
@@ -170,7 +171,9 @@ class MandateFlow:
         graph_mode: Callable[[], GraphMode] = lambda: GraphMode.NONE,
         sandbox: SandboxLaunch | None = None,
         estimator: Estimator | None = None,
+        shape_estimator: ShapeEstimator | None = None,
     ) -> None:
+        self._shape_estimator = shape_estimator
         self._sandbox = sandbox
         self._estimator = estimator
         self._has_agents = has_agents
@@ -276,6 +279,7 @@ class MandateFlow:
             read_only=investigation,
             temporary_copy=options.temporary_copy,
             estimate=guess,
+            shape=(Shape.SINGLE if options.simple or single else Shape.PIPELINE).value,
         )
         sandbox = self._launch(options)
         base = isolated(base, sandbox, claude)
@@ -315,9 +319,18 @@ class MandateFlow:
     ) -> RunEstimate | None:
         if options.estimate is not None:
             return options.estimate
-        if preview or self._estimator is None:
+        if preview:
             return None
         plan = applied.plan if applied is not None else None
+        if self._shape_estimator is not None:
+            shape = options.simple or single_context(
+                task_type, options.simple, parse_shape(options.shape)
+            )
+            return self._shape_estimator(
+                plan, task_type, options.depth, (Shape.SINGLE if shape else Shape.PIPELINE).value
+            )
+        if self._estimator is None:
+            return None
         return self._estimator(plan, task_type, options.depth)
 
     def _launch(self, options: MandateOptions) -> SandboxLaunch | None:

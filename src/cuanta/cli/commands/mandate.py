@@ -368,7 +368,7 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
     from cuanta.cli.fmt import usd
     from cuanta.domain.depth import parse_depth, profile
     from cuanta.domain.guarantees import cap_warning, engine_guarantees
-    from cuanta.domain.messages import english
+    from cuanta.domain.messages import english, msg
     from cuanta.domain.progress import Note, Status
 
     flow = container.mandate_flow(container.shared_ledger())
@@ -385,9 +385,24 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
         depth=options.depth,
     )
     session.presenter.publish(Note(Status.WARN, "cross-engine pipeline (experimental)"))
+    shares = container.role_budget(plan, request.type, options.depth, args.cross_budget)
     for route in plan.routes:
         if route.model is None:
             continue
+        if route.role in shares:
+            session.presenter.publish(
+                Note(
+                    Status.INFO,
+                    english(
+                        msg("cross.share", role=route.role.value, cap=f"{shares[route.role]:.4f}")
+                    ),
+                )
+            )
+        if route.engine == "codex":
+            import sys
+
+            if sys.platform == "win32":
+                session.presenter.publish(Note(Status.WARN, english(msg("guarantee.codex_builds"))))
         for guarantee in engine_guarantees(route.engine, file_checks=False):
             session.presenter.publish(
                 Note(
@@ -467,6 +482,7 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
                 "ok": step.ok,
                 "cost_usd": step.cost_usd,
                 "cost_source": step.cost_source,
+                "budget_usd": step.budget_usd,
             }
             for step in report.steps
         ],
@@ -478,14 +494,18 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
 
 
 def team_lines(prepared: "Prepared") -> list[str]:
+    import sys
+
     from cuanta.domain.guarantees import engine_guarantees
-    from cuanta.domain.messages import english
+    from cuanta.domain.messages import english, msg
 
     applied = prepared.applied
     lines = [
         f"{prepared.engine_name} · {english(row.message)}"
         for row in engine_guarantees(prepared.engine_name)
     ]
+    if prepared.engine_name == "codex" and sys.platform == "win32":
+        lines.append(english(msg("guarantee.codex_builds")))
     if applied is None or not applied.active:
         return [*lines, "team: routing off, the engine picks its default models"]
     for route in applied.plan.routes:
@@ -526,6 +546,8 @@ def estimate_line(guess: "RunEstimate") -> str:
     span = usd(guess.low) if single else f"{usd(guess.low)}–{usd(guess.high)}"
     if guess.source == "history":
         return f"estimate: {span} from history (n={guess.samples})"
+    if guess.factor is not None:
+        return f"estimate: {span} from the model plan × {guess.factor:.2f} (n={guess.samples})"
     return f"estimate: {span} from the model plan"
 
 
@@ -548,6 +570,7 @@ def sandbox_payload(result: "SandboxResult") -> dict[str, object]:
     return {
         "copy_root": result.copy_root,
         "removed": result.removed,
+        "record_error": result.record_error or None,
         "trial": trial_payload(result.trial) if result.trial is not None else None,
     }
 
@@ -561,6 +584,13 @@ def sandbox_blocks(result: "SandboxResult") -> "list[Block]":
     where = "removed" if result.removed else f"kept at {result.copy_root}"
     rows = [("isolated copy", where)]
     blocks: list[Block] = []
+    if result.record_error:
+        blocks.append(
+            Line(
+                f"sandbox changes could not be collected: {result.record_error}; copy kept",
+                Status.FAIL,
+            )
+        )
     if trial is not None:
         rows.append(("changes", f"{len(trial.changes)} files · +{trial.added} −{trial.removed}"))
         if trial.changes:
@@ -613,7 +643,9 @@ def sandbox_blocks(result: "SandboxResult") -> "list[Block]":
 
 
 def guard_tripped(result: "SandboxResult | None") -> bool:
-    return result is not None and result.trial is not None and result.trial.guard_tripped
+    return result is not None and (
+        bool(result.record_error) or (result.trial is not None and result.trial.guard_tripped)
+    )
 
 
 def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> "Document":

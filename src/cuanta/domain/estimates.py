@@ -6,9 +6,10 @@ from typing import Literal
 from cuanta.domain.depth import MIN_RANGE_SAMPLES
 from cuanta.domain.routing import CostRange
 
-EstimateSource = Literal["history", "plan", "none"]
+EstimateSource = Literal["history", "plan", "calibrated", "none"]
 HISTORY: EstimateSource = "history"
 PLAN: EstimateSource = "plan"
+CALIBRATED: EstimateSource = "calibrated"
 NO_ESTIMATE: EstimateSource = "none"
 
 
@@ -18,6 +19,7 @@ class RunEstimate:
     low: float | None = None
     high: float | None = None
     samples: int = 0
+    factor: float | None = None
 
 
 def estimate_bounds(similar: CostRange, planned: float | None) -> RunEstimate:

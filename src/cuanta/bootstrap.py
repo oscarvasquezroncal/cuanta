@@ -4,7 +4,7 @@ import importlib
 import importlib.metadata
 import os
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
@@ -112,9 +112,10 @@ if TYPE_CHECKING:
     from cuanta.domain.engine import EngineEvent
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.instinct import Choice
+    from cuanta.domain.ledger import Run
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
-    from cuanta.domain.routing import CostRange, RoutingPolicy
+    from cuanta.domain.routing import CostRange, Role, RoutingPolicy
     from cuanta.domain.sandbox import SandboxLaunch
     from cuanta.domain.shells import Shell
     from cuanta.domain.terminal import TerminalReport
@@ -639,17 +640,51 @@ class Container:
 
         return Drafts(FileDraftStore(self.cuanta_dir() / "drafts"), self.clock.now_iso)
 
-    def run_estimate(self, plan: RoutePlan | None, task_type: str, depth: str) -> RunEstimate:
+    def estimate_shapes(self, runs: Sequence[Run]) -> dict[str, str]:
+        from cuanta.application.results import stored_shape
+        from cuanta.application.run_reports import RunReports
+
+        reports = RunReports(self.state_workspace())
+        shapes: dict[str, str] = {}
+        for run in runs:
+            if run.kind == "cross":
+                shapes[run.id] = "pipeline"
+            elif run.kind == "mandate":
+                single, known = stored_shape(reports.meta(run.id) or {}, run, run.task_type)
+                if known:
+                    shapes[run.id] = "single" if single else "pipeline"
+        return shapes
+
+    def run_estimate(
+        self, plan: RoutePlan | None, task_type: str, depth: str, shape: str = "pipeline"
+    ) -> RunEstimate:
         from cuanta.adapters.system.prices import load_prices
         from cuanta.application.estimate import run_estimate
 
-        return run_estimate(plan, self.shared_ledger().runs(), load_prices(), task_type, depth)
+        runs = self.shared_ledger().runs()
+        return run_estimate(
+            plan, runs, load_prices(), task_type, depth, shape, self.estimate_shapes(runs)
+        )
 
-    def team_estimate(self, plan: RoutePlan, task_type: str, depth: str, cap: float) -> Estimate:
+    def team_estimate(
+        self, plan: RoutePlan, task_type: str, depth: str, cap: float, shape: str = "pipeline"
+    ) -> Estimate:
         from cuanta.adapters.system.prices import load_prices
         from cuanta.application.estimate import estimate
 
-        return estimate(plan, self.shared_ledger().runs(), load_prices(), task_type, depth, cap)
+        runs = self.shared_ledger().runs()
+        return estimate(
+            plan, runs, load_prices(), task_type, depth, cap, shape, self.estimate_shapes(runs)
+        )
+
+    def role_budget(
+        self, plan: RoutePlan, task_type: str, depth: str, cap: float
+    ) -> Mapping[Role, float]:
+        return {
+            cost.role: cost.share
+            for cost in self.team_estimate(plan, task_type, depth, cap).roles
+            if cost.share > 0
+        }
 
     def improve_request(self, request: MandateRequest, spend: bool) -> Improvement:
         from cuanta.application.assistant import (
@@ -728,6 +763,7 @@ class Container:
             checkpoint=checkpoint,
             estimator=self.run_estimate,
             depth=depth,
+            allocator=self.role_budget,
         )
 
     def bench_runner(
@@ -931,6 +967,7 @@ class Container:
             graph_mode=lambda: self.detector().graph_mode()[0],
             sandbox=sandbox,
             estimator=self.run_estimate,
+            shape_estimator=self.run_estimate,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -1337,6 +1374,7 @@ class Container:
             catalog=lambda: service.view().entries,
             ledger=ledger,
             clock_iso=self.clock.now_iso,
+            build_blocked=frozenset({"codex"}) if os.name == "nt" else frozenset(),
         )
 
     def latest_tests(self) -> LatestTests:

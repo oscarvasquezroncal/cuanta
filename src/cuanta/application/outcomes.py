@@ -71,7 +71,7 @@ class RunOutcomes:
 
     def reject(self, run_id: str, reason: str = "") -> OutcomeChange:
         run = self.pending(run_id)
-        if run.mode != SANDBOX_MODE:
+        if run.mode != SANDBOX_MODE or run.end_reason == "error_sandbox_record":
             return self._mark(run, REJECTED, reason)
         self._trials.discard(run.id, reason)
         stored = self._ledger.get_run(run.id)

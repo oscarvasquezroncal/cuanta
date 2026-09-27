@@ -294,7 +294,8 @@ class MandateService:
         return report
 
     def save_meta(self, report: MandateReport) -> None:
-        self._reports.save_meta(report.run.id, report_payload(report))
+        existing = self._reports.meta(report.run.id) or {}
+        self._reports.save_meta(report.run.id, {**existing, **report_payload(report)})
 
 
 def report_payload(report: MandateReport) -> dict[str, object]:

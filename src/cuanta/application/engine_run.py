@@ -59,6 +59,8 @@ class LaunchSpec:
     mode: str = ""
     env: tuple[tuple[str, str], ...] = ()
     estimate: RunEstimate | None = None
+    shape: str = ""
+    pipeline_budget_usd: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,9 +181,16 @@ class EngineLauncher:
             estimate_high=guess.high if guess else None,
             estimate_source=guess.source if guess else "",
             estimate_samples=guess.samples if guess else 0,
-            cap_usd=spec.max_budget_usd,
+            cap_usd=spec.pipeline_budget_usd or spec.max_budget_usd,
         )
         self._ledger.add_run(run)
+        if self._reports is not None and (spec.shape or spec.kind == "cross" or guess is not None):
+            meta = self._reports.meta(run_id) or {}
+            if spec.shape or spec.kind == "cross":
+                meta["shape"] = spec.shape or "pipeline"
+            if guess is not None:
+                meta["estimate_factor"] = guess.factor
+            self._reports.save_meta(run_id, meta)
         if before is not None:
             before(run_id)
         outcome: EngineOutcome | None = None
