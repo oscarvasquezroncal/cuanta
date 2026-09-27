@@ -17,6 +17,19 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-09-27 — The product today: six measured baseline trials
+- Shipped: six sandbox audit/fix/feature trials, exact recovered requests and a frozen replay
+  matrix. Public report keeps actual models, costs, cache, attempt/launch times and outcomes.
+  Native trial role references now remove matching engine prefixes before routing, with
+  command-through-routing regressions for Sonnet and Opus and rejection of engine mismatches.
+- Why: the requested all-Sonnet pipeline silently used default Opus roles because qualified
+  resolved IDs did not match the native catalog. The already-started series remains measured;
+  its model contrasts are marked blocked, rather than relabelled as pure Sonnet.
+- Tried and rejected: two GSAP patches passed external commands but failed unchanged source
+  checks and lacked full runtime failure proof. No check was weakened and no patch applied.
+  The six trials cost $5.08215255 against $8.00; four reports/patches accepted, two rejected.
+- Rule extracted: none. Corrected V4 launches must label policy differences from misrouted E1.
+
 ## 2026-09-27 — Cross-engine budget reservations and measured estimates
 - Shipped: proportional shares with a five-percent floor per active role, future-role reserves,
   unused-share carry, complete pipeline timing and calibrated shape/depth history estimates.

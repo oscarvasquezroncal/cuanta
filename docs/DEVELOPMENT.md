@@ -179,6 +179,9 @@ Every trial requires `name`, `type`, `what`, `why`, `tests`, `out_of_scope`, `de
 and `cap_usd`. Optional keys are `shape`, `model`, `cross_engine`, `simple`, `role_models` (a list of
 `role=model` strings), `acceptance` (command strings), `checks` (tables with `file` and
 `regex`), and `recovery_note`. Paths in checks are relative to the acceptance copy.
+Engine-qualified role references such as `senior=claude:claude-sonnet-5` retain their engine
+in cross mode. Native trials remove the matching engine prefix before routing and reject a
+role assigned to a different engine instead of silently using the default model.
 Keep client paths and original requests under ignored `.cuanta/`. Mark reconstructed fields
 in `recovery_note`; missing historical request text cannot be claimed as an exact replay.
 
