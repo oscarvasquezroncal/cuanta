@@ -13,6 +13,7 @@ from cuanta.domain.index_metrics import IndexMetrics, index_metrics
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pricing import CostEstimate, PriceTable, estimate_cost
+from cuanta.domain.telemetry import agent_from_signals
 
 USAGE_KINDS = frozenset({"api_request", "sse_event:response.completed"})
 FALLBACK_KINDS = frozenset({"result_usage"})
@@ -20,7 +21,12 @@ TOOL_KINDS = frozenset({"tool_result", "tool_use"})
 READ_TOOLS = frozenset({"Read", "read", "NotebookRead", "View"})
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit", "edit", "write", "patch"})
 SUBAGENT_TOOLS = frozenset({"Agent", "Task"})
-UNCERTAIN_AGENTS = frozenset({"", "custom", "subagent"})
+UNCERTAIN_AGENTS = frozenset({"", "custom", "subagent", "uncertain"})
+ATTRIBUTABLE_KINDS = (
+    USAGE_KINDS
+    | TOOL_KINDS
+    | frozenset({"tool_decision", "mcp_tool", "mcp_tool_call", "index_call"})
+)
 TEST_COMMAND = re.compile(
     r"\b(pytest|jest|vitest|go test|cargo test|npm test|pnpm test|yarn test"
     r"|mvn test|gradle test|rspec|phpunit)\b"
@@ -82,43 +88,211 @@ def _ts(event: LedgerEvent) -> str:
     return event.ts
 
 
-def _spawned(event: LedgerEvent) -> str:
-    if event.tool_name not in SUBAGENT_TOOLS or not event.raw:
-        return ""
+def _agent_fields(event: LedgerEvent) -> dict[str, object]:
     try:
         data = json.loads(event.raw)
-    except ValueError:
-        return ""
+    except (ValueError, RecursionError):
+        return {}
     if not isinstance(data, dict):
+        return {}
+    fields: dict[str, object] = {key: value for key, value in data.items() if isinstance(key, str)}
+    attributes = data.get("attributes")
+    if isinstance(attributes, dict):
+        fields.update({key: value for key, value in attributes.items() if isinstance(key, str)})
+    elif isinstance(attributes, list):
+        for attribute in attributes:
+            if not isinstance(attribute, dict) or not isinstance(attribute.get("key"), str):
+                continue
+            value = attribute.get("value")
+            if isinstance(value, dict):
+                value = value.get("stringValue")
+            fields[attribute["key"]] = value
+    for key in ("cuanta.parameters", "tool_parameters", "tool_input", "tool.parameters"):
+        parameters = fields.get(key)
+        if isinstance(parameters, str):
+            try:
+                parameters = json.loads(parameters)
+            except (ValueError, RecursionError):
+                continue
+        if isinstance(parameters, dict):
+            fields.update(
+                {
+                    key: value
+                    for key, value in parameters.items()
+                    if key in {"spawned_agent", "subagent_type"}
+                }
+            )
+    return fields
+
+
+def _agent_text(fields: Mapping[str, object], *keys: str) -> str:
+    return next((value for key in keys if isinstance(value := fields.get(key), str) and value), "")
+
+
+def _spawned(event: LedgerEvent) -> str:
+    if event.tool_name not in SUBAGENT_TOOLS:
         return ""
-    parameters = data.get("cuanta.parameters")
-    if isinstance(parameters, dict):
-        value = parameters.get("spawned_agent") or parameters.get("subagent_type")
-        if isinstance(value, str):
-            return value
-    value = data.get("spawned_agent")
-    return value if isinstance(value, str) else ""
+    return _agent_text(_agent_fields(event), "spawned_agent", "subagent_type")
+
+
+def _known_agent(event: LedgerEvent, fields: Mapping[str, object]) -> str:
+    name = _agent_text(fields, "agent.name", "agent_name", "agent.type")
+    source = event.query_source or _agent_text(fields, "query_source", "query.source")
+    if name and name not in UNCERTAIN_AGENTS:
+        return name
+    if source:
+        hint = agent_from_signals(name, source)
+        if hint.certain:
+            return hint.name
+    if event.agent not in UNCERTAIN_AGENTS and fields.get("attributed") != "default":
+        return event.agent
+    return ""
+
+
+def _session(event: LedgerEvent) -> tuple[str, str]:
+    return event.run_id, event.session_id
+
+
+@dataclass(frozen=True, slots=True)
+class _AgentWindow:
+    session: tuple[str, str]
+    start: tuple[datetime, int]
+    end: tuple[datetime, int]
+    agent: str
+    complete: bool = True
+
+
+def _agent_windows(events: Sequence[LedgerEvent]) -> list[_AgentWindow]:
+    pending: dict[tuple[str, str, str], list[LedgerEvent]] = defaultdict(list)
+    windows: list[_AgentWindow] = []
+    for event in events:
+        if not event.session_id or _parse(event.ts) is None:
+            continue
+        if event.kind == "tool_decision" and (name := _spawned(event)):
+            starts = pending[*_session(event), name]
+            if event not in starts:
+                starts.append(event)
+        elif event.kind == "subagent_completed":
+            name = _agent_text(_agent_fields(event), "agent_type", "subagent_type")
+            starts = pending.pop((*_session(event), name), [])
+            if len(starts) > 1:
+                pending[*_session(event), name] = starts[1:]
+            end = _parse(event.ts)
+            for decision in starts:
+                start = _parse(decision.ts)
+                if start is not None and end is not None and start <= end:
+                    windows.append(
+                        _AgentWindow(
+                            _session(event),
+                            (start, decision.id),
+                            (end, event.id),
+                            name,
+                            len(starts) == 1,
+                        )
+                    )
+    for (_, _, name), starts in pending.items():
+        for decision in starts:
+            start = _parse(decision.ts)
+            if start is not None:
+                windows.append(
+                    _AgentWindow(
+                        _session(decision),
+                        (start, decision.id),
+                        (datetime.max.replace(tzinfo=UTC), 0),
+                        name,
+                        False,
+                    )
+                )
+    return windows
+
+
+def _bracketed_agent(event: LedgerEvent, requests: Sequence[LedgerEvent]) -> str:
+    moment = _parse(event.ts)
+    if moment is None or not event.session_id:
+        return ""
+    before: tuple[datetime, list[LedgerEvent]] | None = None
+    after: tuple[datetime, list[LedgerEvent]] | None = None
+    for request in requests:
+        if _session(request) != _session(event):
+            continue
+        request_time = _parse(request.ts)
+        if request_time is None:
+            continue
+        if request_time < moment and (before is None or request_time > before[0]):
+            before = request_time, [request]
+        elif before is not None and request_time == before[0]:
+            before[1].append(request)
+        if request_time > moment and (after is None or request_time < after[0]):
+            after = request_time, [request]
+        elif after is not None and request_time == after[0]:
+            after[1].append(request)
+    if before is not None and after is not None:
+        names = {_known_agent(request, _agent_fields(request)) for request in before[1] + after[1]}
+        if len(names) == 1:
+            return next(iter(names))
+    return ""
 
 
 def resolve_agents(events: Sequence[LedgerEvent]) -> list[LedgerEvent]:
-    ordered = sorted(events, key=lambda event: (event.ts, event.id))
-    spawns: list[tuple[str, str, str]] = [
-        (event.session_id, event.ts, name) for event in ordered if (name := _spawned(event))
+    ordered = sorted(
+        events,
+        key=lambda event: (
+            _parse(event.ts) or datetime.min.replace(tzinfo=UTC),
+            event.ts,
+            event.id,
+        ),
+    )
+    windows = _agent_windows(ordered)
+    requests = [event for event in ordered if event.kind in USAGE_KINDS]
+    bounded_sessions = {
+        _session(event)
+        for event in ordered
+        if event.kind == "subagent_completed"
+        or (event.kind == "tool_decision" and event.tool_name in SUBAGENT_TOOLS)
+    }
+    spawns: list[tuple[tuple[str, str], str, str]] = [
+        (_session(event), event.ts, name)
+        for event in ordered
+        if event.kind == "tool_result" and (name := _spawned(event))
     ]
     resolved: list[LedgerEvent] = []
     for event in ordered:
-        if event.agent not in UNCERTAIN_AGENTS or event.kind not in USAGE_KINDS | TOOL_KINDS:
+        fields = _agent_fields(event)
+        known = _known_agent(event, fields)
+        if known or event.kind not in ATTRIBUTABLE_KINDS:
+            if known and known != event.agent:
+                resolved.append(replace(event, agent=known))
+                continue
             resolved.append(event if event.agent else replace(event, agent="main"))
             continue
-        match = next(
-            (
-                name
-                for session, ts, name in spawns
-                if session == event.session_id and ts >= event.ts
-            ),
-            "",
+        moment = _parse(event.ts)
+        enclosing = [
+            window
+            for window in windows
+            if moment is not None
+            and window.session == _session(event)
+            and window.start < (moment, event.id) < window.end
+        ]
+        names = {window.agent for window in enclosing}
+        match = (
+            next(iter(names))
+            if len(names) == 1 and all(window.complete for window in enclosing)
+            else ""
         )
-        fallback = "main" if not event.agent else event.agent
+        if not enclosing:
+            match = _bracketed_agent(event, requests)
+        if not match and _session(event) not in bounded_sessions:
+            match = next(
+                (
+                    name
+                    for session, ts, name in spawns
+                    if session[1] and session == _session(event) and ts >= event.ts
+                ),
+                "",
+            )
+        fallback = (
+            "main" if not event.agent or fields.get("attributed") == "default" else event.agent
+        )
         resolved.append(replace(event, agent=match or fallback))
     return resolved
 

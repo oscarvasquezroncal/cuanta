@@ -77,6 +77,8 @@ def agent_from_signals(agent_name: str, query_source: str) -> AgentHint:
         if lowered.startswith(prefix) and len(source) > len(prefix):
             name = source[len(prefix) :]
             return AgentHint(name, name != REDACTED_AGENT)
+    if not source and not agent_name:
+        return AgentHint(MAIN_AGENT, False)
     if lowered in MAIN_SOURCES or lowered.startswith("repl_main"):
         return AgentHint(MAIN_AGENT, True)
     if agent_name == REDACTED_AGENT or lowered in {"agent", "subagent", "task"}:
