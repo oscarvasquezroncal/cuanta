@@ -7,6 +7,11 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Completed runs and outcome changes refresh indexed findings and task history. Verified
+  sandbox notes survive copy removal; changed anchors remain stale for revalidation.
+- Map search shows ranked reasons, file cards, impact and fresh or stale findings. Result
+  and Spectrum show observed index use, returned-token estimates and manifest-based guards
+  without counting provider copies of owned MCP calls twice.
 - Optional owned MCP sessions expose seven bounded local index tools, with negotiated
   stdio lifecycle and metadata-only per-run call logging. Real Claude negotiation and
   parent/analyst reads were observed; complete protected-write coverage remains unverified.
