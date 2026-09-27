@@ -7,6 +7,10 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Result Consumption and Spectrum show read efficiency with an explicit file-based formula.
+  Successful raw and Cuanta page reads count unique source files; investigations count cited
+  reads and code work counts edited or cited reads. Saved sandbox aliases normalize to source
+  paths. Missing pipeline reports retain the previous token-based utilization fallback.
 - Result Consumption and Spectrum show an exclusive request-phase anatomy with tokens,
   requests and observed costs. Spectrum JSON includes safe per-agent phase records;
   investigation advice identifies observed delegated contexts and possible handoffs.
