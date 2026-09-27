@@ -286,6 +286,36 @@ class SqliteIndex:
                 for row in self._connection.execute("SELECT key, value FROM meta ORDER BY key")
             }
 
+    def replace_rows(self, table: IndexTable, path: str, rows: Sequence[IndexRow]) -> None:
+        selected = _table(table)
+        normalized = index_path(path)
+        prepared = tuple(_row(item) for item in rows)
+        if any(item.path != normalized for item in prepared):
+            raise ValueError("Replacement records must belong to their source path")
+        with self._transaction() as connection:
+            connection.execute(f"DELETE FROM {selected} WHERE path = ?", (normalized,))
+            for item in prepared:
+                source = connection.execute(
+                    "SELECT content_hash FROM files WHERE path = ?", (item.path,)
+                ).fetchone()
+                stale = item.stale or source is None or str(source[0]) != item.source_hash
+                connection.execute(
+                    f"INSERT INTO {selected} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        item.id,
+                        item.path,
+                        item.source_hash,
+                        item.provenance,
+                        item.text,
+                        item.line,
+                        item.end_line,
+                        item.target,
+                        item.relation,
+                        item.confidence,
+                        int(stale),
+                    ),
+                )
+
     def set_meta(self, values: Mapping[str, str]) -> None:
         if "schema_version" in values and values["schema_version"] != str(INDEX_VERSION):
             raise ValueError("The index schema version is managed by its storage adapter")
