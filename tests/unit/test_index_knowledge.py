@@ -56,6 +56,29 @@ def test_reports_without_ledger_are_zero_write_and_have_no_invented_source(tmp_p
     assert before == {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
 
 
+def test_native_shell_edits_import_verified_manifest_paths_once(tmp_path: Path) -> None:
+    _write(tmp_path, "src/a.py", "updated = True\n")
+    ledger = MemoryLedger()
+    ledger.add_run(
+        Run("ROOT", "mandate", task_type="bug", status="ok", ended_at="2026-09-27T00:00:00Z")
+    )
+    ledger.add_events(
+        (LedgerEvent(run_id="ROOT", kind="tool_result", tool_name="Bash", success=True),)
+    )
+    _json(
+        tmp_path,
+        ".cuanta/runs/ROOT/run.json",
+        {
+            "changed_files": ["src/a.py", "../outside.py", "ghost.py"],
+            "actual_edited_paths": ["src/a.py"],
+        },
+    )
+    adapter = LocalIndexKnowledge(tmp_path, tmp_path, ledger)
+    first = adapter.history()
+    assert len(first) == 1 and first[0].path == "src/a.py" and first[0].action == "edit"
+    assert adapter.history() == first
+
+
 def test_all_run_trial_and_nested_export_reports_are_deterministic(tmp_path: Path) -> None:
     project, state = tmp_path / "project", tmp_path / "state"
     for root, relative in (

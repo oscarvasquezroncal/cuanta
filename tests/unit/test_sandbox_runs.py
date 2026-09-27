@@ -184,6 +184,26 @@ class Harness:
         return sink
 
 
+def test_learning_runs_after_saved_trial_and_before_sandbox_removal(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, EditingEngine(_edits))
+    learned: list[str] = []
+
+    def learn(copy: SandboxCopy, run_id: str) -> None:
+        assert copy.root.is_dir()
+        trial = harness.store.load(run_id)
+        assert trial is not None and trial.paths
+        assert harness.storage.read_text(f".cuanta/trials/{run_id}/report.md") == REPORT
+        learned.append(run_id)
+
+    harness.runner = SandboxRunner(
+        harness.sandbox, harness.recorder, harness.ledger, harness.project, after_record=learn
+    )
+    harness.run()
+    assert harness.result.trial is not None
+    assert learned == [harness.result.trial.run_id]
+    assert not Path(harness.result.copy_root).exists()
+
+
 def test_a_sandbox_run_edits_only_the_copy_and_stores_a_trial(tmp_path: Path) -> None:
     harness = Harness(tmp_path, EditingEngine(_edits))
     harness.run()

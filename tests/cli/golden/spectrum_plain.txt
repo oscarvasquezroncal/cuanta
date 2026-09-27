@@ -10,6 +10,14 @@ source       telemetry
 the first request carried 27,000 tokens of context
 the first request hit a warm cache: 20,000 of 27,000 tokens read from cache (74%)
 
+== Map exploration ==
+Index hit rate: 0%
+0 index calls, 2 raw reads, 2 exploration calls
+Estimated exploration tokens: 8,000 (returned bytes ÷ 4)
+Stale facts: 0
+Protected-path edits: 0
+Edits outside the plan: 0
+
 run 01KFIXTURERUN0000000000000 · mandate · HU-007  98.8K · 100.0%
   - main  86.0K · 87.0%
     - claude-opus  86.0K · 87.0%
