@@ -122,11 +122,7 @@ Use focused tests during development. At milestone close, from the repository ro
 
 ```cmd
 uv sync --extra web
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy --strict
-uv run pytest -n auto -m "not live and not perf" --cov --cov-report=term
-uv run python scripts/tests/performance.py
+scripts\dev\gate.cmd
 ```
 
 The full test gate requires both pytest phases, in that order, from the same workspace.
@@ -137,9 +133,9 @@ phase enforces the configured coverage floor. This keeps unrelated collected tes
 out of performance measurements. Keep the assertions and budgets unchanged.
 
 `loadgroup` scheduling keeps tests sharing `xdist_group` serial within their
-group; fixed-port listener tests share one group. Use `--maxprocesses=4` when
-local resources require a worker limit for the parallel phase. While working, run focused
-tests only. At a milestone close, run the full gate once; run it twice consecutively only when
+group; fixed-port listener tests share one group. The local gate uses `-n auto` with at most
+four workers. While working, run `scripts\dev\focus.cmd`. At a milestone close, run the full
+gate once; use `scripts\dev\gate.cmd --twice` only when
 the milestone changes process management, and at V2 M9. Do not lower the coverage floor or move
 speed budgets.
 Tests have a 120-second timeout; tests whose own bounds require more time use
@@ -150,3 +146,48 @@ and the next milestone in a local plan under the ignored `.cuanta/` directory.
 Keep private session prompts, local paths and client details out of public documentation.
 G0 commits wait for the user to run setup and confirm; later milestones use the active
 hook. Stop after each milestone.
+
+## Development scripts
+
+Read the short summary first. Full command output and `summary.json` live under
+`.cuanta/gates/<timestamp>/`; open a log only at the failing test named by the summary.
+The gate prints step durations, pytest counts, coverage and a bounded list of failures.
+Exit codes are 0 for success, 1 for a functional, report or coverage failure, and 2 when
+only performance speed assertions exceed their budgets. The local gate enforces the
+unchanged coverage floor in both phases. CI runs performance separately with
+`continue-on-error: true`; it has independent coverage and does not block install-smoke
+or run on release tags. Release validation still requires every gate and install-smoke job.
+
+```cmd
+scripts\dev\gate.cmd --static
+scripts\dev\gate.cmd --no-perf
+scripts\dev\focus.cmd
+scripts\dev\focus.cmd src/cuanta/domain/example.py tests/unit/test_example.py
+scripts\dev\trial.cmd .cuanta\specs\t1.toml --dry-run
+scripts\dev\trial.cmd .cuanta\specs\t1.toml --only T1b-1
+```
+
+Focus reads staged, unstaged and untracked paths from Git status, checks the Python files
+with ruff and format, then runs incremental mypy, architecture tests and test modules that
+import changed modules, including changed tests. It stops at the first failure. Config and
+shared conftest changes select all tests. Deleted and renamed modules remain in the selection.
+
+Trial specs are private TOML files with `project`, `total_cap_usd` and `[[trials]]` tables.
+Every trial requires `name`, `type`, `what`, `why`, `tests`, `out_of_scope`, `depth`, `engine`
+and `cap_usd`. Optional keys are `shape`, `model`, `cross_engine`, `role_models` (a list of
+`role=model` strings), `acceptance` (command strings), `checks` (tables with `file` and
+`regex`), and `recovery_note`. Paths in checks are relative to the acceptance copy.
+Keep client paths and original requests under ignored `.cuanta/`. Mark reconstructed fields
+in `recovery_note`; missing historical request text cannot be claimed as an exact replay.
+
+The trial script previews commands and caps with `--dry-run`, selects one trial with `--only`,
+and skips acceptance commands and checks with `--skip-accept`. Live execution requires enough
+of the total cap to reserve the next trial's cap. It launches only sandbox mandates, stops
+on unknown costs or an exceeded cap, and labels reported and token-priced estimated costs.
+Each acceptance run uses a fresh owned copy, validates stored after-image hashes, runs the
+commands and file/regex checks, and removes the copy. Full output, costs, estimates, turns,
+tokens and first-request cache metrics are saved in `summary.json` and a Markdown table.
+It prints `cuanta runs accept` and `cuanta runs reject` commands; the builder decides.
+
+On POSIX use `uv run --no-sync python scripts/dev/gate.py`, `focus.py` or `trial.py` with the
+same arguments. Acceptance commands are argument lists on POSIX and use cmd on Windows.
