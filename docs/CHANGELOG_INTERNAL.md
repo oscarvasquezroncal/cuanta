@@ -17,6 +17,15 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-09-27 — Durable incremental index inventory
+- Shipped: pure index records and a port, copy-local SQLite storage with independent schema,
+  hash provenance, recovery and safe source/documentation/style inventory. `cuanta index`
+  updates only changed records; mandates refresh the inventory before launch.
+- Why: source-only scanning misses non-source inputs and cannot safely enumerate index inputs.
+- Tried and rejected: sharing the original project's index with an isolated copy, because
+  different trees would overwrite each other's hashes. The ledger remains shared separately.
+- Rule extracted: none.
+
 ## 2026-09-27 — The product today: six measured baseline trials
 - Shipped: six sandbox audit/fix/feature trials, exact recovered requests and a frozen replay
   matrix. Public report keeps actual models, costs, cache, attempt/launch times and outcomes.
