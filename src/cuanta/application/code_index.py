@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from cuanta.domain.code_index import INDEX_TABLES, IndexedFile, IndexRow, IndexStatus, IndexTable
 from cuanta.domain.detection import is_source_file
-from cuanta.ports.code_index import CodeIndex, IndexExtractor, IndexGraph, IndexInventory
+from cuanta.domain.index_facts import agent_note, history_row, report_facts, revalidate_fact
+from cuanta.domain.index_rules import scoped_rules, test_links
+from cuanta.ports.code_index import (
+    CodeIndex,
+    IndexExtractor,
+    IndexGraph,
+    IndexInventory,
+    IndexKnowledge,
+)
 
 
 class IndexService:
@@ -20,6 +29,9 @@ class IndexService:
         recovered: bool = False,
         extractor: IndexExtractor | None = None,
         graph: IndexGraph | None = None,
+        knowledge: IndexKnowledge | None = None,
+        verify_commands: Callable[[], tuple[str, ...]] | None = None,
+        close_knowledge: Callable[[], None] | None = None,
     ) -> None:
         self.index = index
         self.inventory = inventory
@@ -27,6 +39,9 @@ class IndexService:
         self._recovered = recovered
         self._extractor = extractor
         self._graph = graph
+        self._knowledge = knowledge
+        self._verify_commands = verify_commands
+        self._close_knowledge = close_knowledge
 
     def update(self) -> IndexStatus:
         started = time.perf_counter()
@@ -44,6 +59,7 @@ class IndexService:
             self.index.replace_files(changed, removed)
             self.index.set_meta({"updated_at": self._now(), "content_hash": fingerprint})
         self._structures(candidates, changed, removed)
+        self._knowledge_rows(candidates, changed, removed)
         status = self.status()
         return replace(
             status,
@@ -67,10 +83,118 @@ class IndexService:
             recovered=self._recovered,
             content_hash=meta.get("content_hash", ""),
             coverage_by_kind=tuple(sorted(Counter(item.coverage for item in files).items())),
+            history_status=meta.get("history_status", ""),
         )
 
     def close(self) -> None:
-        self.index.close()
+        try:
+            self.index.close()
+        finally:
+            if self._close_knowledge is not None:
+                self._close_knowledge()
+
+    def note(self, path: str, note: str, line: int = 0, end_line: int = 0) -> IndexRow:
+        file = next((item for item in self.index.files() if item.path == path), None)
+        text = self.inventory.read(path) if file else None
+        if file is None or text is None:
+            raise ValueError("Notes require an indexed source file")
+        row = agent_note(file, text, note, line, end_line)
+        self.index.put_rows("notes", (row,))
+        return row
+
+    def _knowledge_rows(
+        self,
+        files: tuple[IndexedFile, ...],
+        changed: tuple[IndexedFile, ...],
+        removed: tuple[str, ...],
+    ) -> None:
+        meta = self.index.meta()
+        first = meta.get("knowledge_version") != "1"
+        selected = files if first else changed
+        current = {item.path: item for item in files}
+        for file in selected:
+            text = self.inventory.read(file.path)
+            if text is not None and hashlib.sha256(text.encode()).hexdigest() == file.content_hash:
+                self.index.replace_rows("rules", file.path, scoped_rules(file, text))
+        command_json = meta.get("verify_commands", "[]")
+        if self._verify_commands and (
+            first
+            or any(
+                item.path.rsplit("/", 1)[-1]
+                in {"package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
+                for item in changed
+            )
+            or any(
+                path.rsplit("/", 1)[-1]
+                in {"package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
+                for path in removed
+            )
+        ):
+            command_json = json.dumps(self._verify_commands())
+            self.index.set_meta({"verify_commands": command_json})
+        commands = tuple(str(item) for item in json.loads(command_json))
+        if selected or removed:
+            links = test_links(files, self.index.rows("edges"), commands)
+            grouped: dict[str, list[IndexRow]] = {}
+            for row in links:
+                grouped.setdefault(row.path, []).append(row)
+            previous = {row.path for row in self.index.rows("test_links")}
+            for path in sorted(previous | grouped.keys()):
+                self.index.replace_rows("test_links", path, grouped.get(path, ()))
+        if self._knowledge is not None:
+            reports, history = self._knowledge.reports(), self._knowledge.history()
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    [
+                        tuple(asdict(report) for report in reports),
+                        tuple(asdict(item) for item in history),
+                    ],
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            if meta.get("knowledge_hash") != fingerprint:
+                previous_notes = {row.id: row for row in self.index.rows("notes")}
+                imported = tuple(row for report in reports for row in report_facts(report))
+                self.index.put_rows(
+                    "notes",
+                    tuple(
+                        previous_notes[row.id]
+                        if row.id in previous_notes
+                        and previous_notes[row.id].target.startswith("anchor:")
+                        else row
+                        for row in imported
+                    ),
+                )
+                self.index.put_rows(
+                    "history",
+                    tuple(
+                        history_row(
+                            item,
+                            current[item.path].content_hash
+                            if item.path in current
+                            else "unverified",
+                        )
+                        for item in history
+                    ),
+                )
+                self.index.set_meta({"knowledge_hash": fingerprint})
+        notes = self.index.rows("notes")
+        texts: dict[str, str | None] = {}
+        changed_paths = {item.path for item in changed}
+        updates: list[IndexRow] = []
+        for row in notes:
+            if not row.target.startswith("anchor:"):
+                if not row.stale:
+                    updates.append(replace(row, stale=True))
+            elif row.stale or first or row.path in changed_paths:
+                if row.path not in texts:
+                    texts[row.path] = self.inventory.read(row.path) if row.path in current else None
+                validated = revalidate_fact(row, current.get(row.path), texts[row.path])
+                if validated != row:
+                    updates.append(validated)
+        if updates:
+            self.index.put_rows("notes", updates)
+        self.index.set_meta({"knowledge_version": "1"})
 
     def _structures(
         self,

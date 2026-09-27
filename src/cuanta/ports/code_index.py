@@ -3,7 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
-from cuanta.domain.code_index import IndexedFile, IndexRow, IndexStructure, IndexTable
+from cuanta.domain.code_index import (
+    IndexedFile,
+    IndexHistory,
+    IndexReport,
+    IndexRow,
+    IndexStructure,
+    IndexTable,
+)
 
 
 class CodeIndex(Protocol):
@@ -42,3 +49,9 @@ class IndexGraph(Protocol):
     def fingerprint(self) -> str: ...
 
     def request_refresh(self, files: tuple[IndexedFile, ...]) -> None: ...
+
+
+class IndexKnowledge(Protocol):
+    def reports(self) -> tuple[IndexReport, ...]: ...
+
+    def history(self) -> tuple[IndexHistory, ...]: ...

@@ -63,6 +63,7 @@ class IndexStatus:
     recovered: bool = False
     content_hash: str = ""
     coverage_by_kind: tuple[tuple[str, int], ...] = ()
+    history_status: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,3 +71,22 @@ class IndexStructure:
     symbols: tuple[IndexRow, ...] = ()
     edges: tuple[IndexRow, ...] = ()
     coverage: str = "unsupported"
+
+
+@dataclass(frozen=True, slots=True)
+class IndexReport:
+    provenance: str
+    text: str
+    sources: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class IndexHistory:
+    path: str
+    run_id: str
+    task_type: str
+    action: str
+    at: str
+    outcome: str = ""
+    retries: int = 0
+    signature: str = ""
