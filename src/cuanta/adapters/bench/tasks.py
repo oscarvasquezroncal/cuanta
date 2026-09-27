@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
+from cuanta.domain.answer_check import AnswerSpec
 from cuanta.domain.bench import DEFAULT_ACCEPT, BenchTask, Source
 from cuanta.domain.mandate import MandateRequest
 
@@ -34,6 +36,24 @@ def _edits(value: object) -> tuple[tuple[str, str, str], ...]:
     )
 
 
+def _answer(value: object) -> AnswerSpec | None:
+    if not isinstance(value, dict) or set(value) != {"keywords", "citations"}:
+        return None
+    keywords, citations = value.get("keywords"), value.get("citations")
+    if not isinstance(keywords, list) or not isinstance(citations, list):
+        return None
+    if not keywords or not citations:
+        return None
+    if any(not isinstance(item, str) or not item.strip() for item in (*keywords, *citations)):
+        return None
+    try:
+        for pattern in citations:
+            re.compile(pattern)
+    except re.error:
+        return None
+    return AnswerSpec(tuple(keywords), tuple(citations))
+
+
 def parse_task(text: str) -> BenchTask | None:
     try:
         data = tomllib.loads(text)
@@ -42,6 +62,9 @@ def parse_task(text: str) -> BenchTask | None:
     request = data.get("request")
     name, fixture = data.get("name"), data.get("fixture")
     if not isinstance(name, str) or not isinstance(fixture, str) or not isinstance(request, dict):
+        return None
+    answer = _answer(data.get("answer"))
+    if "answer" in data and answer is None:
         return None
     suites = data.get("suites")
     setup = data.get("setup")
@@ -58,6 +81,7 @@ def parse_task(text: str) -> BenchTask | None:
         accept=str(data.get("accept") or DEFAULT_ACCEPT),
         source=_source(data.get("source")),
         edits=_edits(data.get("edit")),
+        answer=answer,
     )
 
 

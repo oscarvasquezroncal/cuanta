@@ -6,9 +6,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from html import escape
 
+from cuanta.domain.anatomy import ANATOMY_HEURISTIC, AnatomyReport, Phase
+from cuanta.domain.answer_check import AnswerSpec
 from cuanta.domain.change_plan import ChangePlan, guarded, path_matches
 from cuanta.domain.costs import sum_costs
 from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.read_efficiency import ReadEfficiency
 from cuanta.domain.routing import percentile
 
 
@@ -46,6 +49,7 @@ class BenchTask:
     accept: str = DEFAULT_ACCEPT
     source: Source | None = None
     edits: tuple[tuple[str, str, str], ...] = ()
+    answer: AnswerSpec | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +89,11 @@ class RunMetrics:
     out_of_plan_edits: tuple[str, ...] = ()
     guard_violations: tuple[str, ...] = ()
     index: str = "on"
+    shape: str = ""
+    pack: str = "on"
+    depth: str = ""
+    anatomy: AnatomyReport = field(default_factory=AnatomyReport)
+    read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
 
     @property
     def total_tokens(self) -> int:
@@ -115,6 +124,9 @@ class ConditionSummary:
     session: str = LEAN_SESSION
     context: Spread = field(default_factory=lambda: Spread(None, None, None))
     index: str = "on"
+    shape: str = ""
+    pack: str = "on"
+    depth: str = ""
 
     @property
     def label(self) -> str:
@@ -145,6 +157,9 @@ class BenchMeta:
     tasks: tuple[str, ...]
     session: str = LEAN_SESSION
     index: str = "on"
+    shape: str = ""
+    pack: str = "on"
+    depth: str = ""
 
 
 def select(tasks: Sequence[BenchTask], suite: str) -> tuple[BenchTask, ...]:
@@ -208,19 +223,38 @@ def summarize(metrics: Sequence[RunMetrics]) -> tuple[ConditionSummary, ...]:
     for condition in CONDITIONS:
         for session in (LEAN_SESSION, FULL_SESSION):
             for index in INDEX_MODES:
-                row = _summary(metrics, condition, session, index)
-                if row is not None:
-                    rows.append(row)
+                options = sorted(
+                    {
+                        (item.shape, item.pack, item.depth)
+                        for item in metrics
+                        if item.condition is condition
+                        and item.session == session
+                        and item.index == index
+                    }
+                )
+                for shape, pack, depth in options:
+                    row = _summary(metrics, condition, session, index, shape, pack, depth)
+                    if row is not None:
+                        rows.append(row)
     return tuple(rows)
 
 
 def _summary(
-    metrics: Sequence[RunMetrics], condition: Condition, session: str, index: str
+    metrics: Sequence[RunMetrics],
+    condition: Condition,
+    session: str,
+    index: str,
+    shape: str,
+    pack: str,
+    depth: str,
 ) -> ConditionSummary | None:
     runs = [
         item
         for item in metrics
-        if item.condition is condition and item.session == session and item.index == index
+        if item.condition is condition
+        and item.session == session
+        and item.index == index
+        and (item.shape, item.pack, item.depth) == (shape, pack, depth)
     ]
     if not runs:
         return None
@@ -238,6 +272,9 @@ def _summary(
         session=session,
         context=spread(contexts),
         index=index,
+        shape=shape,
+        pack=pack,
+        depth=depth,
     )
 
 
@@ -328,6 +365,8 @@ def report_markdown(
         f"- Session profile **{meta.session}**: lean excludes user plugins, hooks and MCP "
         "servers and may load Cuanta tools; full uses the user's Claude Code configuration.",
         f"- Index **{meta.index}** for Cuanta conditions; baseline uses no Cuanta index.",
+        f"- Requested shape **{meta.shape or 'default'}**, pack **{meta.pack}**, "
+        f"depth **{meta.depth or 'default'}**; the tables retain actual run options.",
         f"- Started {meta.started_at} · bench `{meta.bench_id}`.",
         "",
         "| Condition | Runs | Accepted | Success | Tokens / accepted task (median, range) "
@@ -384,6 +423,7 @@ def report_markdown(
             f"{', '.join(item.out_of_plan_edits) or '-'} | "
             f"{', '.join(item.guard_violations) or '-'} |"
         )
+    lines += _telemetry_markdown(summary, metrics)
     routed = [item for item in metrics if item.models]
     if routed:
         lines += ["", "## Planned vs actual model per agent", ""]
@@ -394,6 +434,82 @@ def report_markdown(
                     f"| {item.task} | {item.rep} | {agent} | {planned} | {actual or '-'} |"
                 )
     return "\n".join(lines) + "\n"
+
+
+def _condition_runs(row: ConditionSummary, metrics: Sequence[RunMetrics]) -> list[RunMetrics]:
+    return [
+        item
+        for item in metrics
+        if item.condition is row.condition
+        and item.session == row.session
+        and item.index == row.index
+        and (item.shape, item.pack, item.depth) == (row.shape, row.pack, row.depth)
+    ]
+
+
+def _telemetry_markdown(
+    summary: Sequence[ConditionSummary], metrics: Sequence[RunMetrics]
+) -> list[str]:
+    lines = [
+        "",
+        "## Consumption anatomy by condition",
+        "",
+        ANATOMY_HEURISTIC,
+        "Coverage counts runs with observed usage requests; absent telemetry is unknown. "
+        "Phase tokens and costs cover those requests, including observed child roles, "
+        "and do not replace the billed run totals above.",
+        "",
+        "| Condition | Covered runs | Requests | Start tokens | Exploration tokens "
+        "| Writing tokens | Handoff tokens | Phase cost |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in summary:
+        runs = _condition_runs(row, metrics)
+        covered = [item for item in runs if item.anatomy.totals.requests > 0]
+        tokens = [
+            sum(
+                part.totals.total
+                for item in covered
+                for part in item.anatomy.phases
+                if part.phase is phase
+            )
+            for phase in Phase
+        ]
+        requests = sum(item.anatomy.totals.requests for item in covered)
+        cost = sum_costs(item.anatomy.totals.cost_usd for item in covered) if covered else None
+        amounts = " | ".join(_number(float(value)) if covered else "n/a" for value in tokens)
+        lines.append(
+            f"| {row.label} | {len(covered)}/{len(runs)} | {requests or 'n/a'} | "
+            f"{amounts} | {_money(cost)} |"
+        )
+    lines += [
+        "",
+        "## Read efficiency by condition",
+        "",
+        "File utilization v2 counts unique successfully read files within each run. "
+        "The condition ratio sums useful and read counts across covered runs; "
+        "missing reports or reads remain unknown. Preloaded packs are not observed reads. "
+        "Citations and edits are observed evidence, not proof of answer correctness or savings.",
+        "",
+        "| Condition | Covered runs | Useful files | Read files | File utilization v2 "
+        "| Formula | Actual shape | Pack | Depth |",
+        "|---|---:|---:|---:|---:|---|---|---|---|",
+    ]
+    for row in summary:
+        runs = _condition_runs(row, metrics)
+        read_covered = [item.read_efficiency for item in runs if item.read_efficiency.available]
+        useful = sum(item.useful_count for item in read_covered)
+        reads = sum(item.read_count for item in read_covered)
+        value = f"{useful / reads:.1%}" if reads else "n/a"
+        formulas = sorted({item.formula for item in read_covered})
+        formula = "; ".join(formulas) or "n/a"
+        lines.append(
+            f"| {row.label} | {len(read_covered)}/{len(runs)} | "
+            f"{useful if read_covered else 'n/a'} | {reads if read_covered else 'n/a'} | "
+            f"{value} | {formula} | {row.shape or 'unknown'} | "
+            f"{row.pack} | {row.depth or 'unknown'} |"
+        )
+    return lines
 
 
 TEST_COMMANDS = ("pytest", "cuanta test", "go test", "npm test", "npx jest", "vitest", "jest")

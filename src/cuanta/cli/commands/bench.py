@@ -21,7 +21,9 @@ DEFAULT_FIXTURES = Path("tests") / "fixtures" / "repos"
 @bench_app.command("run", help="Run every task and condition; --yes spends.")
 def run_command(
     ctx: typer.Context,
-    suite: Annotated[str, typer.Option("--suite", help="mini, full, or index.")] = "mini",
+    suite: Annotated[
+        str, typer.Option("--suite", help="mini, full, index, or investigation.")
+    ] = "mini",
     reps: Annotated[int, typer.Option("--reps", min=1, help="Repetitions per task.")] = 3,
     budget_usd: Annotated[
         float, typer.Option("--budget-usd", min=0.0, help="Cap for the whole bench.")
@@ -45,6 +47,15 @@ def run_command(
     index: Annotated[
         str, typer.Option("--index", help="on or off for Cuanta conditions; baseline is off.")
     ] = "on",
+    shape: Annotated[
+        str, typer.Option("--shape", help="single or pipeline; omit for the mandate default.")
+    ] = "",
+    pack: Annotated[
+        str, typer.Option("--pack", help="on or off for automatic Cuanta context packs.")
+    ] = "on",
+    depth: Annotated[
+        str, typer.Option("--depth", help="quick, normal, or deep; omit for the default.")
+    ] = "",
     task: Annotated[
         list[str] | None, typer.Option("--task", help="Only this task (repeatable).")
     ] = None,
@@ -68,6 +79,9 @@ def run_command(
             profile,
             tuple(task or ()),
             index,
+            shape,
+            pack,
+            depth,
         ),
     )
 
@@ -121,12 +135,17 @@ def _run(
     profile: str = "lean",
     only: tuple[str, ...] = (),
     index: str = "on",
+    shape: str = "",
+    pack: str = "on",
+    depth: str = "",
 ) -> "Document":
     from cuanta.bootstrap import Container
     from cuanta.cli.commands.route import check_choice
     from cuanta.cli.document import Document, Hint, KeyValues, Line
     from cuanta.domain.bench import INDEX_MODES, SESSION_PROFILES, BenchMeta, sessions_for
+    from cuanta.domain.depth import DEPTHS
     from cuanta.domain.errors import DomainFailure, NotAvailable
+    from cuanta.domain.mandate import Shape
     from cuanta.domain.progress import Status
 
     conditions = parse_conditions(conditions_text)
@@ -134,6 +153,11 @@ def _run(
     container = Container.for_project(session.project)
     check_choice(profile, SESSION_PROFILES, "--session")
     check_choice(index, INDEX_MODES, "--index")
+    check_choice(shape, tuple(Shape), "--shape")
+    check_choice(pack, INDEX_MODES, "--pack")
+    if pack not in INDEX_MODES:
+        raise DomainFailure(f"unknown --pack {pack}", "use one of on, off")
+    check_choice(depth, tuple(DEPTHS), "--depth")
     tasks = container.bench_tasks(tasks_path, suite)
     if only:
         tasks = tuple(item for item in tasks if item.name in only)
@@ -152,6 +176,9 @@ def _run(
             ("conditions", ", ".join(item.value for item in conditions)),
             ("session", profile),
             ("index", index),
+            ("shape", shape or "default"),
+            ("pack", pack),
+            ("depth", depth or "default"),
             ("runs", f"{runs} ({reps} per task and condition)"),
             ("engine", f"claude {engine.version()} · main model {model}"),
             ("spend", f"at most ${ceiling:,.2f} (${per_run_usd:,.2f} per run)"),
@@ -178,6 +205,9 @@ def _run(
         tasks=tuple(task.name for task in tasks),
         session=profile,
         index=index,
+        shape=shape,
+        pack=pack,
+        depth=depth,
     )
     runner = container.bench_runner(
         _resolve(session, fixtures, DEFAULT_FIXTURES),
@@ -185,6 +215,9 @@ def _run(
         model,
         None,
         keep,
+        shape=shape,
+        pack=pack,
+        depth=depth,
     )
     result = runner.run(meta, tasks, conditions, session.presenter)
     runner.report(result)
@@ -237,6 +270,9 @@ def _payload(result: "BenchResult") -> dict[str, object]:
     return {
         "ran": True,
         "index": result.meta.index,
+        "shape": result.meta.shape,
+        "pack": result.meta.pack,
+        "depth": result.meta.depth,
         "bench_id": result.meta.bench_id,
         "folder": result.folder,
         "stopped_early": result.stopped_early,
@@ -246,6 +282,9 @@ def _payload(result: "BenchResult") -> dict[str, object]:
                 "condition": row.condition.value,
                 "session": row.session,
                 "index": row.index,
+                "shape": row.shape,
+                "pack": row.pack,
+                "depth": row.depth,
                 "runs": row.runs,
                 "accepted": row.accepted,
                 "tokens_per_accepted_median": row.tokens_per_accepted.median,

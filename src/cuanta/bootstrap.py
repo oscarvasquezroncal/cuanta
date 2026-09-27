@@ -1189,7 +1189,11 @@ class Container:
             change_plan=self.change_plan,
             snapshot=self.project_snapshot,
             save_metrics=save_metrics,
-            context_pack=self.context_pack if self.config.index_enabled else None,
+            context_pack=(
+                self.context_pack
+                if self.config.index_enabled and self.config.pack_enabled
+                else None
+            ),
             learn_run=self.learn_run if sandbox is None else None,
         )
 
@@ -1203,7 +1207,16 @@ class Container:
         }
 
     def bench_runner(
-        self, fixtures: Path, kit: Path, model: str, scratch: Path | None, keep: bool
+        self,
+        fixtures: Path,
+        kit: Path,
+        model: str,
+        scratch: Path | None,
+        keep: bool,
+        *,
+        shape: str = "",
+        pack: str = "on",
+        depth: str = "",
     ) -> BenchRunner:
         import sys
 
@@ -1215,7 +1228,18 @@ class Container:
         def attempt(
             task: BenchTask, condition: Condition, root: str, cap: float, session: str, index: str
         ) -> Attempt:
-            return self.bench_attempt(task, condition, root, cap, model, session, index)
+            return self.bench_attempt(
+                task,
+                condition,
+                root,
+                cap,
+                model,
+                session,
+                index,
+                shape=shape,
+                pack=pack,
+                depth=depth,
+            )
 
         executor = BenchExecutor(sandbox, attempt, self.clock.monotonic)
         return BenchRunner(executor, self.workspace())
@@ -1272,6 +1296,77 @@ class Container:
 
         return load_bench(self.workspace())
 
+    def _bench_baseline(
+        self,
+        task: BenchTask,
+        root: str,
+        cap: float,
+        model: str,
+        session: str,
+        depth: str,
+        ledger: Ledger,
+    ) -> tuple[Run, str, str | None]:
+        from cuanta.application.engine_run import DEFAULT_DENIED, LaunchSpec
+        from cuanta.application.mandate import allowed_tools
+        from cuanta.domain.depth import parse_depth, profile
+        from cuanta.domain.errors import NotAvailable
+        from cuanta.domain.mandate import (
+            Shape,
+            investigation_builtin_tools,
+            investigation_denied,
+            investigation_tools,
+        )
+
+        chosen_depth = parse_depth(depth)
+        engine = self.engine("claude")
+        if engine is None or not engine.available():
+            raise NotAvailable("claude not found on PATH", "install Claude Code")
+        stack = self.detector().run(with_engines=False).stack
+        spec = LaunchSpec(
+            kind="bench",
+            prompt=task.prompt,
+            cwd=root,
+            allowed_tools=(
+                investigation_tools(True, Shape.SINGLE, False)
+                if task.request.type == "investigation"
+                else allowed_tools(stack)
+            ),
+            disallowed_tools=(
+                tuple(dict.fromkeys((*DEFAULT_DENIED, *investigation_denied(True, Shape.SINGLE))))
+                if task.request.type == "investigation"
+                else DEFAULT_DENIED
+            ),
+            tools=(
+                investigation_builtin_tools(True, Shape.SINGLE, False)
+                if task.request.type == "investigation"
+                else None
+            ),
+            model=model,
+            max_budget_usd=cap,
+            session=session,
+            temporary_copy=True,
+            read_only=task.request.type == "investigation",
+            task_type=task.request.type,
+            shape="single",
+            depth=chosen_depth.value,
+            effort=(
+                profile(chosen_depth, task.request.type).effort
+                if depth or task.request.type == "investigation"
+                else ""
+            ),
+            max_turns=(
+                profile(chosen_depth, task.request.type).max_turns
+                if depth or task.request.type == "investigation"
+                else 0
+            ),
+        )
+        launch = self.launcher(engine, ledger, telemetry=True).launch(spec, lambda _: None)
+        run = launch.run
+        result = launch.outcome.result if launch.outcome is not None else None
+        subtype = result.subtype if result is not None else ""
+        answer = result.text if result is not None else None
+        return run, subtype, answer
+
     def bench_attempt(
         self,
         task: BenchTask,
@@ -1281,16 +1376,18 @@ class Container:
         model: str,
         session: str = "lean",
         index: str = "on",
+        *,
+        shape: str = "",
+        pack: str = "on",
+        depth: str = "",
     ) -> Attempt:
         from cuanta.application.bench import Attempt
-        from cuanta.application.engine_run import LaunchSpec
-        from cuanta.application.mandate import allowed_tools
         from cuanta.application.mandate_flow import MandateOptions
         from cuanta.application.progress import RecordingSink
         from cuanta.application.route_apply import RouteOptions
         from cuanta.application.spectrum import Selection
         from cuanta.domain.bench import Condition, bench_boundaries
-        from cuanta.domain.errors import NotAvailable
+        from cuanta.domain.depth import parse_depth
         from cuanta.domain.overhead import session_overhead
         from cuanta.domain.spectrum import LeakKind
         from cuanta.ports.ledger import EventQuery
@@ -1298,32 +1395,23 @@ class Container:
         sub = replace(Container.for_project(Path(root)), runner=self.runner, clock=self.clock)
         selected = "off" if condition is Condition.BASELINE else index
         sub.config = replace(
-            sub.config, index_enabled=selected == "on", index_tools=selected == "on"
+            sub.config,
+            index_enabled=selected == "on",
+            index_tools=selected == "on",
+            pack_enabled=selected == "on" and pack == "on",
         )
         plan = sub.change_plan(task.request)
         before = sub.project_snapshot()
         ledger = sub.ledger()
         try:
             models: tuple[tuple[str, str, str], ...] = ()
+            answer: str | None = None
+            actual_shape = "single"
+            chosen_depth = parse_depth(depth)
             if condition is Condition.BASELINE:
-                engine = sub.engine("claude")
-                if engine is None or not engine.available():
-                    raise NotAvailable("claude not found on PATH", "install Claude Code")
-                stack = sub.detector().run(with_engines=False).stack
-                spec = LaunchSpec(
-                    kind="bench",
-                    prompt=task.prompt,
-                    cwd=root,
-                    allowed_tools=allowed_tools(stack),
-                    model=model,
-                    max_budget_usd=cap,
-                    session=session,
-                    temporary_copy=True,
+                run, subtype, answer = sub._bench_baseline(
+                    task, root, cap, model, session, depth, ledger
                 )
-                launch = sub.launcher(engine, ledger, telemetry=True).launch(spec, lambda _: None)
-                run = launch.run
-                result = launch.outcome.result if launch.outcome is not None else None
-                subtype = result.subtype if result is not None else ""
             else:
                 flow = sub.mandate_flow(ledger)
                 mode = "auto" if condition is Condition.ROUTED else "off"
@@ -1334,10 +1422,14 @@ class Container:
                     route=RouteOptions(mode=mode),
                     session=session,
                     temporary_copy=True,
+                    shape=shape,
+                    depth=depth,
                 )
                 report = flow.run(flow.prepare(task.request, 0, options), RecordingSink())
                 run = report.run
                 subtype = ""
+                answer = report.text
+                actual_shape = "single" if report.single else "pipeline"
                 models = tuple(
                     (row.agent, row.planned, ", ".join(row.actual)) for row in report.audit
                 )
@@ -1367,6 +1459,12 @@ class Container:
                 context_tokens=split.first_request if split is not None else 0,
                 loaded=(len(overhead.plugins), len(overhead.servers), len(overhead.hooks)),
                 index=selected,
+                answer=answer,
+                anatomy=spectrum.anatomy,
+                read_efficiency=spectrum.read_efficiency,
+                shape=actual_shape,
+                pack="on" if sub.config.pack_enabled else "off",
+                depth=run.depth or chosen_depth.value,
                 exploration_tokens_estimate=spectrum.index.exploration_tokens_estimate,
                 raw_reads=spectrum.index.raw_reads,
                 index_calls=spectrum.index.index_calls,
@@ -1424,7 +1522,11 @@ class Container:
             shape_estimator=self.run_estimate,
             refresh_index=self.refresh_index,
             change_plan=self.change_plan,
-            context_pack=self.context_pack if self.config.index_enabled else None,
+            context_pack=(
+                self.context_pack
+                if self.config.index_enabled and self.config.pack_enabled
+                else None
+            ),
             learn_run=self.learn_run if sandbox is None else None,
         )
 

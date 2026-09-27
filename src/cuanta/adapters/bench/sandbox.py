@@ -8,6 +8,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from cuanta.adapters.bench.answer_check import AnswerCheck
 from cuanta.domain.bench import BenchTask, Source, command_args
 from cuanta.domain.errors import DomainFailure
 from cuanta.ports.system import ProcessRunner
@@ -131,7 +132,9 @@ class LocalBenchSandbox:
             raise
         return str(root)
 
-    def accept(self, task: BenchTask, root: str) -> tuple[bool, str]:
+    def accept(self, task: BenchTask, root: str, report: str | None = None) -> tuple[bool, str]:
+        if task.answer is not None:
+            return AnswerCheck().check(task.answer, report, root)
         folder = Path(root)
         _write(folder, dict(task.hidden))
         args = command_args(task.accept, self._python, tuple(task.hidden))

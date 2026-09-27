@@ -2,8 +2,18 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
+from math import isfinite
 
+from cuanta.domain.anatomy import (
+    ANATOMY_HEURISTIC,
+    AgentAnatomy,
+    AnatomyReport,
+    Phase,
+    PhaseSummary,
+    PhaseTotals,
+    UsagePhase,
+)
 from cuanta.domain.bench import (
     LEAN_SESSION,
     BenchMeta,
@@ -25,6 +35,7 @@ from cuanta.domain.costs import sum_costs
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.messages import msg
 from cuanta.domain.progress import Status, finished, note, started
+from cuanta.domain.read_efficiency import CODE_FORMULA, ReadEfficiency
 from cuanta.ports.bench import BenchSandbox
 from cuanta.ports.progress import ProgressSink
 from cuanta.ports.workspace import Workspace
@@ -63,6 +74,12 @@ class Attempt:
     index_calls: int = 0
     out_of_plan_edits: tuple[str, ...] = ()
     guard_violations: tuple[str, ...] = ()
+    answer: str | None = None
+    shape: str = ""
+    pack: str = "on"
+    depth: str = ""
+    anatomy: AnatomyReport = field(default_factory=AnatomyReport)
+    read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
 
 
 class BenchExecutor:
@@ -117,7 +134,15 @@ class BenchExecutor:
                 return replace(empty, wall_s=self._monotonic() - began, error=error.message)
             wall = self._monotonic() - began
             capped = was_capped(done.subtype, done.cost_usd, cap)
-            accepted, tail = (False, "") if capped else self._sandbox.accept(task, root)
+            if capped:
+                accepted, tail = False, ""
+            elif task.answer is not None:
+                accepted, tail = self._sandbox.accept(task, root, done.answer)
+            else:
+                accepted, tail = self._sandbox.accept(task, root)
+            if task.request.type == "investigation" and done.out_of_plan_edits:
+                accepted = False
+                tail = "Investigation changed source paths: " + ", ".join(done.out_of_plan_edits)
             if done.guard_violations:
                 accepted = False
                 tail = "Protected paths changed: " + ", ".join(done.guard_violations)
@@ -147,6 +172,11 @@ class BenchExecutor:
                 index_calls=done.index_calls,
                 out_of_plan_edits=done.out_of_plan_edits,
                 guard_violations=done.guard_violations,
+                shape=done.shape,
+                pack=done.pack,
+                depth=done.depth,
+                anatomy=done.anatomy,
+                read_efficiency=done.read_efficiency,
             )
         finally:
             self._sandbox.discard(root)
@@ -197,6 +227,11 @@ def metrics_from_json(item: dict[str, object]) -> RunMetrics:
         index_calls=_int(item.get("index_calls")),
         out_of_plan_edits=_paths(item.get("out_of_plan_edits")),
         guard_violations=_paths(item.get("guard_violations")),
+        shape=_choice(item.get("shape"), ("", "single", "pipeline"), ""),
+        pack=_choice(item.get("pack"), ("on", "off"), "on"),
+        depth=_choice(item.get("depth"), ("", "quick", "normal", "deep"), ""),
+        anatomy=_anatomy(item.get("anatomy")),
+        read_efficiency=_read_efficiency(item.get("read_efficiency")),
     )
 
 
@@ -208,6 +243,109 @@ def _loaded(value: object) -> tuple[int, int, int]:
     if isinstance(value, list) and len(value) == 3:
         return (_int(value[0]), _int(value[1]), _int(value[2]))
     return (0, 0, 0)
+
+
+def _choice(value: object, allowed: tuple[str, ...], default: str) -> str:
+    return value if isinstance(value, str) and value in allowed else default
+
+
+def _mapping(value: object) -> dict[str, object]:
+    return (
+        {key: item for key, item in value.items() if isinstance(key, str)}
+        if isinstance(value, dict)
+        else {}
+    )
+
+
+def _sequence(value: object) -> list[dict[str, object]]:
+    return (
+        [_mapping(item) for item in value if isinstance(item, dict)]
+        if isinstance(value, list)
+        else []
+    )
+
+
+def _phase(value: object) -> Phase | None:
+    return Phase(value) if isinstance(value, str) and value in tuple(Phase) else None
+
+
+def _phase_totals(value: object) -> PhaseTotals:
+    item = _mapping(value)
+    return PhaseTotals(
+        fresh_input=max(0, _int(item.get("fresh_input"))),
+        cache_read=max(0, _int(item.get("cache_read"))),
+        cache_write=max(0, _int(item.get("cache_write"))),
+        output=max(0, _int(item.get("output"))),
+        reasoning=max(0, _int(item.get("reasoning"))),
+        cost_usd=_known_cost(item.get("cost_usd")),
+        requests=max(0, _int(item.get("requests"))),
+    )
+
+
+def _known_cost(value: object) -> float | None:
+    cost = _float(value)
+    return cost if cost is not None and isfinite(cost) and cost >= 0 else None
+
+
+def _phase_summaries(value: object) -> tuple[PhaseSummary, ...]:
+    return tuple(
+        PhaseSummary(phase, _phase_totals(item.get("totals")))
+        for item in _sequence(value)
+        if (phase := _phase(item.get("phase"))) is not None
+    )
+
+
+def _anatomy(value: object) -> AnatomyReport:
+    if not isinstance(value, dict):
+        return AnatomyReport()
+    data = _mapping(value)
+    return AnatomyReport(
+        totals=_phase_totals(data.get("totals")),
+        phases=_phase_summaries(data.get("phases")),
+        agents=tuple(
+            AgentAnatomy(
+                str(item.get("agent", "")),
+                _phase_summaries(item.get("phases")),
+                _phase_totals(item.get("totals")),
+            )
+            for item in _sequence(data.get("agents"))
+        ),
+        events=tuple(
+            UsagePhase(
+                event_id=_int(item.get("event_id")),
+                run_id=str(item.get("run_id", "")),
+                session_id=str(item.get("session_id", "")),
+                agent=str(item.get("agent", "")),
+                ts=str(item.get("ts", "")),
+                phase=phase,
+                tokens=max(0, _int(item.get("tokens"))),
+                cost_usd=_known_cost(item.get("cost_usd")),
+                totals=_phase_totals(item.get("totals")),
+            )
+            for item in _sequence(data.get("events"))
+            if (phase := _phase(item.get("phase"))) is not None
+        ),
+        heuristic=str(data.get("heuristic") or ANATOMY_HEURISTIC),
+    )
+
+
+def _read_efficiency(value: object) -> ReadEfficiency:
+    if not isinstance(value, dict):
+        return ReadEfficiency()
+    data = _mapping(value)
+    ratio = _float(data.get("value"))
+    valid = ratio is not None and isfinite(ratio) and 0 <= ratio <= 1
+    return ReadEfficiency(
+        value=ratio if valid else None,
+        read_files=_paths(data.get("read_files")),
+        cited_files=_paths(data.get("cited_files")),
+        edited_files=_paths(data.get("edited_files")),
+        useful_files=_paths(data.get("useful_files")),
+        formula=str(data.get("formula") or CODE_FORMULA),
+        label=str(data.get("label") or "file utilization v2"),
+        available=data.get("available") is True and valid,
+        why=str(data.get("why") or ""),
+    )
 
 
 def meta_from_json(item: dict[str, object]) -> BenchMeta:
@@ -226,6 +364,9 @@ def meta_from_json(item: dict[str, object]) -> BenchMeta:
         tasks=tuple(str(name) for name in tasks) if isinstance(tasks, list) else (),
         session=str(item.get("session") or LEAN_SESSION),
         index=str(item.get("index") or "on"),
+        shape=_choice(item.get("shape"), ("", "single", "pipeline"), ""),
+        pack=_choice(item.get("pack"), ("on", "off"), "on"),
+        depth=_choice(item.get("depth"), ("", "quick", "normal", "deep"), ""),
     )
 
 
