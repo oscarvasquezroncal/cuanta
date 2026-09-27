@@ -142,11 +142,11 @@ def test_depth_caps_every_role_tier() -> None:
 
 def test_similar_runs_match_type_and_depth() -> None:
     runs = (
-        Run("a", "mandate", cost_usd=0.5, task_type="investigation", depth="normal"),
-        Run("b", "mandate", cost_usd=0.9, task_type="investigation", depth=""),
-        Run("c", "mandate", cost_usd=2.0, task_type="investigation", depth="deep"),
-        Run("d", "mandate", cost_usd=1.0, task_type="bug", depth="normal"),
-        Run("e", "init", cost_usd=1.0, task_type="investigation", depth="normal"),
+        Run("a", "mandate", cost_usd=0.5, task_type="investigation", depth="normal", status="ok"),
+        Run("b", "mandate", cost_usd=0.9, task_type="investigation", depth="", status="ok"),
+        Run("c", "mandate", cost_usd=2.0, task_type="investigation", depth="deep", status="ok"),
+        Run("d", "mandate", cost_usd=1.0, task_type="bug", depth="normal", status="ok"),
+        Run("e", "init", cost_usd=1.0, task_type="investigation", depth="normal", status="ok"),
     )
     assert similar_costs(runs, "investigation", "normal") == [0.5, 0.9]
     assert similar_costs(runs, "investigation", "deep") == [2.0]

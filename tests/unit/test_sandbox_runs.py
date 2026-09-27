@@ -219,6 +219,27 @@ def test_a_sandbox_run_edits_only_the_copy_and_stores_a_trial(tmp_path: Path) ->
     assert run is not None and run.mode == SANDBOX_MODE
 
 
+def test_unreadable_after_images_preserve_run_metrics_without_an_applicable_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cuanta.cli.commands.mandate import guard_tripped, sandbox_payload
+
+    harness = Harness(tmp_path, EditingEngine(_edits))
+
+    def unreadable(copy: SandboxCopy) -> dict[str, str]:
+        raise PermissionError("engine-created file is not readable")
+
+    monkeypatch.setattr(harness.sandbox, "manifest", unreadable)
+    harness.run()
+    result = harness.result
+    assert result.record_error == "PermissionError" and result.trial is None
+    assert not result.removed and Path(result.copy_root).is_dir()
+    assert result.report is not None and result.report.run.cost_usd == 0.12
+    assert guard_tripped(result)
+    assert sandbox_payload(result)["record_error"] == "PermissionError"
+    assert harness.store.load(result.report.run.id) is None
+
+
 def test_the_engine_gets_the_copy_state_root_ceiling_and_node_modules_rules(
     tmp_path: Path,
 ) -> None:
@@ -510,8 +531,9 @@ def test_a_failed_recording_keeps_the_copy(tmp_path: Path, monkeypatch: pytest.M
 
     monkeypatch.setattr(TrialRecorder, "record", broken)
     sink = RecordingSink()
-    with pytest.raises(OSError, match="disk full"):
-        harness.runner.run_mandate(harness.flow, FEATURE, 0, MandateOptions(simple=True), sink)
+    result = harness.runner.run_mandate(harness.flow, FEATURE, 0, MandateOptions(simple=True), sink)
+    assert result.record_error == "OSError" and result.trial is None and not result.removed
+    assert result.report is not None and result.report.run.end_reason == "error_sandbox_record"
     assert "sandbox.kept" in _keys(sink)
     kept = next(tmp_path.glob("temp/cuanta-sandbox/*/shop"))
     assert (kept / "src" / "sitemap.ts").is_file()

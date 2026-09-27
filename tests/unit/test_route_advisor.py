@@ -30,6 +30,19 @@ def advisor(ledger: MemoryLedger) -> RouteAdvisor:
     return RouteAdvisor(decisions, lambda: CATALOG, ledger, lambda: "2026-09-23T00:00:00Z")
 
 
+def test_unverified_windows_codex_builds_keep_the_cross_tester_on_claude() -> None:
+    ledger = MemoryLedger()
+    decisions = DecisionMaker(HeuristicInstinct(), ledger, lambda: "2026-09-27T00:00:00Z")
+    catalog = (*CATALOG, ModelEntry("codex", "codex-premium", "c", "openai", tier=Tier.PREMIUM))
+    service = RouteAdvisor(decisions, lambda: catalog, ledger, lambda: "", frozenset({"codex"}))
+    policy = with_overrides(
+        RoutingPolicy(), mode="fixed", role_models={"tester": "codex:codex-premium"}
+    )
+    route = service.plan(policy, RouteInputs("bug", "fix build")).route(Role.TESTER)
+    assert route is not None and route.engine == "claude"
+    assert "tester stays on Claude" in english(route.reason)
+
+
 def test_auto_plan_asks_scope_tiers_and_risk_and_explains_them() -> None:
     ledger = MemoryLedger()
     plan = advisor(ledger).plan(

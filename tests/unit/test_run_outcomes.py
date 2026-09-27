@@ -53,6 +53,16 @@ def test_a_cross_role_resolves_to_its_pipeline(tmp_path: Path) -> None:
     assert role is not None and role.outcome == ""
 
 
+def test_a_failed_sandbox_capture_can_be_rejected_without_deleting_its_copy(tmp_path: Path) -> None:
+    setup = _setup(tmp_path)
+    setup.ledger.add_run(
+        Run("S", "mandate", status="failed", mode="sandbox", end_reason="error_sandbox_record")
+    )
+    assert setup.outcomes.reject("S", "unreadable after-image").outcome == REJECTED
+    stored = setup.ledger.get_run("S")
+    assert stored is not None and stored.outcome_reason == "unreadable after-image"
+
+
 def test_runs_that_are_not_attempts_or_still_running_are_refused(tmp_path: Path) -> None:
     setup = _setup(tmp_path)
     setup.ledger.add_run(Run(id="L", kind="loop", status="ok"))

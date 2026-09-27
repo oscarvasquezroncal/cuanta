@@ -78,7 +78,7 @@ from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import Capsule, Decision, Run
 from cuanta.domain.loop import LoopGate, StopReason
 from cuanta.domain.mandate import MandateRequest
-from cuanta.domain.messages import msg, option_message
+from cuanta.domain.messages import Message, msg, option_message
 from cuanta.domain.models import ModelEntry, Tier, TierSource
 from cuanta.domain.new_files import original_of, side_by_side
 from cuanta.domain.progress import (
@@ -135,10 +135,46 @@ CHECKS = (
 FIXED_TIME = "2026-09-24T12:00:00Z"
 PLACES = ("src/shop/cart.py", "src/shop/tax.py")
 SIMILAR_RUNS = (
-    Run("r-inv", "mandate", cost_usd=0.545, task_type="investigation", depth="normal"),
-    Run("r-b1", "mandate", cost_usd=0.4, task_type="bug", depth="normal"),
-    Run("r-b2", "mandate", cost_usd=0.9, task_type="bug", depth="normal"),
-    Run("r-b3", "mandate", cost_usd=1.3, task_type="bug", depth="normal"),
+    Run(
+        "r-inv",
+        "mandate",
+        cost_usd=0.545,
+        task_type="investigation",
+        depth="normal",
+        started_at=FIXED_TIME,
+        ended_at=FIXED_TIME,
+        status="ok",
+    ),
+    Run(
+        "r-b1",
+        "mandate",
+        cost_usd=0.4,
+        task_type="bug",
+        depth="normal",
+        started_at=FIXED_TIME,
+        ended_at=FIXED_TIME,
+        status="ok",
+    ),
+    Run(
+        "r-b2",
+        "mandate",
+        cost_usd=0.9,
+        task_type="bug",
+        depth="normal",
+        started_at=FIXED_TIME,
+        ended_at=FIXED_TIME,
+        status="ok",
+    ),
+    Run(
+        "r-b3",
+        "mandate",
+        cost_usd=1.3,
+        task_type="bug",
+        depth="normal",
+        started_at=FIXED_TIME,
+        ended_at=FIXED_TIME,
+        status="ok",
+    ),
 )
 CATALOG = tuple(
     ModelEntry(
@@ -884,6 +920,9 @@ class FakeServices:
 
     def routing_policy(self) -> RoutingPolicy:
         return self.policy
+
+    def build_warning(self, engine: str) -> Message | None:
+        return msg("guarantee.codex_builds") if engine == "codex" else None
 
     def save_routing(self, values: Mapping[str, object]) -> None:
         self.routing_saved = dict(values)
