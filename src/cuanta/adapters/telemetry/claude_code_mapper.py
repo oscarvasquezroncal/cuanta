@@ -75,16 +75,23 @@ def map_log(record: LogRecord, keep_prompts: bool = False) -> LedgerEvent:
         file_path=file_path,
         command=command[:500],
         ts=record.ts,
-        raw=_raw(record, parameters, keep_prompts),
+        raw=_raw(record, parameters, keep_prompts, not agent_name and not query_source),
         effort=as_text(first(attrs, "effort")),
         ttft_ms=as_int(first(attrs, "ttft_ms")),
     )
 
 
-def _raw(record: LogRecord, parameters: dict[str, object], keep_prompts: bool) -> str:
+def _raw(
+    record: LogRecord,
+    parameters: dict[str, object],
+    keep_prompts: bool,
+    default_agent: bool,
+) -> str:
     base = json.loads(raw_json(record.raw, keep_prompts))
     if parameters:
         base["cuanta.parameters"] = parameters
+    if default_agent:
+        base["attributed"] = "default"
     base["cuanta.resource"] = record.resource
     return raw_json(base, keep_prompts)
 
