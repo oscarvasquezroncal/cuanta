@@ -32,6 +32,7 @@ class Trial:
     acceptance: tuple[str, ...] = ()
     checks: tuple[Check, ...] = ()
     recovery_note: str = ""
+    simple: bool = False
 
 
 @dataclass(frozen=True)
@@ -100,6 +101,11 @@ def parse_trial(raw: Any) -> Trial:
     cross = raw.get("cross_engine", False)
     if not isinstance(cross, bool):
         raise ValueError("cross_engine must be boolean")
+    simple = raw.get("simple", False)
+    if not isinstance(simple, bool):
+        raise ValueError("simple must be boolean")
+    if simple and cross:
+        raise ValueError("simple cannot select cross_engine")
     shape = raw.get("shape", "")
     if shape not in {"", "single", "pipeline"}:
         raise ValueError("Unsupported shape")
@@ -127,6 +133,7 @@ def parse_trial(raw: Any) -> Trial:
         cap=amount(raw.get("cap_usd")),
         shape=shape,
         cross_engine=cross,
+        simple=simple,
         role_models=models,
         acceptance=strings(raw.get("acceptance", [])),
         checks=tuple(checks),
