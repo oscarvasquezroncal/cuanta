@@ -17,6 +17,15 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-09-27 — Structural index sources
+- Shipped: deterministic Python and Tree-sitter syntax extraction for TS, JS, TSX and Go,
+  preserving symbol identities, directed imports/exports, routes, hooks, stores, services and
+  environment reads. The richer graph import checks source freshness and keeps provenance.
+- Why: the legacy file-neighbour graph loses edge direction and duplicate symbol identity.
+- Tried and rejected: regex-only parsing and trusting cached graphs by Git revision. Unknown
+  syntax and unresolved dynamic imports remain explicit coverage limitations.
+- Rule extracted: none.
+
 ## 2026-09-27 — Durable incremental index inventory
 - Shipped: pure index records and a port, copy-local SQLite storage with independent schema,
   hash provenance, recovery and safe source/documentation/style inventory. `cuanta index`
