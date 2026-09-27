@@ -128,6 +128,8 @@ def test_agent_attribution_rules() -> None:
     custom = agent_from_signals("custom", "subagent")
     assert custom.name == "custom"
     assert not custom.certain
+    assert not agent_from_signals("", "").certain
+    assert agent_from_signals("", "main").certain
 
 
 def test_env_builders() -> None:
@@ -174,3 +176,19 @@ def test_claude_requests_keep_effort_and_time_to_first_token() -> None:
     )
     event = map_log(record)
     assert (event.kind, event.effort, event.ttft_ms) == ("api_request", "low", 812)
+
+
+def test_claude_empty_source_agent_is_marked_as_a_default() -> None:
+    event = map_log(LogRecord("claude_code.tool_result", {"tool_name": "Read"}, {}, "", "", None))
+    assert event.agent == "main"
+    assert json.loads(event.raw)["attributed"] == "default"
+
+
+def test_claude_explicit_agent_signals_are_not_marked_as_defaults() -> None:
+    for attrs in [
+        {"agent.name": "tester"},
+        {"query_source": "sdk"},
+        {"query_source": "agent:docs"},
+    ]:
+        event = map_log(LogRecord("claude_code.api_request", attrs, {}, "", "", None))
+        assert "attributed" not in json.loads(event.raw)
