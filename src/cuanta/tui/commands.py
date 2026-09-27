@@ -13,9 +13,10 @@ SETTINGS = "settings"
 INIT = "init"
 LOOP = "loop"
 MODELS = "models"
+MAP = "map"
 
 SIDEBAR = (HOME, TESTS, MANDATES, SPECTRUM, LEDGER, INSTINCT, HEALTH, SETTINGS, MODELS)
-SECTIONS = (*SIDEBAR, INIT, LOOP)
+SECTIONS = (*SIDEBAR, MAP, INIT, LOOP)
 ICONS = {
     HOME: "⌂",
     TESTS: "✓",
@@ -28,6 +29,7 @@ ICONS = {
     INIT: "▶",
     LOOP: "↻",
     MODELS: "◇",
+    MAP: "⌖",
 }
 CLI_EQUIVALENT = {
     HOME: "cuanta doctor",
@@ -41,6 +43,7 @@ CLI_EQUIVALENT = {
     INIT: "cuanta init",
     LOOP: "cuanta loop",
     MODELS: "cuanta models list",
+    MAP: "cuanta find QUERY",
 }
 
 BENCH_COMMAND = "cuanta bench run --suite mini --yes"
@@ -57,6 +60,7 @@ class PaletteCommand:
 
 
 COMMANDS: tuple[PaletteCommand, ...] = (
+    PaletteCommand("map", "action.map", "action.map_help", "goto('map')", "map_query", "g"),
     PaletteCommand("init", "action.init", "action.init_help", "goto('init')", "init_project", "i"),
     PaletteCommand("tests", "action.tests", "action.tests_help", "run_tests", "gateway", "t"),
     PaletteCommand(

@@ -35,6 +35,7 @@ from cuanta.domain.report import link_file_refs
 from cuanta.tui.cache_text import first_request_content
 from cuanta.tui.fmt import money, run_money
 from cuanta.tui.i18n import Catalog
+from cuanta.tui.index_text import index_lines
 from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.screens.run_file import RunFileScreen
 from cuanta.tui.services import Services
@@ -63,6 +64,9 @@ class ResultScreen(Screen[None]):
             self.request = request
 
     class OutcomeChanged(Message):
+        pass
+
+    class OpenMap(Message):
         pass
 
     class OpenSpectrum(Message):
@@ -120,6 +124,7 @@ class ResultScreen(Screen[None]):
             yield Static(Content.styled(t("result.simple_note"), "$warning"), id="result-simple")
         yield Static(self._split(), id="result-split")
         yield Static(first_request_content(t, view.cache), id="result-cache")
+        yield Static(self._map_summary(), id="result-map-summary")
         if view.trial is not None:
             with Vertical(id="result-trial"):
                 yield Static("", id="result-trial-line")
@@ -132,21 +137,7 @@ class ResultScreen(Screen[None]):
                     yield Button(t("result.discard"), id="result-discard", compact=True)
                     yield Button(t("result.copy_commands"), id="result-copy-commands", compact=True)
         with FlowRow(id="result-actions", classes="button-row"):
-            yield Button(
-                t("result.save_docs"),
-                id="result-save",
-                variant="primary" if self.investigation else "default",
-                compact=True,
-            )
-            yield Button(t("result.copy"), id="result-copy", compact=True)
-            yield Button(
-                t("result.continue"),
-                id="result-continue",
-                variant="default" if self.investigation else "primary",
-                compact=True,
-            )
-            yield Button(t("result.spectrum"), id="result-spectrum", compact=True)
-            yield Button(t("result.export"), id="result-export", compact=True)
+            yield from self._actions()
         with TabbedContent(initial="tab-report", id="result-tabs"):
             with (
                 TabPane(t("result.tab_report"), id="tab-report"),
@@ -179,6 +170,24 @@ class ResultScreen(Screen[None]):
                 yield DataTable(id="result-agents", cursor_type="none", zebra_stripes=True)
                 yield Static(self._consumption(), id="result-consumption")
         yield Footer()
+
+    def _actions(self) -> ComposeResult:
+        t = self._t
+        yield Button(
+            t("result.save_docs"),
+            id="result-save",
+            variant="primary" if self.investigation else "default",
+            compact=True,
+        )
+        yield Button(t("result.copy"), id="result-copy", compact=True)
+        yield Button(
+            t("result.continue"),
+            id="result-continue",
+            variant="default" if self.investigation else "primary",
+            compact=True,
+        )
+        for key in ("spectrum", "map", "export"):
+            yield Button(t(f"result.{key}"), id=f"result-{key}", compact=True)
 
     def _status(self) -> Content:
         t = self._t
@@ -240,12 +249,36 @@ class ResultScreen(Screen[None]):
             ),
         )
 
+    def _map_summary(self) -> Content:
+        metrics = self.view.index
+        lines = [Content(self._t("result.findings_saved", count=metrics.findings_saved))]
+        if metrics.out_of_plan_edits:
+            lines.append(
+                Content.styled(
+                    self._t("index_metrics.out_of_plan", count=len(metrics.out_of_plan_edits))
+                    + "\n"
+                    + ", ".join(metrics.out_of_plan_edits),
+                    "$warning",
+                )
+            )
+        if metrics.guard_violations:
+            lines.append(
+                Content.styled(
+                    self._t("index_metrics.guard", count=len(metrics.guard_violations))
+                    + "\n"
+                    + ", ".join(metrics.guard_violations),
+                    "$error",
+                )
+            )
+        return Content("\n").join(lines)
+
     def _consumption(self) -> Content:
         t = self._t
         rows = [
             t("result.cost_line", cost=attempt_money(self.view, t)),
             t("result.tests_line", tests=self.view.tests or t("spectrum.na")),
         ]
+        rows.extend(("", t("index_metrics.title"), *index_lines(t, self.view.index)))
         overhead = self.view.overhead
         if overhead is not None:
             rows.append("")
@@ -415,6 +448,8 @@ class ResultScreen(Screen[None]):
         if view is None:
             return
         self.view = view
+        self.query_one("#result-map-summary", Static).update(self._map_summary())
+        self.query_one("#result-consumption", Static).update(self._consumption())
         self._paint_decision()
         if view.trial is not None:
             self._paint_trial()
@@ -527,6 +562,9 @@ class ResultScreen(Screen[None]):
             self.dismiss(None)
         elif button == "result-spectrum":
             self.app.post_message(self.OpenSpectrum(self.view.run.id))
+            self.dismiss(None)
+        elif button == "result-map":
+            self.app.post_message(self.OpenMap())
             self.dismiss(None)
         elif button == "result-export":
             self.export()

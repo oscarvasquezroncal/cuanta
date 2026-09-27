@@ -99,6 +99,7 @@ if TYPE_CHECKING:
     from cuanta.application.ledger_view import RunsQuery
     from cuanta.application.mandate import MandateReport, MandateService
     from cuanta.application.mandate_flow import MandateFlow, MandateOptions, Prepared
+    from cuanta.application.map import MapQuery
     from cuanta.application.mcp import McpServer
     from cuanta.application.models import ModelService, ProbeOutcome
     from cuanta.application.new_files import NewFileReview
@@ -116,6 +117,7 @@ if TYPE_CHECKING:
     from cuanta.domain.assistant import Suggestions
     from cuanta.domain.bench import BenchTask, Condition
     from cuanta.domain.change_plan import ChangePlan
+    from cuanta.domain.code_index import IndexRow
     from cuanta.domain.engine import EngineEvent
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.instinct import Choice
@@ -256,6 +258,70 @@ class Container:
         from cuanta.application.index_read import IndexRead
 
         return IndexRead(self.index_service(), self.clock.now_iso)
+
+    def map_query(self, rebuild: bool = False) -> MapQuery:
+        from cuanta.application.index_read import IndexRead
+        from cuanta.application.map import MapQuery
+
+        return MapQuery(IndexRead(self.index_service(rebuild), self.clock.now_iso))
+
+    def learn_run(self, run_id: str, notes_root: Path | None = None) -> None:
+        from cuanta.adapters.graph.file_graph import graph_path
+        from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
+        from cuanta.application.index_learning import IndexLearning
+        from cuanta.application.run_reports import RunReports
+        from cuanta.domain.index_facts import revalidate_fact
+
+        state = self.state_project()
+        path = graph_path(state, ".cuanta/ledger.db")
+        if path is None or any(
+            os.path.lexists(state / name) and graph_path(state, name) is None
+            for name in (".cuanta/ledger.db-wal", ".cuanta/ledger.db-shm")
+        ):
+            return
+        known = False
+        try:
+            existing = SqliteLedger(path, read_only=True)
+            try:
+                run = existing.get_run(run_id)
+                if run is None or not run.ended_at:
+                    return
+                known = True
+                report_ids = tuple(
+                    child.id
+                    for child in existing.runs(kind=run.kind, since=run.started_at)
+                    if child.parent_id == run_id
+                )
+            finally:
+                existing.close()
+            notes: tuple[IndexRow, ...] = ()
+            if notes_root is not None and graph_path(notes_root, ".cuanta/index.db") is not None:
+                source = Container(notes_root, self.config, runner=self.runner).index_service()
+                try:
+                    files = {item.path: item for item in source.index.files()}
+                    notes = tuple(
+                        verified
+                        for row in source.index.rows("notes")
+                        if row.provenance.startswith("agent-note:")
+                        and not (
+                            verified := revalidate_fact(
+                                row, files.get(row.path), source.inventory.read(row.path)
+                            )
+                        ).stale
+                    )
+                finally:
+                    source.close()
+            service = self.index_service()
+            try:
+                IndexLearning(service, self.state_workspace()).run(run_id, notes, report_ids)
+            finally:
+                service.close()
+        except (OSError, ValueError, sqlite3.Error) as error:
+            if not known:
+                return
+            reports = RunReports(self.state_workspace())
+            meta = reports.meta(run_id) or {}
+            reports.save_meta(run_id, {**meta, "index_learning_error": type(error).__name__})
 
     def change_plan(self, request: MandateRequest) -> ChangePlan:
         from cuanta.application.change_plan import IndexChangePlan
@@ -1110,6 +1176,7 @@ class Container:
             snapshot=self.project_snapshot,
             save_metrics=save_metrics,
             context_pack=self.context_pack,
+            learn_run=self.learn_run if sandbox is None else None,
         )
 
     def project_snapshot(self) -> dict[str, str]:
@@ -1326,6 +1393,7 @@ class Container:
             refresh_index=self.refresh_index,
             change_plan=self.change_plan,
             context_pack=self.context_pack,
+            learn_run=self.learn_run if sandbox is None else None,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -1368,9 +1436,17 @@ class Container:
 
         sandbox = LocalSandbox(now_iso=self.clock.now_iso)
         recorder = TrialRecorder(sandbox, self.state_workspace(), self.clock.now_iso)
-        return SandboxRunner(sandbox, recorder, ledger, self.state_project())
+        return SandboxRunner(
+            sandbox,
+            recorder,
+            ledger,
+            self.state_project(),
+            after_record=lambda copy, run_id: self.learn_run(run_id, copy.root),
+        )
 
     def run_metrics(self, ledger: Ledger, run_id: str) -> dict[str, object]:
+        from dataclasses import asdict
+
         from cuanta.application.spectrum import Selection
 
         totals = self.spectrum_query(ledger).run(Selection(run=run_id)).report.totals
@@ -1392,6 +1468,7 @@ class Container:
                 else None
             ),
             "cache": cache.state.value if cache is not None else None,
+            "index": asdict(view.index) if view is not None else None,
         }
 
     def run_sandboxed(
@@ -1489,7 +1566,7 @@ class Container:
     def run_outcomes(self, ledger: Ledger) -> RunOutcomes:
         from cuanta.application.outcomes import RunOutcomes
 
-        return RunOutcomes(ledger, self.trial_store(ledger), self.clock.now_iso)
+        return RunOutcomes(ledger, self.trial_store(ledger), self.clock.now_iso, self.learn_run)
 
     def runs_query(self) -> RunsQuery:
         from cuanta.application.ledger_view import RunsQuery
@@ -1543,9 +1620,12 @@ class Container:
 
     def spectrum_query(self, ledger: Ledger) -> SpectrumQuery:
         from cuanta.adapters.system.prices import load_prices
+        from cuanta.application.run_reports import RunReports
         from cuanta.application.spectrum import SpectrumQuery
 
-        return SpectrumQuery(ledger, load_prices())
+        return SpectrumQuery(
+            ledger, load_prices(), metadata=RunReports(self.state_workspace()).meta
+        )
 
     def set_project_value(self, dotted: str, value: object) -> None:
         from cuanta.adapters.system.config_files import set_value

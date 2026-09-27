@@ -38,6 +38,13 @@ def render(template: str, values: Mapping[str, str]) -> str:
 
 
 ENGLISH: dict[str, str] = {
+    "index_metrics.title": "Map exploration",
+    "index_metrics.hit_rate": "Index hit rate: {value}",
+    "index_metrics.exploration": "{index} index calls, {raw} raw reads, {total} exploration calls",
+    "index_metrics.tokens_estimate": "Estimated exploration tokens: {count} (returned bytes ÷ 4)",
+    "index_metrics.stale": "Stale facts: {count}",
+    "index_metrics.guard": "Protected-path edits: {count}",
+    "index_metrics.out_of_plan": "Edits outside the plan: {count}",
     "engine.cost_unknown": (
         "Stopped because the engine did not report the step cost needed to enforce the budget."
     ),

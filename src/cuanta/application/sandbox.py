@@ -252,7 +252,9 @@ class SandboxRunner:
         recorder: TrialRecorder,
         ledger: Ledger,
         origin: Path,
+        after_record: Callable[[SandboxCopy, str], None] | None = None,
     ) -> None:
+        self._after_record = after_record
         self._sandbox = sandbox
         self._recorder = recorder
         self._ledger = ledger
@@ -467,6 +469,8 @@ class SandboxRunner:
                 trial = self._record(
                     copy, report.run.id, request, engine, report.text, extra, keep, progress
                 )
+                if self._after_record is not None:
+                    self._after_record(copy, report.run.id)
             except OSError as error:
                 record_error = type(error).__name__
                 failed = replace(report.run, status="failed", end_reason="error_sandbox_record")
@@ -513,6 +517,8 @@ class SandboxRunner:
                 text = cross_text(report.steps)
                 try:
                     trial = self._record(copy, first, request, "cross", text, extra, keep, progress)
+                    if self._after_record is not None:
+                        self._after_record(copy, first)
                 except OSError as error:
                     record_error = type(error).__name__
                     root_run = self._ledger.get_run(first)

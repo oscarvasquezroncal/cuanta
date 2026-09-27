@@ -6,6 +6,7 @@ from cuanta.cli.runtime import Session, execute
 
 if TYPE_CHECKING:
     from cuanta.cli.document import Block, Document, TreeNode
+    from cuanta.domain.index_metrics import IndexMetrics
     from cuanta.domain.spectrum import View
 
 
@@ -152,9 +153,11 @@ def _spectrum(
             ("source", report.source),
         )
     )
-    blocks: list[Block] = [header]
-    if totals.total:
-        blocks.extend(_overhead(result))
+    blocks: list[Block] = [
+        header,
+        *(_overhead(result) if totals.total else []),
+        *_index_exploration(report.index),
+    ]
     if totals.total == 0:
         blocks.append(Line("no token events for this selection · nap", Status.INFO))
         blocks.append(Hint("run inside cuanta (init, pounce) or add --import"))
@@ -269,7 +272,32 @@ def _overhead(result: Any) -> "list[Block]":
     return [Panel("session overhead", tuple(Line(english(line)) for line in lines))]
 
 
+def _index_exploration(metrics: "IndexMetrics") -> "list[Block]":
+    from cuanta.cli.document import Line, Panel
+    from cuanta.domain.messages import english, msg
+
+    rate = f"{metrics.index_hit_rate:.0%}" if metrics.index_hit_rate is not None else "n/a"
+    messages = (
+        msg("index_metrics.hit_rate", value=rate),
+        msg(
+            "index_metrics.exploration",
+            index=metrics.index_calls,
+            raw=metrics.raw_reads,
+            total=metrics.exploration_calls,
+        ),
+        msg("index_metrics.tokens_estimate", count=f"{metrics.exploration_tokens_estimate:,}"),
+        msg("index_metrics.stale", count=metrics.stale_facts),
+        msg("index_metrics.guard", count=len(metrics.guard_violations)),
+        msg("index_metrics.out_of_plan", count=len(metrics.out_of_plan_edits)),
+    )
+    return [
+        Panel(english(msg("index_metrics.title")), tuple(Line(english(item)) for item in messages))
+    ]
+
+
 def _payload(result: Any, view: Any, plan: bool, imported: dict[str, Any]) -> dict[str, Any]:
+    from dataclasses import asdict
+
     from cuanta.domain.overhead import overhead_payload
     from cuanta.domain.spectrum import QUOTA_NOTE
 
@@ -280,6 +308,7 @@ def _payload(result: Any, view: Any, plan: bool, imported: dict[str, Any]) -> di
         "selection": report.label,
         "runs": [item.id for item in result.runs],
         "overhead": overhead_payload(result.overhead),
+        "index": asdict(report.index),
         "audit": [
             {
                 "agent": audit.agent,

@@ -1449,3 +1449,59 @@ Screen.-icons #init-form, Screen.-single #init-form, Screen.-icons #loop-form, S
 #init-start {
     width: 26;
 }
+
+#map-status-chips {
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+#map-status-card {
+    padding: 0 1;
+}
+
+#map-status-card .button-row {
+    margin: 0;
+}
+
+.map-chip {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+    background: $boost;
+    margin-right: 1;
+}
+
+#map-search-row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#map-query {
+    width: 1fr;
+}
+
+#map-hits {
+    height: 5;
+    margin-bottom: 1;
+}
+
+#map-reasons, #map-card, #map-file-title, #map-updated, #map-empty,
+#map-fresh-facts, #map-stale-facts, #map-impact, .map-note {
+    height: auto;
+}
+
+#map-reasons {
+    margin-bottom: 1;
+}
+
+#map-file-tabs {
+    height: auto;
+    min-height: 8;
+}
+
+#spectrum-index, #result-map-summary {
+    height: auto;
+    margin: 1 0;
+    padding: 0 1;
+}
+

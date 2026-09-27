@@ -35,6 +35,7 @@ from cuanta.tui.commands import (
     LEDGER,
     LOOP,
     MANDATES,
+    MAP,
     MODELS,
     SECTIONS,
     SETTINGS,
@@ -61,6 +62,7 @@ from cuanta.tui.views.instinct import InstinctView
 from cuanta.tui.views.ledger import LedgerView
 from cuanta.tui.views.loop import LoopView
 from cuanta.tui.views.mandate import MandateView
+from cuanta.tui.views.map import MapView
 from cuanta.tui.views.models import ModelsView
 from cuanta.tui.views.pending import PendingView
 from cuanta.tui.views.settings import SettingsView
@@ -132,7 +134,12 @@ class CuantaApp(App[None]):
             self.bind(key, f"goto('{section}')", description=t(f"nav.{section}"), show=False)
         for command in COMMANDS:
             if command.key:
-                self.bind(command.key, command.action, description=t(command.title_key), show=False)
+                self.bind(
+                    command.key,
+                    command.action,
+                    description=t(command.title_key),
+                    show=command.name == MAP,
+                )
         self.bind("ctrl+q", "quit", description=t("keys.quit"))
         self.bind("question_mark", "help", description=t("keys.help"), show=False)
 
@@ -164,6 +171,7 @@ class CuantaApp(App[None]):
             HEALTH: lambda: HealthView(self.services, self.catalog),
             MANDATES: lambda: MandateView(self.services, self.catalog),
             SPECTRUM: lambda: SpectrumView(self.services, self.catalog),
+            MAP: lambda: MapView(self.services, self.catalog),
             LEDGER: lambda: LedgerView(self.services, self.catalog),
             INIT: lambda: InitView(self.services, self.catalog),
             INSTINCT: lambda: InstinctView(self.services, self.catalog),
@@ -304,6 +312,8 @@ class CuantaApp(App[None]):
             self.base.query_one(SpectrumView).activate()
         elif section == LEDGER:
             self.base.query_one(LedgerView).activate()
+        elif section == MAP:
+            self.base.query_one(MapView).activate()
         if section == MANDATES and self.mandate_prefill is not None:
             self.base.query_one(MandateView).prefill(self.mandate_prefill)
             self.mandate_prefill = None
@@ -466,6 +476,10 @@ class CuantaApp(App[None]):
     async def on_result_screen_open_spectrum(self, message: ResultScreen.OpenSpectrum) -> None:
         self._to_base()
         await self.open_spectrum(message.run_id)
+
+    async def on_result_screen_open_map(self, _: ResultScreen.OpenMap) -> None:
+        self._to_base()
+        await self.action_goto(MAP)
 
     async def on_result_screen_continue_requested(
         self, message: ResultScreen.ContinueRequested
