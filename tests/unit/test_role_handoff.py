@@ -236,3 +236,9 @@ def test_verification_states_are_explicit() -> None:
     text = render_chain(chain, 2000)
     assert "`slow`: timed out" in text
     assert "`missing`: did not start" in text
+
+
+def test_a_blocked_handoff_keeps_its_reason() -> None:
+    handoff = build_handoff('{"status": "blocked", "blocked_reason": "no plan"}', "senior")
+    assert handoff.status is HandoffStatus.BLOCKED
+    assert handoff.reason == "no plan"

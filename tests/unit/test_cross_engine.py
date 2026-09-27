@@ -129,7 +129,9 @@ def test_a_spent_budget_ends_the_pipeline_as_partial_after_salvaging(tmp_path: P
     assert report.steps[0].salvaged
     assert report.steps[1].overrun_usd > 0
     assert report.stopped is not None
-    assert english(report.stopped) == "tester has no remaining reserved budget"
+    assert english(report.stopped) == (
+        "tester has no remaining budget because senior on codex overran its share by $0.1720"
+    )
 
 
 def test_a_failed_role_stops_the_pipeline(tmp_path: Path) -> None:

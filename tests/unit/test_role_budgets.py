@@ -96,6 +96,19 @@ def test_shares_follow_role_history_once_every_role_has_samples() -> None:
     history = role_history(plan(), runs, "feature", "normal")
     unset = role_history(plan(), [cross(Role.ANALYST, "claude", 0.1, depth="")], "feature", "")
     assert unset[Role.ANALYST] == [0.1]
+    stopped = Run(
+        "S",
+        "cross",
+        engine="claude",
+        model="m-analyst",
+        scope="analyst",
+        task_type="feature",
+        depth="normal",
+        status="failed",
+        end_reason="error_max_budget_usd",
+        cost_usd=0.3,
+    )
+    assert role_history(plan(), [stopped], "feature", "normal")[Role.ANALYST] == [0.3]
     assert history[Role.ANALYST] == [0.1, 0.1, 0.1] and history[Role.SENIOR] == [0.3, 0.3, 0.3]
     shares = {
         cost.role: cost.share
