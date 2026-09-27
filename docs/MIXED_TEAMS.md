@@ -30,6 +30,9 @@ either honored or refused before anything launches, with the reason:
 - the tester is pinned to Codex on a Windows host, where Codex cannot run builds;
 - the route chose a different model.
 
+Team also recommends a preset for the task type from measured runs: the preset with the lowest
+cost per accepted change, once it has an accepted run. Without accepted runs it recommends none.
+
 In the app, the Team step shows the same three presets as chips. Without a preset the mandate runs
 as the native Claude pipeline, where every role shares one session. With a preset, each card shows
 the role's engine, model and share of the cap, what the engine guarantees, how the role receives
@@ -93,6 +96,9 @@ commands before they start.
   the pipeline continues when the remainder still covers the next roles' floors.
 - **Optional roles.** Docs, and the tester once verification has passed, are skipped with a recorded
   reason when the remainder is below their floor.
+- **Blocked roles.** A required role that reports it is blocked stops the pipeline as partial, and
+  the result names the cause. After a partial handoff, the next role is told to treat the chain as
+  its plan and continue.
 - **Codex.** Codex has no live spend signal; its cost is checked after the run, any overrun is taken
   from the remainder, and the result shows it.
 
@@ -115,3 +121,14 @@ tester on Claude by default, and refuses a Codex tester pin on this host.
 A file Codex creates inside cuanta's private copy can be unreadable to the user, because the copy
 folder only grants access to its owner. Before a Codex writer runs, cuanta creates the plan's new
 files so they stay readable, removes the ones that stay empty, and reports any file it cannot read.
+
+## Measured
+
+On a production Next.js landing page (`docs/trials/2026-09-27-mixed-teams.md`), seven of nine
+cross-engine trials ended complete and the other two named their cause. Two features were accepted
+with Claude only ($0.91 per accepted change), two with Codex plans, Claude writes ($1.18), and one of
+two with Claude plans, Codex writes ($1.99). A GSAP fallback fix was not accepted in any preset
+within $1.00 to $1.50. A Codex writer overran its share by $1.34, which cuanta charged to the
+remainder and reported. Each role there is a separate launch with its own context, verification and
+docs, so a cross-engine Claude-only team costs more than the native Claude pipeline for the same
+change.
