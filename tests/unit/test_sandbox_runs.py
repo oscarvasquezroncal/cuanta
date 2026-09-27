@@ -26,7 +26,7 @@ from cuanta.application.mandate import MandateService
 from cuanta.application.mandate_flow import MandateFlow, MandateOptions
 from cuanta.application.progress import RecordingSink
 from cuanta.application.sandbox import SandboxRunner, TrialRecorder
-from cuanta.application.trials import ACCEPTED, REJECTED, TrialStore, parse_trial
+from cuanta.application.trials import TrialStore, parse_trial
 from cuanta.domain.detection import Stack
 from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest, RunResult
 from cuanta.domain.errors import DomainFailure, EnvironmentFailure
@@ -34,6 +34,7 @@ from cuanta.domain.handoff import Workflow
 from cuanta.domain.ledger import Run
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import Message
+from cuanta.domain.outcomes import ACCEPTED, REJECTED
 from cuanta.domain.progress import Note
 from cuanta.domain.sandbox import (
     GIT_CEILING_ENV,
@@ -992,3 +993,40 @@ def test_a_rolled_back_apply_restores_the_executable_bit(
     target = harness.project / "src" / "app.ts"
     assert target.read_bytes() == b"export const a = 1\r\n"
     assert not os.access(target, os.X_OK)
+
+
+def test_apply_restores_the_project_when_a_reject_lands_meanwhile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = Harness(tmp_path, EditingEngine(_edits))
+    harness.run()
+    trial = harness.result.trial
+    assert trial is not None
+    real = harness.ledger.set_run_outcome
+
+    def raced(run_id: str, outcome: str, at: str, reason: str = "") -> bool:
+        real(run_id, REJECTED, at, "someone else")
+        return False
+
+    monkeypatch.setattr(harness.ledger, "set_run_outcome", raced)
+    with pytest.raises(DomainFailure, match="discarded while it was being applied"):
+        harness.store.apply(trial.run_id)
+    assert (harness.project / "src" / "app.ts").read_bytes() == b"export const a = 1\r\n"
+    assert not (harness.project / "src" / "sitemap.ts").exists()
+    assert harness.store.applied_at(trial.run_id) == ""
+
+
+def test_a_sandbox_run_stores_the_estimate_it_ran_with(tmp_path: Path) -> None:
+    from cuanta.domain.estimates import RunEstimate
+
+    harness = Harness(tmp_path, EditingEngine(_edits))
+    sink = RecordingSink()
+    options = MandateOptions(
+        simple=True, budget_usd=0.75, estimate=RunEstimate("history", 0.3, 0.6, 4)
+    )
+    result = harness.runner.run_mandate(harness.flow, FEATURE, 0, options, sink)
+    assert result.report is not None
+    stored = harness.ledger.get_run(result.report.run.id)
+    assert stored is not None
+    assert (stored.estimate_low, stored.estimate_high, stored.estimate_samples) == (0.3, 0.6, 4)
+    assert (stored.estimate_source, stored.cap_usd, stored.mode) == ("history", 0.75, "sandbox")

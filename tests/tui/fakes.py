@@ -91,6 +91,7 @@ from cuanta.domain.progress import (
     note,
     started,
 )
+from cuanta.domain.real_costs import CostReport, cost_report
 from cuanta.domain.report import ContextSplit, file_refs, next_request, parse_sections
 from cuanta.domain.routing import RoutingPolicy, default_requests, plan_route, roles_that_run
 from cuanta.domain.sandbox import ChangeKind
@@ -301,6 +302,11 @@ def sample_result(run_id: str = "01JMANDATE0000000000000RUN1", simple: bool = Fa
             ended_at="2026-09-24T10:00:17",
             status="ok",
             cost_usd=0.14,
+            estimate_low=0.1,
+            estimate_high=0.2,
+            estimate_source="history",
+            estimate_samples=4,
+            cap_usd=0.6,
         ),
         task_type="investigation",
         simple=simple,
@@ -314,7 +320,59 @@ def sample_result(run_id: str = "01JMANDATE0000000000000RUN1", simple: bool = Fa
         refs=file_refs(text),
         follow_up=next_request(text),
         report_path=f".cuanta/runs/{run_id}/report.md",
+        actual_usd=0.14,
     )
+
+
+COSTS_SINCE = "2026-08-27T00:00:00Z"
+
+
+def cost_run(
+    run_id: str,
+    task_type: str,
+    cost: float | None,
+    outcome: str = "",
+    engine: str = "claude",
+    kind: str = "mandate",
+    parent: str = "",
+    estimated: bool = False,
+) -> Run:
+    return Run(
+        run_id,
+        kind,
+        engine,
+        started_at=f"2026-09-2{run_id[-1]}T10:00:00Z",
+        ended_at=f"2026-09-2{run_id[-1]}T10:03:00Z",
+        status="ok",
+        cost_usd=cost,
+        parent_id=parent,
+        task_type=task_type,
+        cost_source="estimated" if estimated else "reported",
+        outcome=outcome,
+        estimate_low=0.3,
+        estimate_high=0.6,
+        estimate_source="history",
+        estimate_samples=3,
+    )
+
+
+COST_RUNS = (
+    cost_run("01JCOST1", "investigation", 0.42, "accepted"),
+    cost_run("01JCOST2", "investigation", 0.55, "accepted"),
+    cost_run("01JCOST3", "bug", 0.9, "rejected"),
+    cost_run("01JCOST4", "bug", 1.1, "accepted", engine="codex", estimated=True),
+    cost_run("01JCOST5", "feature", None),
+    cost_run("01JCOST6", "feature", 2.4, "accepted", kind="cross"),
+    replace(
+        cost_run("01JCOST7", "", 0.7, kind="cross", parent="01JCOST6"),
+        started_at="2026-09-26T10:03:00Z",
+        ended_at="2026-09-26T10:05:00Z",
+    ),
+)
+
+
+def sample_costs() -> CostReport:
+    return cost_report(COST_RUNS, COSTS_SINCE)
 
 
 SANDBOX_RUN = "01JSANDBOX00000000000000RUN"
@@ -401,7 +459,14 @@ def snapshot(
         DETECTION, forge_state=ForgeState.INITIALIZED if initialized else ForgeState.FRESH
     )
     report = DoctorReport(detection, checks)
-    return HomeSnapshot(report, runs, DAILY, next_step(report), "0.4.0 (8b8a490)")
+    return HomeSnapshot(
+        report,
+        runs,
+        DAILY,
+        next_step(report),
+        "0.4.0 (8b8a490)",
+        costs=sample_costs() if runs else None,
+    )
 
 
 @dataclass
@@ -558,6 +623,27 @@ class FakeServices:
         if view is not None and view.trial is not None:
             rejected = replace(view.trial, outcome="rejected", outcome_at="2026-09-26T10:00:00")
             self.results[run_id] = replace(view, trial=rejected)
+
+    decisions: list[tuple[str, str]] = field(default_factory=list)
+    decision_error: str = ""
+
+    def _decide(self, run_id: str, outcome: str) -> None:
+        if self.decision_error:
+            raise RuntimeError(self.decision_error)
+        self.decisions.append((run_id, outcome))
+        view = self.results.get(run_id)
+        if view is not None:
+            run = replace(view.run, outcome=outcome, outcome_at="2026-09-26T11:00:00Z")
+            self.results[run_id] = replace(view, run=run)
+
+    def accept_run(self, run_id: str) -> None:
+        self._decide(run_id, "accepted")
+
+    def reject_run(self, run_id: str) -> None:
+        self._decide(run_id, "rejected")
+
+    def real_costs(self) -> CostReport:
+        return sample_costs() if not self.empty_ledger else cost_report((), COSTS_SINCE)
 
     def save_result(self, run_id: str) -> str:
         self.saved_results.append(run_id)
