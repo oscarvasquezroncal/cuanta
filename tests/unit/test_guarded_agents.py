@@ -140,3 +140,41 @@ def test_native_prepare_compiles_once_and_passes_the_same_plan_to_guarded_agents
     assert written["architecture-analyst"]["tools"] == ["Read"]
     assert written["python-senior"]["tools"] == ["Read", "Write"]
     assert "Bash" in written["python-senior"]["disallowedTools"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_native_claude_pipelines_carry_index_tools_when_enabled(
+    tmp_path: Path, enabled: bool
+) -> None:
+    folder = tmp_path / ".claude" / "agents"
+    folder.mkdir(parents=True)
+    for name in ("architecture-analyst", "python-senior"):
+        (folder / f"{name}.md").write_text(
+            f"---\nname: {name}\ndescription: specialist\ntools: Read, Write\n---\nFinish.\n",
+            encoding="utf-8",
+        )
+    engine = ClaudeCodeEngine(FakeRunner())
+    service = MandateFlow(
+        flow(tmp_path, engine).service,
+        lambda _: engine,
+        launcher,
+        Stack,
+        lambda _: ({}, None),
+        str(tmp_path),
+        "claude",
+        0.0,
+        routing=routing(tmp_path, {}),
+        pipeline_index_tools=enabled,
+    )
+    request = MandateRequest(type="feature", what="add export", tests="t", out_of_scope="hero")
+    pipeline = service.prepare(
+        request, 0, MandateOptions(route=RouteOptions(mode="fixed")), preview=True
+    )
+    assert pipeline.spec.index_tools is (True if enabled else None)
+    single = service.prepare(
+        request,
+        0,
+        MandateOptions(route=RouteOptions(mode="fixed"), simple=True),
+        preview=True,
+    )
+    assert single.spec.index_tools is None

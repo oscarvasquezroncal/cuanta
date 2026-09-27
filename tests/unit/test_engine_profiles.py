@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from itertools import count
 from pathlib import Path
 
@@ -230,3 +231,86 @@ def test_codex_writable_root_keeps_non_ascii_project_paths_readable() -> None:
     setting = next(part for part in command if part.startswith("sandbox_workspace_write.writable"))
     assert "\U0001f600" in setting
     assert "\\ud83d" not in setting
+
+
+def test_pipeline_index_tools_reach_codex_as_a_per_launch_server_with_the_run_id() -> None:
+    from cuanta.application.engine_run import LaunchSpec
+
+    server = ("python", "-m", "cuanta", "--project", "/work/shop", "mcp", "serve")
+    codex = EngineLauncher(
+        CodexEngine(FakeRunner()),
+        MemoryLedger(),
+        FixedClock(),
+        lambda: "RUN1",
+        lambda size: b"\x01" * size,
+        "project",
+        4318,
+        None,
+        index_server=server,
+    )
+    spec = LaunchSpec("cross", "p", "/work/shop", (), index_tools=True)
+    request = codex.request(spec, "RUN7", "", None)
+    assert request.index_server == (*server, "--run-id", "RUN7")
+    command = CodexEngine(FakeRunner()).command(request)
+    assert 'mcp_servers.cuanta.command="python"' in command
+    args = next(part for part in command if part.startswith("mcp_servers.cuanta.args="))
+    assert json.loads(args.split("=", 1)[1])[-2:] == ["--run-id", "RUN7"]
+    plain = codex.request(LaunchSpec("cross", "p", "/work/shop", ()), "RUN8", "", None)
+    assert plain.index_server == ()
+    assert not any("mcp_servers" in part for part in CodexEngine(FakeRunner()).command(plain))
+
+
+def test_pipeline_index_tools_give_claude_cross_roles_the_owned_server() -> None:
+    from cuanta.application.engine_run import LaunchSpec
+    from cuanta.domain.index_tools import INDEX_CONTRACT, INDEX_TOOLS
+
+    seen: list[LaunchSpec] = []
+
+    def guard(spec: LaunchSpec) -> tuple[str, str]:
+        seen.append(spec)
+        return "mcp.json", "settings.json"
+
+    claude = EngineLauncher(
+        ClaudeCodeEngine(FakeRunner()),
+        MemoryLedger(),
+        FixedClock(),
+        lambda: "RUN1",
+        lambda size: b"\x01" * size,
+        "project",
+        4318,
+        None,
+        guard_files=guard,
+        default_session="full",
+    )
+    spec = LaunchSpec("cross", "p", "/work/shop", ("Read",), index_tools=True)
+    request = claude.request(spec, "RUN2", "", None)
+    assert request.mcp_config == "mcp.json" and seen[0].index_tools is True
+    assert set(INDEX_TOOLS) <= set(request.allowed_tools)
+    assert INDEX_CONTRACT in request.append_system_prompt
+    assert request.index_server == ()
+    off = claude.request(replace(spec, index_tools=False), "RUN3", "", None)
+    assert off.mcp_config == "" and not set(INDEX_TOOLS) & set(off.allowed_tools)
+
+
+def test_codex_index_server_inherits_the_state_root_inside_an_isolated_copy() -> None:
+    import tomllib
+
+    from cuanta.domain.engine import EngineRequest
+    from cuanta.domain.sandbox import STATE_ROOT_ENV
+
+    state = "C:\\work\\shop \u00f1"
+    python = "C:\\Python\\python.exe"
+    request = EngineRequest(
+        "p",
+        "/copy",
+        {STATE_ROOT_ENV: state},
+        temporary_copy=True,
+        index_server=(python, "-m", "cuanta", "mcp", "serve"),
+    )
+    command = CodexEngine(FakeRunner()).command(request)
+    settings = [command[index + 1] for index, part in enumerate(command) if part == "--config"]
+    table = tomllib.loads("\n".join(item for item in settings if item.startswith("mcp_servers")))
+    server = table["mcp_servers"]["cuanta"]
+    assert server["command"] == python
+    assert server["args"] == ["-m", "cuanta", "mcp", "serve"]
+    assert server["env"] == {STATE_ROOT_ENV: state}

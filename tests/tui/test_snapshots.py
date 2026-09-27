@@ -603,3 +603,22 @@ def test_no_cap_confirmation(snap_compare: SnapCompare, theme: str) -> None:
         await wait_screen(pilot, ConfirmScreen)
 
     assert snap_compare(app_for(theme), terminal_size=(120, 36), run_before=check)
+
+
+@pytest.mark.parametrize("size", SIZES, ids=lambda size: f"{size[0]}x{size[1]}")
+def test_team_mix_cards(snap_compare: SnapCompare, size: tuple[int, int]) -> None:
+    async def show_mix(pilot: Pilot[None]) -> None:
+        wizard = await understood(pilot, 2)
+        wizard.kind = "feature"
+        wizard.choose_mix("claude-plans-codex-writes")
+        for _ in range(300):
+            if wizard.query("#override-senior") and wizard.estimate is not None:
+                break
+            await pilot.pause(0.02)
+        await loaded(pilot)
+        await pilot.pause(0.2)
+        wizard.query_one("#override-senior").scroll_visible(animate=False, top=True)
+        await loaded(pilot)
+
+    services = FakeServices(engines=(("claude", True), ("codex", True)))
+    assert snap_compare(app_for("calico-dark", services), terminal_size=size, run_before=show_mix)

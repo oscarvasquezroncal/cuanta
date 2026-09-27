@@ -11,6 +11,7 @@ from textual.widgets import Button, Checkbox, Input, Select, Static, TextArea
 from cuanta.application.assistant import sent_payload
 from cuanta.application.intake import Understanding
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixState, PrefixWindow
+from cuanta.domain.change_plan import ChangePlan
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.cache_text import clock_time
 from cuanta.tui.screens.confirm import ConfirmScreen
@@ -455,3 +456,45 @@ def test_see_what_is_sent_matches_the_payload() -> None:
         assert expected in render(body)
 
     drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_a_team_mix_routes_roles_across_engines_and_explains_each_card() -> None:
+    services = FakeServices(engines=(("claude", True), ("codex", True)))
+    services.change_plan_result = ChangePlan(verify=("npx tsc --noEmit", "npm run build"))
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#intent-feature", IntentCard).post_message(IntentCard.Chosen("feature"))
+        await wait_for(pilot, lambda: wizard.kind == "feature")
+        wizard.query_one("#wiz-why", TextArea).text = "The checkout needs a canonical tag"
+        wizard.query_one("#wiz-out", Input).value = "the footer"
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        note = wizard.query_one("#wiz-mix-note", Static)
+        assert "Native pipeline" in render(note)
+        wizard.query_one("#mix-claude-plans-codex-writes", Button).press()
+        await wait_for(pilot, lambda: services.team_options[-1].mix == "claude-plans-codex-writes")
+        await wait_for(pilot, lambda: "runs separately" in render(note))
+        cards = wizard.query_one("#team-cards")
+        await wait_for(pilot, lambda: "Codex, gpt-5.6-sol" in render_all(cards))
+        text = render_all(cards)
+        assert "Enforced:" in text and "Checked after the run:" in text
+        assert "Context: index tools and the anchored handoff chain" in text
+        assert "Codex cannot run builds on this Windows host; cuanta verifies instead" in text
+        assert " · " not in text
+        verify = wizard.query_one("#wiz-verify-note", Static)
+        await wait_for(pilot, lambda: "npx tsc --noEmit, npm run build" in render(verify))
+        assert verify.display
+        assert wizard.options().mix == "claude-plans-codex-writes"
+        wizard.query_one("#mix-claude-plans-codex-writes", Button).press()
+        await wait_for(pilot, lambda: wizard.options().mix == "")
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+def render_all(widget: object) -> str:
+    from textual.widget import Widget
+
+    assert isinstance(widget, Widget)
+    return "\n".join(render(item) for item in widget.query(Static))

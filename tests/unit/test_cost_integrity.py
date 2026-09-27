@@ -227,7 +227,7 @@ def test_cross_engine_estimate_consumes_budget_and_preserves_label(tmp_path: Pat
     assert len(report.steps) == 1 and not report.ok
     assert report.spent_usd is not None and report.spent_usd > 0.1
     assert report.steps[0].cost_source == "estimated"
-    assert report.stopped is not None and report.stopped.key == "cross.budget"
+    assert report.stopped is not None and report.stopped.key == "cross.partial_budget"
 
 
 def test_result_markdown_labels_estimates_and_unknown(tmp_path: Path) -> None:

@@ -96,8 +96,16 @@ from cuanta.domain.progress import (
 )
 from cuanta.domain.real_costs import CostReport, cost_report
 from cuanta.domain.report import ContextSplit, file_refs, next_request, parse_sections
-from cuanta.domain.routing import RoutingPolicy, default_requests, plan_route, roles_that_run
+from cuanta.domain.routing import (
+    RoutingPolicy,
+    default_requests,
+    parse_mix,
+    plan_route,
+    roles_that_run,
+    with_mix,
+)
 from cuanta.domain.sandbox import ChangeKind
+from cuanta.domain.team import RoleCard, team_cards
 from cuanta.domain.telemetry import WiringPlan, WiringReport, WiringState
 from cuanta.domain.terminal import TerminalKind, TerminalReport
 from cuanta.tui.services import ALL_IMPORTED, LoopState, TelemetryPanel
@@ -1034,12 +1042,28 @@ class FakeServices:
         self, request: MandateRequest, options: MandateOptions
     ) -> tuple[RoutePlan, Estimate]:
         self.team_options.append(options)
-        policy = RoutingPolicy(engines=(options.engine or "claude",))
+        policy = with_mix(
+            RoutingPolicy(engines=(options.engine or "claude",)), parse_mix(options.mix)
+        )
         requests = default_requests(policy, roles_that_run(request.type, options.simple))
         routes = plan_route(policy, self.catalog, requests)
         plan = RoutePlan(policy, None, None, (), routes, "heuristic")
         cap = resolve_budget(options, request.type, 0.0)
         return plan, estimate(plan, self.similar, load_prices(), request.type, options.depth, cap)
+
+    def team_cards(
+        self, plan: RoutePlan, estimate: Estimate, options: MandateOptions
+    ) -> tuple[RoleCard, ...]:
+        if parse_mix(options.mix) is not None:
+            shares = {cost.role: cost.share for cost in estimate.roles if cost.share > 0}
+            return team_cards(
+                plan.routes,
+                shares,
+                estimate.cap,
+                lambda engine: engine in {"claude", "codex"},
+                frozenset({"codex"}),
+            )
+        return team_cards(plan.routes, {}, 0.0, lambda engine: False)
 
     def change_plan(self, request: MandateRequest) -> ChangePlan:
         self.change_plan_requests.append(request)

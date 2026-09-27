@@ -121,5 +121,44 @@ def test_cross_cli_passes_resolved_turn_limit_to_every_claude_role(
     launches = [call for call in fake_runner.calls if call[:2] == ("claude", "-p")]
     assert len(launches) >= 3
     assert all(call[call.index("--max-turns") + 1] == str(expected) for call in launches)
-    assert "Read-only: not available" in result.stdout
+    assert "Read-only: checked after the run" in result.stdout
     assert "Turn limit: enforced" in result.stdout
+    assert "complete" in result.stdout
+    assert "analyst: claude" in result.stdout
+
+
+def cross_args(root: Path, *extra: str) -> list[str]:
+    return [
+        "mandate",
+        "--type",
+        "bug",
+        "--what",
+        "Fix incorrect addition",
+        "--why",
+        "The sum is wrong",
+        "--out-of-scope",
+        "Documentation",
+        "--project",
+        str(root),
+        *extra,
+    ]
+
+
+def test_a_mix_needs_a_cross_engine_run(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    result = invoke(cross_args(tmp_path, "--mix", "claude-plans-codex-writes"))
+    assert result.exit_code != 0
+    assert "--mix sets engines per role in a cross-engine run" in result.stdout + result.stderr
+    unknown = invoke(cross_args(tmp_path, "--cross-engine", "--mix", "everyone"))
+    assert unknown.exit_code != 0 and "unknown --mix everyone" in unknown.stdout + unknown.stderr
+    assert not fake_runner.stdins
+
+
+def test_unknown_role_pins_are_rejected_before_any_launch(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    result = invoke(cross_args(tmp_path, "--cross-engine", "--role-model", "senior=no-such-model"))
+    assert result.exit_code != 0
+    output = result.stdout + result.stderr
+    assert "role pins cannot be honored" in output
+    assert "senior is pinned to no-such-model, which is not in the model catalog" in output
+    assert not fake_runner.stdins

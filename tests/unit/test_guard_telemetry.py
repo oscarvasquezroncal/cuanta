@@ -133,14 +133,16 @@ def test_cross_engine_records_actual_paths_and_protected_writes_fail(
     )
     report = result.cross
     assert report is not None
-    assert len(report.steps) == 3 and all(step.ok for step in report.steps)
+    assert len(report.steps) == (2 if protected else 3) and all(step.ok for step in report.steps)
     assert report.ok is not protected
+    assert report.guard_role == ("senior" if protected else "")
     assert report.changed_files == changed_paths(protected, guard_path)
     metrics = cross_metrics(report)
     assert metrics["actual_edited_paths"] == changed_paths(protected, guard_path)
     assert metrics["out_of_plan_edits"] == unplanned_paths(protected, guard_path)
     assert metrics["guard_violations"] == ((guard_path,) if protected else ())
-    assert persisted == [report.steps[0].run_id]
+    assert persisted[-1] == report.steps[0].run_id
+    assert set(persisted) == {step.run_id for step in report.steps}
     saved = reports.meta(report.steps[0].run_id)
     assert saved is not None
     assert saved["actual_edited_paths"] == list(changed_paths(protected, guard_path))
@@ -300,3 +302,58 @@ def test_mode_only_protected_changes_fail_and_cannot_apply(
     with pytest.raises(DomainFailure, match="protected"):
         harness.store.apply(trial.run_id)
     assert snapshot(harness.project) == before
+
+
+def test_verification_outputs_stay_out_of_the_recorded_trial(tmp_path: Path) -> None:
+    from cuanta.domain.role_handoff import VerifyResult
+
+    harness = Harness(tmp_path, EditingEngine(edits(False, "src/old.ts")))
+    protection = replace(PROTECTION, verify=("npm run build",))
+    roots: list[Path] = []
+
+    def pipeline_for(
+        copy: SandboxCopy, launch: SandboxLaunch, checkpoint: Callable[[], Message | None]
+    ) -> CrossEnginePipeline:
+        roots.append(copy.root)
+
+        def verifier(commands: object) -> tuple[VerifyResult, ...]:
+            _write(copy.root, "next-env.d.ts", b"compiled\n")
+            return (VerifyResult("npm run build", 0, 1.0),)
+
+        def launcher(name: str) -> EngineLauncher:
+            engine = EditingEngine(
+                edits(False, "src/old.ts") if name == "codex" else lambda _: None, name
+            )
+            return EngineLauncher(
+                engine,
+                harness.ledger,
+                harness.clock,
+                lambda: f"RUN{next(harness.ids)}",
+                lambda size: b"\x01" * size,
+                "shop",
+                4318,
+                None,
+            )
+
+        return CrossEnginePipeline(
+            launcher,
+            tuple,
+            FileCapsuleStore(harness.project / ".cuanta" / "capsules"),
+            str(copy.root),
+            5.0,
+            sandbox=launch,
+            checkpoint=checkpoint,
+            change_plan=lambda _: protection,
+            snapshot=lambda: snapshot(copy.root),
+            verifier=verifier,
+        )
+
+    result = harness.runner.run_cross(
+        pipeline_for, FEATURE, plan(), RecordingSink(), False, payload=cross_metrics
+    )
+    report = result.cross
+    assert report is not None and report.ok
+    assert report.verification_outputs == ("next-env.d.ts",)
+    assert "next-env.d.ts" not in report.changed_files
+    assert result.trial is not None
+    assert [change.path for change in result.trial.changes] == ["src/app.ts", "src/sitemap.ts"]

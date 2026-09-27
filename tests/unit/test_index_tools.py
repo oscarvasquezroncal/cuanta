@@ -88,6 +88,7 @@ def test_impact_by_symbol_and_path_match_and_tests_keep_commands(tools: IndexToo
 
 def test_numbered_range_and_symbol_source_windows_match(tools: IndexTools) -> None:
     by_lines = _call(tools, "page", {"path": "cart.py", "lines": "1:2"})
+    assert _call(tools, "page", {"path": "cart.py", "lines": "1-2"})["text"] == by_lines["text"]
     assert by_lines == _call(tools, "page", {"path": "cart.py", "symbol": "checkout"})
     assert by_lines["text"] == "1: def checkout():\n2:     return 1"
     assert by_lines["level"] == "L2" and by_lines["estimated_tokens"]

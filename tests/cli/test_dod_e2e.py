@@ -14,6 +14,7 @@ from cuanta.adapters.system.process_runner import SubprocessRunner
 from cuanta.bootstrap import Container
 from cuanta.domain.agents import parse_agent
 from cuanta.domain.graph_policy import GRAPHLESS_OVERRIDE, graphless_prompt
+from cuanta.domain.index_tools import INDEX_CONTRACT
 from cuanta.domain.mandate import REQUEST_MARKER, extract_block
 from cuanta.ports.ledger import EventQuery
 from cuanta.ports.system import Completed
@@ -308,6 +309,8 @@ def test_routed_mandate_passes_agents_by_file_and_audits_each_agent(
     assert definition is not None
     assert tester_prompt.startswith(definition.prompt + "\n\n")
     indexed_context = tester_prompt.removeprefix(definition.prompt + "\n\n")
+    assert indexed_context.startswith(INDEX_CONTRACT + "\n\n")
+    indexed_context = indexed_context.removeprefix(INDEX_CONTRACT + "\n\n")
     assert indexed_context.startswith("[L0 policy]")
     assert "Protected paths are readonly." in indexed_context
     assert "src/calc/__init__.py" in indexed_context
@@ -480,6 +483,8 @@ def test_two_dry_runs_produce_byte_identical_launch_files(
         "--project",
         str(root),
     ]
+    for path in (root / ".cuanta" / "tmp").glob("*.json"):
+        path.unlink()
     first = json.loads(invoke(argv, env=env).stdout)
     before = _launch_files(root)
     for path in (root / ".cuanta" / "tmp").glob("*.json"):
