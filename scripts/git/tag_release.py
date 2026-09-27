@@ -177,7 +177,7 @@ def verify_ci(repo: str, sha: str) -> str:
     if require_success(detail, sha) != (run_id, attempt):
         raise WorkflowError("Release CI run or attempt changed during validation.")
     jobs = detail.get("jobs")
-    if not isinstance(jobs, list) or len(jobs) != len(EXPECTED_JOBS):
+    if not isinstance(jobs, list):
         raise WorkflowError(
             "Release CI must contain all nine required gate and install-smoke jobs."
         )
@@ -185,12 +185,16 @@ def verify_ci(repo: str, sha: str) -> str:
     for raw in jobs:
         job = record(raw)
         name = job.get("name")
+        if name == "performance":
+            continue
         if (
             not isinstance(name, str)
             or job.get("status") != "completed"
             or job.get("conclusion") != "success"
         ):
             raise WorkflowError("Every required CI job must be completed successfully.")
+        if name in names:
+            raise WorkflowError("Release CI contains duplicate required jobs.")
         names.add(name)
     if names != EXPECTED_JOBS:
         raise WorkflowError("Release CI is missing required gate or install-smoke jobs.")

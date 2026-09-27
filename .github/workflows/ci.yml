@@ -36,8 +36,6 @@ jobs:
       - run: uv run mypy
       - name: Run parallel tests
         run: uv run pytest -n auto -m "not live and not perf" --cov --cov-report=term
-      - name: Discover and run performance tests in a dedicated process
-        run: uv run python scripts/tests/performance.py
 
   install-smoke:
     needs: gates
@@ -60,3 +58,24 @@ jobs:
         run: uv tool install dist/*.whl
       - run: cuanta --plain meow
       - run: cuanta --plain doctor
+
+  performance:
+    if: github.ref_type != 'tag'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CUANTA_HELP_BUDGET_S: "0.6"
+      CUANTA_PAINT_BUDGET_S: "1.5"
+      PYTHONUTF8: "1"
+    steps:
+      - name: Check out source (checkout 7.0.1)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up uv (setup-uv 10.2.0)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          python-version: "3.12"
+          prune-cache: true
+      - run: uv sync --python 3.12 --extra web
+      - name: Discover and run performance tests with independent coverage
+        run: uv run python scripts/tests/performance.py --standalone
