@@ -10,7 +10,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = sorted(
     path
-    for folder in (ROOT / "src" / "cuanta", ROOT / "tests", ROOT / "scripts" / "git")
+    for folder in (
+        ROOT / "src" / "cuanta",
+        ROOT / "tests",
+        ROOT / "scripts" / "git",
+        ROOT / "scripts" / "dev",
+    )
     for path in folder.rglob("*.py")
     if not {"assets", "fixtures"} & set(path.relative_to(ROOT).parts)
 )

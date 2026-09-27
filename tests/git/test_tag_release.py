@@ -418,6 +418,26 @@ def test_required_ci_jobs_match_the_committed_workflow_matrix(release: ModuleTyp
     assert expected == release.EXPECTED_JOBS
 
 
+@pytest.mark.parametrize("conclusion", ["success", "failure", "skipped"])
+def test_ci_ignores_only_the_separate_advisory_performance_job(
+    release: ModuleType, monkeypatch: pytest.MonkeyPatch, conclusion: str
+) -> None:
+    detail: dict[str, Any] = ci_detail(release, "sha")
+    detail["jobs"].append({"name": "performance", "status": "completed", "conclusion": conclusion})
+    responses = iter([[ci_run("sha")], detail, [ci_run("sha")]])
+    monkeypatch.setattr(release, "gh", lambda *args: next(responses))
+    assert "/123/attempts/2" in release.verify_ci("example/cuanta", "sha")
+
+
+def test_performance_is_separate_from_required_jobs_and_excluded_on_release_tags() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    required, performance = workflow.split("  performance:", 1)
+    assert "scripts/tests/performance.py" not in required
+    assert "continue-on-error: true" in performance
+    assert "if: github.ref_type != 'tag'" in performance
+    assert "needs:" not in performance
+
+
 @pytest.mark.parametrize(
     "origin",
     [
