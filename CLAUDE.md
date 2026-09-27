@@ -115,6 +115,7 @@ floor. Preserve performance assertions, measured startup work and budgets.
 - pytest `addopts` excludes `-m live` by default: a green local run never touched real engines.
 - `CUANTA_HELP_BUDGET_S` / `CUANTA_PAINT_BUDGET_S` loosen perf budgets in CI; locally the
   stricter defaults apply.
+- Pipeline roles (cross-engine, and native Claude pipelines with a generated profile) get the owned index server by default (`runs.pipeline_index_tools`); role pins are honored or rejected before launch, never ignored; Claude role caps sit a learned margin below their share and a budget stop continues with a salvaged handoff.
 - `runs.session` defaults to lean for Claude launches; full restores user plugins, hooks and MCP except compiled protected/read-only mandates, whose generated profile isolates settings and removes unrestricted execution. Cuanta read-discipline hooks stay off by default (`runs.read_discipline`); CC-10/CC-11 are verified on Claude Code 2.1.283 once hook commands use POSIX paths.
 - `CUANTA_MAX_TURNS`, `runs.max_turns` and `cuanta mandate --max-turns` set the Claude turn rail;
   zero uses the depth limit, and `--no-cap` does not remove that rail.
