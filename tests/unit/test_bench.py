@@ -151,7 +151,7 @@ class Sandbox:
             raise DomainFailure("no fixture")
         return f"/tmp/{label}/{with_kit}"
 
-    def accept(self, task: BenchTask, root: str) -> tuple[bool, str]:
+    def accept(self, task: BenchTask, root: str, report: str | None = None) -> tuple[bool, str]:
         self.accepted.append(root)
         return False, "1 failed"
 

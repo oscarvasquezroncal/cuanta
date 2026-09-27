@@ -1,0 +1,29 @@
+name = "python-pricing-investigation"
+suites = ["investigation"]
+fixture = "python_strong"
+prompt = "Investigate src/shop/pricing.py without changing files. Explain how cart_total and invoice_total calculate their discount and rounding, and how shipping affects an invoice. Give actual file:line citations for both functions. Read only; do not run commands."
+
+[request]
+type = "investigation"
+what = "Explain the discount, rounding and shipping behavior of cart_total and invoice_total"
+why = "How is the discount applied in each function, when is rounding performed, and when is shipping added?"
+where = "src/shop/pricing.py"
+constraints = "Read only. Cite actual source file:line anchors for both functions."
+tests = "Deliverable: a written report explaining both functions with source citations"
+out_of_scope = "All file changes and command execution"
+
+[files]
+"src/shop/pricing.py" = '''
+def cart_total(prices: list[float], percent: float) -> float:
+    total = sum(prices)
+    return round(total - total * percent / 100, 2)
+
+
+def invoice_total(amount: float, percent: float, shipping: float) -> float:
+    discounted = round(amount - amount * percent / 100, 2)
+    return round(discounted + shipping, 2)
+'''
+
+[answer]
+keywords = ["cart_total", "invoice_total", "percent", "shipping", "round"]
+citations = ['src/shop/pricing\.py:[1-3](?![0-9])', 'src/shop/pricing\.py:[6-8](?![0-9])']
