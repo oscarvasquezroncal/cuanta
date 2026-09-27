@@ -208,7 +208,7 @@ def _tree_structure(
     edges: list[IndexRow] = []
     creators = _creators(root)
     for node in _nodes(root):
-        line, end = node.start_point.row + 1, node.end_point.row + 1
+        line, end = node.start_point[0] + 1, node.end_point[0] + 1
         if node.type in _FUNCTIONS | _TYPES | {"variable_declarator"}:
             name = _text(node.child_by_field_name("name"))
             if name and "\n" not in name and len(name) <= 120:
@@ -234,7 +234,7 @@ def _tree_structure(
                         continue
                     name = _text(exported.child_by_field_name("name"))
                     if name:
-                        identity = f"{file.path}:{exported.start_point.row + 1}:{name}"
+                        identity = f"{file.path}:{exported.start_point[0] + 1}:{name}"
                         edges.append(_row(file, name, line, end, "exports", identity, edge=True))
             for exported in _nodes(node):
                 if exported.type == "export_specifier":
@@ -288,7 +288,7 @@ def _go_exports(file: IndexedFile, root: Node) -> tuple[list[IndexRow], list[Ind
         }:
             continue
         names = tuple(node.children_by_field_name("name"))
-        line, end = node.start_point.row + 1, node.end_point.row + 1
+        line, end = node.start_point[0] + 1, node.end_point[0] + 1
         for identifier in names:
             name = _text(identifier)
             if node.type in {"var_spec", "const_spec"}:
