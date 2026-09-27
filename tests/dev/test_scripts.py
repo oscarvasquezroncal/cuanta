@@ -231,6 +231,26 @@ def test_unknown_cost_is_never_zero() -> None:
         trial.cost(None)
 
 
+def test_simple_trial_probes_projects_without_forge_agents(tmp_path: Path) -> None:
+    loaded = spec.load(write_spec(tmp_path, "simple = true"))
+    assert loaded.trials[0].simple
+    assert "--simple" in trial.command(loaded, loaded.trials[0])
+    with pytest.raises(ValueError, match="simple must be boolean"):
+        spec.load(write_spec(tmp_path, 'simple = "true"'))
+    with pytest.raises(ValueError, match="simple cannot"):
+        spec.load(write_spec(tmp_path, "simple = true\ncross_engine = true"))
+
+
+def test_snapshot_updates_require_explicit_tui_test_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = results.Report("smoke", tmp_path)
+    monkeypatch.setattr(focus, "Report", lambda *args: report)
+    assert focus.run([], snapshot_update=True) == 1
+    assert focus.run(["tests/unit/test_cross_engine.py"], snapshot_update=True) == 1
+    assert not report.steps
+
+
 def test_trial_payload_reads_ndjson_events_then_a_multiline_result(tmp_path: Path) -> None:
     file = tmp_path / "output.log"
     file.write_text(

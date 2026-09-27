@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from cuanta.adapters.storage.capsule_store import FileCapsuleStore
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.adapters.system.clock import FixedClock
@@ -15,6 +17,7 @@ from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import english, msg
 from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.progress import ProgressEvent
+from cuanta.domain.role_budgets import allocate_budget
 from cuanta.domain.routing import ROLES, Role, RoleRoute, RoutingPolicy
 
 REQUEST = MandateRequest(type="bug", what="fix add", why="add(2, 3) == -1", out_of_scope="tests")
@@ -121,7 +124,7 @@ def test_each_role_runs_on_its_engine_with_the_previous_handoff(tmp_path: Path) 
 def test_the_budget_stops_the_pipeline(tmp_path: Path) -> None:
     report = pipeline(tmp_path, [], 0.9).run(REQUEST, plan(), Recorder())
     assert not report.ok
-    assert len(report.steps) == 2
+    assert len(report.steps) == 1
     assert report.stopped is not None
     assert english(report.stopped) == "the cross-engine budget is spent"
 
@@ -132,3 +135,59 @@ def test_a_failed_role_stops_the_pipeline(tmp_path: Path) -> None:
     assert [step.ok for step in report.steps] == [True, False]
     assert report.stopped is not None
     assert "senior failed" in english(report.stopped)
+
+
+def test_role_shares_reserve_a_floor_and_preserve_the_total() -> None:
+    shares = allocate_budget({Role.ANALYST: 0.01, Role.SENIOR: 10.0, Role.TESTER: None}, 1.0)
+    assert sum(shares.values()) == pytest.approx(1.0)
+    assert min(shares.values()) >= 0.05
+    assert shares[Role.SENIOR] > shares[Role.TESTER] > shares[Role.ANALYST]
+    assert allocate_budget({Role.ANALYST: None}, 0) == {}
+    assert allocate_budget({Role.ANALYST: float("inf"), Role.TESTER: None}, 1.0) == {
+        Role.ANALYST: 0.5,
+        Role.TESTER: 0.5,
+    }
+    with pytest.raises(ValueError, match="finite"):
+        allocate_budget({Role.ANALYST: None}, float("nan"))
+
+
+def test_unused_role_share_rolls_forward_without_borrowing_future_shares(tmp_path: Path) -> None:
+    ledger = MemoryLedger()
+    prompts: list[str] = []
+    requests: list[EngineRequest] = []
+    counter = iter(range(10))
+
+    class CapturingEngine(ScriptedEngine):
+        def run(
+            self, request: EngineRequest, on_event: Callable[[EngineEvent], None]
+        ) -> EngineOutcome:
+            requests.append(request)
+            return super().run(request, on_event)
+
+    def launcher(name: str) -> EngineLauncher:
+        return EngineLauncher(
+            CapturingEngine(name, prompts, cost=0.05),
+            ledger,
+            FixedClock(),
+            lambda: f"RUN{next(counter)}",
+            lambda size: b"\x01" * size,
+            "shop",
+            4318,
+            None,
+        )
+
+    shares = {Role.ANALYST: 0.1, Role.SENIOR: 0.6, Role.TESTER: 0.3}
+    subject = CrossEnginePipeline(
+        launcher,
+        tuple,
+        FileCapsuleStore(tmp_path),
+        str(tmp_path),
+        1.0,
+        allocator=lambda *args: shares,
+    )
+    report = subject.run(REQUEST, plan(), Recorder())
+    assert report.ok
+    assert [request.max_budget_usd for request in requests] == pytest.approx([0.1, 0.65, 0.9])
+    assert [step.budget_usd for step in report.steps] == pytest.approx([0.1, 0.65, 0.9])
+    root = ledger.get_run(report.steps[0].run_id)
+    assert root is not None and root.cap_usd == 1.0
