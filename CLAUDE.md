@@ -67,16 +67,19 @@ instinct backends) are discovered through `[project.entry-points."cuanta.*"]` in
 
 ```bash
 uv sync --extra web                 # install (dev group is default)
-uv run ruff check                   # lint
-uv run ruff format --check          # format gate
-uv run mypy                         # strict typecheck (files from pyproject)
-uv run pytest -n auto -m "not live and not perf" --cov --cov-report=term
-uv run python scripts/tests/performance.py
+scripts/dev/focus.cmd               # changed files and related tests
+scripts/dev/gate.cmd                # milestone close, both pytest phases
+scripts/dev/gate.cmd --static       # static checks and privacy only
+scripts/dev/trial.cmd SPEC --dry-run # preview capped sandbox trials without spend
 uv run pytest -m live               # opt-in: real agent binaries + network
 uv build && cuanta --plain doctor   # install smoke (CI install-smoke job)
 ```
 
 Counts are never written here: `uv run pytest --collect-only -q | tail -1`.
+
+Read the summary first. Open a full log only at the failing test named in the summary.
+Logs and structured results live under `.cuanta/gates/<timestamp>/`. On POSIX, run the
+matching `uv run --no-sync python scripts/dev/<name>.py` instead of the cmd wrapper.
 
 The full test gate is both pytest phases, in order, in the same workspace. The parallel phase
 starts fresh coverage; the performance helper discovers every non-live performance case,
@@ -91,10 +94,10 @@ floor. Preserve performance assertions, measured startup work and budgets.
   rebase, stash, clean or rewriting published commits. At session start, fetch and
   pull with `--ff-only` if a remote exists; stop on divergence. See `docs/DEVELOPMENT.md`.
 - The private session plan, when present, lives in `.cuanta/NEXT_SESSIONS.md` and stays
-  untracked. Follow its milestone order. While working, run focused tests only. At close:
-  `ruff check`, `ruff format --check`, `mypy`, the privacy scan and one full gate (both pytest
-  phases, the parallel one with `-n auto`); a second consecutive full gate only when the
-  milestone changes process management, and at V2 M9. Speed budgets never move.
+  untracked. Follow its milestone order. While working, run `scripts/dev/focus.cmd`. At close:
+  `scripts/dev/gate.cmd` runs static checks, privacy and both pytest phases; use `--twice` when the
+  milestone changes process management, and at V2 M9. Speed budgets never move. Exit 2 means
+  only speed assertions failed; exit 1 includes functional, discovery or coverage failures.
 
 - The layer `ALLOWED` map and the no-I/O-in-domain check (`tests/architecture/test_layers.py`).
 - No comments / no docstrings (`tests/architecture/test_style.py`).
