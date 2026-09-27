@@ -66,6 +66,14 @@ Read-only rechecks: `claude --version`, `claude --help`, `codex --version`, `cod
 | GR-01 | CLI exposes `--help`, `update .`, `query`, `explain`, `path`, and `affected` | graphify 0.9.55 | verified | 2026-09-25 | Installed `graphify --version` reports 0.9.55. The prior live help, update and query checks exited 0; `src/cuanta/application/detect.py`, `src/cuanta/adapters/graph/graphify.py`, and `tests/adapters/test_detect_repos.py` cover integration and degraded handling. |
 | GR-02 | Installed graphify skill copies match the CLI version | skill 0.9.11; CLI 0.9.55 | broken | 2026-09-25 | The installed `graphify --version` warns that both skill copies are 0.9.11 and recommends refreshing them. Cuanta does not load the skill, but agent instructions may be stale. Updating the user-level skills is separate from repository code. |
 
+| GR-03 | Bare `graphify update .` refreshes code through AST without a model call; manifest file mtimes identify source freshness | graphify 0.9.55 | verified | 2026-09-27 | Installed `cli.py` update branch invokes `watch._rebuild_code`; local graph updates succeed. Current graph uses `nodes` and `links` with unique IDs, file/line provenance, relation and confidence; manifest entries carry mtime. `adapters/graph/file_graph.py` imports both links/edges and rejects stale sources. Background workers verify executable health before update and never block the foreground index. |
+
+## Index syntax parsers
+
+| ID | Contract | Engine / version | Status | Date | Evidence |
+|---|---|---|---|---|---|
+| IDX-01 | Parser language capsules and Python AST support deterministic local extraction without network/model calls | Tree-sitter 0.26.0; TS/TSX 0.23.2; JS and Go 0.25.0; Python 3.12+ | verified | 2026-09-27 | Windows binary wheels installed; AST fixtures exercise syntax, duplicate symbols, direction and reduced coverage. Versions locked in `uv.lock`; `adapters/graph/index_ast.py` uses `Language`/`Parser` and stdlib `ast`. [Official Python bindings](https://github.com/tree-sitter/py-tree-sitter) document wheels and the capsule/parser API; [TS/TSX bindings](https://github.com/tree-sitter/tree-sitter-typescript) provide separate grammars. Dynamic imports, nonconventional aliases and unsupported languages remain unresolved or reduced; this is syntax extraction, not a type checker. |
+
 ## Repository tooling
 
 | ID | Contract | Engine / version | Status | Date | Evidence |
