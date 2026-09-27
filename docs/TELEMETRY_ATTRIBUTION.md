@@ -87,3 +87,31 @@ Unknown prices remain unavailable, with explicit unknown samples and known subto
 cost with no usable history remains unallocated. The report conserves known total as allocated
 plus unallocated cost. Estimated-price and stale-history samples remain visible. Deleted or
 stale file history can still explain past allocation; it does not claim current source freshness.
+
+## Investigation benchmarks
+
+The dedicated `investigation` suite contains Next cart/checkout and Python pricing tasks;
+mini and full task sets stay the same. For example:
+
+```text
+cuanta bench run --suite investigation --reps 1 --shape single --pack on --depth normal
+```
+
+Without `--yes`, the bench shows the plan and ceiling without spending. Answer acceptance
+uses the delivered root report, all configured case-insensitive keywords and complete
+file:line patterns; cited files must exist inside the prepared sandbox and lines must be in
+range. Windows drive-prefixed paths, escaped or absent source and empty reports fail. These
+bounded checks do not prove the explanation is semantically correct. Investigations also
+reject every observed source edit, even if their answer passes. Code-task acceptance remains
+the configured command suite.
+
+Actual shape, pack and depth accompany every numerical run record. Baseline investigations
+use a single read-only context and no Cuanta pack even when another shape is requested.
+`--pack off` disables automatic packs independently from index/MCP; plans and tools remain.
+Explicit `cuanta pack` stays available. Omitted shape/depth preserve existing Cuanta defaults.
+
+Reports show observed request-phase totals with coverage and file utilization by condition.
+The ratio sums useful/read counts from covered runs only; absent reads/reports stay unknown.
+Preloaded packs do not count as observed source calls. Phase prices do not replace billed run
+costs. Historical numerical reports without these fields load with conservative empty defaults;
+raw delivered answer text is transient for acceptance and is absent from bench numerical JSON.

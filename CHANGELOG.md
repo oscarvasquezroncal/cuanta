@@ -7,6 +7,10 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Bench adds two read-only investigation tasks with delivered-answer keyword and real
+  file:line checks. Shape, pack and depth options retain actual run settings and numerical
+  phase anatomy/read efficiency by condition; baseline uses a single read-only context.
+  Automatic pack disabling preserves index tools and plans, and source edits reject answers.
 - `models stats --files` reads existing closed snapshots for file/task/mix history priors
   and retrospective known-cost allocation. Unknown prices, unallocated cost and stale or
   estimated samples stay visible; the query creates, migrates and repairs no stores.
