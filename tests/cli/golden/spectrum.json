@@ -344,6 +344,25 @@
     },
     "startup_ms": 0
   },
+  "read_efficiency": {
+    "available": true,
+    "cited_files": [],
+    "edited_files": [
+      "src/app.py"
+    ],
+    "formula": "(edited or cited) files read / files read",
+    "label": "file utilization v2",
+    "read_count": 1,
+    "read_files": [
+      "src/app.py"
+    ],
+    "useful_count": 1,
+    "useful_files": [
+      "src/app.py"
+    ],
+    "value": 1.0,
+    "why": ""
+  },
   "runs": [
     "01KFIXTURERUN0000000000000"
   ],
@@ -438,8 +457,11 @@
     "tokens": 98800
   },
   "utilization": {
+    "formula": "useful tool tokens / total API tokens",
     "label": "heuristic v1",
+    "read_files": 0,
     "reason": "",
+    "useful_files": 0,
     "useful_tokens": 23500,
     "value": 0.2379
   }
