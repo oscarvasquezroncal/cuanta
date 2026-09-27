@@ -20,6 +20,7 @@ from cuanta.cli.commands import (
     listen,
     loop,
     mandate,
+    mcp,
     meow,
     models,
     pack,
@@ -113,6 +114,7 @@ app.add_typer(ledger.ledger_app, name="ledger")
 app.add_typer(instinct.instinct_app, name="instinct")
 app.add_typer(models.models_app, name="models")
 app.add_typer(probe.probe_app, name="probe")
+app.add_typer(mcp.mcp_app, name="mcp")
 app.add_typer(bench.bench_app, name="bench")
 app.add_typer(runs.runs_app, name="runs")
 app.command("costs", help="Real costs: spend, outcomes and cost per accepted change.")(

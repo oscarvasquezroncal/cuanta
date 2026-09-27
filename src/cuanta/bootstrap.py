@@ -99,6 +99,7 @@ if TYPE_CHECKING:
     from cuanta.application.ledger_view import RunsQuery
     from cuanta.application.mandate import MandateReport, MandateService
     from cuanta.application.mandate_flow import MandateFlow, MandateOptions, Prepared
+    from cuanta.application.mcp import McpServer
     from cuanta.application.models import ModelService, ProbeOutcome
     from cuanta.application.new_files import NewFileReview
     from cuanta.application.outcomes import RunOutcomes
@@ -470,6 +471,7 @@ class Container:
             lean_files=self.lean_profile().files,
             default_session=self.config.run_session,
             guard_files=self.guard_profile,
+            index_tools=self.config.index_tools,
         )
 
     def guard_profile(self, spec: LaunchSpec) -> tuple[str, str]:
@@ -502,7 +504,132 @@ class Container:
                         "hooks": [{"type": "command", "command": command, "timeout": 10}],
                     }
                 ]
-        return self.lean_profile().files(permissions_deny=denied, owned_hooks=hooks)
+        mcp = self.index_mcp_config() if self.config.index_tools else None
+        return self.lean_profile().files(permissions_deny=denied, owned_hooks=hooks, owned_mcp=mcp)
+
+    def index_mcp_config(self) -> dict[str, object]:
+        import sys
+
+        return {
+            "mcpServers": {
+                "cuanta": {
+                    "type": "stdio",
+                    "command": sys.executable,
+                    "args": ["-m", "cuanta", "--project", str(self.project), "mcp", "serve"],
+                }
+            }
+        }
+
+    def mcp_server(self, run_id: str = "") -> McpServer:
+        from cuanta import __version__
+        from cuanta.application.index_tools import TOOLS, IndexTools
+        from cuanta.application.mcp import McpServer
+
+        reader = self.index_reader()
+        tools = IndexTools(reader)
+        sequence = 0
+        nonce = secrets.token_hex(8)
+
+        def observe(
+            name: str, arguments: Mapping[str, object], result: object, elapsed: float
+        ) -> None:
+            nonlocal sequence
+            sequence += 1
+            self.record_mcp_call(run_id, name, arguments, result, elapsed, f"{nonce}:{sequence}")
+
+        def initialized(version: str, client: Mapping[str, object]) -> None:
+            self.record_mcp_call(
+                run_id,
+                "initialize",
+                {},
+                {
+                    "protocol_version": version,
+                    "client_name": client.get("name", ""),
+                    "client_version": client.get("version", ""),
+                },
+                0,
+                f"{nonce}:initialize",
+            )
+
+        return McpServer(tools.call, TOOLS, __version__, observe, initialized, close=reader.close)
+
+    def record_mcp_call(
+        self,
+        run_id: str,
+        name: str,
+        arguments: Mapping[str, object],
+        result: object,
+        elapsed: float,
+        identity: str,
+    ) -> None:
+        from contextlib import suppress
+
+        from cuanta.adapters.graph.file_graph import graph_path
+        from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
+        from cuanta.domain.code_index import index_path
+        from cuanta.domain.ledger import LedgerEvent
+        from cuanta.domain.spectrum import estimated_tokens
+        from cuanta.domain.stable import stable_json
+
+        if not run_id:
+            return
+        path = graph_path(self.state_project(), ".cuanta/ledger.db")
+        state = self.state_project()
+        if path is None or any(
+            os.path.lexists(state / relative) and graph_path(state, relative) is None
+            for relative in (".cuanta/ledger.db-wal", ".cuanta/ledger.db-shm")
+        ):
+            return
+        relative = ""
+        candidate = arguments.get("path")
+        if isinstance(candidate, str):
+            with suppress(ValueError):
+                relative = index_path(candidate)
+        encoded = json.dumps(
+            result, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        metadata: dict[str, object] = {"returned_tokens_estimate": estimated_tokens(len(encoded))}
+        if name == "initialize" and isinstance(result, dict):
+            metadata.update(
+                {
+                    key: value
+                    for key, value in result.items()
+                    if isinstance(value, str) and len(value) <= 100
+                }
+            )
+        with suppress(OSError, ValueError, sqlite3.Error):
+            existing = SqliteLedger(path, read_only=True)
+            try:
+                known = existing.get_run(run_id) is not None
+            finally:
+                existing.close()
+            if not known:
+                return
+            ledger = SqliteLedger(path)
+            try:
+                ledger.add_events(
+                    (
+                        LedgerEvent(
+                            run_id=run_id,
+                            source="cuanta_mcp",
+                            agent="uncertain",
+                            kind="index_handshake" if name == "initialize" else "index_call",
+                            tool_name="mcp__cuanta__" + name,
+                            tool_use_id=identity,
+                            tool_result_bytes=len(encoded),
+                            duration_ms=max(0, round(elapsed * 1000)),
+                            success=not (
+                                isinstance(result, dict)
+                                and (result.get("isError") is True or "error" in result)
+                            ),
+                            file_path=relative,
+                            ts=self.clock.now_iso(),
+                            raw=stable_json(metadata),
+                        ),
+                    )
+                )
+            finally:
+                ledger.close()
 
     def lean_profile(self) -> LeanProfile:
         from cuanta.adapters.engines.claude_plugins import installed_plugins
@@ -1214,6 +1341,8 @@ class Container:
             settings_env=lambda: settings_env(self.home, self.project),
             blast_radius=self.blast_radius,
             clock_iso=self.clock.now_iso,
+            index_tools=self.config.index_tools,
+            default_session=self.config.run_session,
         )
 
     def final_suite(self, ledger: Ledger, run_id: str) -> str | None:
