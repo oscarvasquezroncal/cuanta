@@ -115,7 +115,7 @@ floor. Preserve performance assertions, measured startup work and budgets.
 - pytest `addopts` excludes `-m live` by default: a green local run never touched real engines.
 - `CUANTA_HELP_BUDGET_S` / `CUANTA_PAINT_BUDGET_S` loosen perf budgets in CI; locally the
   stricter defaults apply.
-- `runs.session` defaults to lean for Claude launches; full restores user plugins, hooks and MCP except compiled protected/read-only mandates, whose generated profile isolates settings and removes unrestricted execution. Cuanta read-discipline hooks stay off by default while CC-10/CC-11 are unverified.
+- `runs.session` defaults to lean for Claude launches; full restores user plugins, hooks and MCP except compiled protected/read-only mandates, whose generated profile isolates settings and removes unrestricted execution. Cuanta read-discipline hooks stay off by default (`runs.read_discipline`); CC-10/CC-11 are verified on Claude Code 2.1.283 once hook commands use POSIX paths.
 - `CUANTA_MAX_TURNS`, `runs.max_turns` and `cuanta mandate --max-turns` set the Claude turn rail;
   zero uses the depth limit, and `--no-cap` does not remove that rail.
 - `cache.ttl_s` is a measured or conservative cache window tied to auth mode, engine version and
