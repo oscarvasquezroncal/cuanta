@@ -57,13 +57,19 @@ class Attempt:
     models: tuple[tuple[str, str, str], ...] = ()
     context_tokens: int = 0
     loaded: tuple[int, int, int] = (0, 0, 0)
+    index: str = "on"
+    exploration_tokens_estimate: int = 0
+    raw_reads: int = 0
+    index_calls: int = 0
+    out_of_plan_edits: tuple[str, ...] = ()
+    guard_violations: tuple[str, ...] = ()
 
 
 class BenchExecutor:
     def __init__(
         self,
         sandbox: BenchSandbox,
-        attempt: Callable[[BenchTask, Condition, str, float, str], Attempt],
+        attempt: Callable[[BenchTask, Condition, str, float, str, str], Attempt],
         monotonic: Callable[[], float],
     ) -> None:
         self._sandbox = sandbox
@@ -77,8 +83,10 @@ class BenchExecutor:
         rep: int,
         cap: float,
         session: str = LEAN_SESSION,
+        index: str = "on",
     ) -> RunMetrics:
-        label = f"{task.name}-{condition.value}-{rep}"
+        selected = "off" if condition is Condition.BASELINE else index
+        label = f"{task.name}-{condition.value}-{rep}-{selected}"
         empty = RunMetrics(
             task.name,
             condition,
@@ -95,6 +103,7 @@ class BenchExecutor:
             0,
             0,
             session=session,
+            index=selected,
         )
         try:
             root = self._sandbox.prepare(task, condition is not Condition.BASELINE, label)
@@ -103,12 +112,15 @@ class BenchExecutor:
         began = self._monotonic()
         try:
             try:
-                done = self._attempt(task, condition, root, cap, session)
+                done = self._attempt(task, condition, root, cap, session, selected)
             except CuantaError as error:
                 return replace(empty, wall_s=self._monotonic() - began, error=error.message)
             wall = self._monotonic() - began
             capped = was_capped(done.subtype, done.cost_usd, cap)
             accepted, tail = (False, "") if capped else self._sandbox.accept(task, root)
+            if done.guard_violations:
+                accepted = False
+                tail = "Protected paths changed: " + ", ".join(done.guard_violations)
             return RunMetrics(
                 task=task.name,
                 condition=condition,
@@ -129,6 +141,12 @@ class BenchExecutor:
                 session=session,
                 context_tokens=done.context_tokens,
                 loaded=done.loaded,
+                index=selected,
+                exploration_tokens_estimate=done.exploration_tokens_estimate,
+                raw_reads=done.raw_reads,
+                index_calls=done.index_calls,
+                out_of_plan_edits=done.out_of_plan_edits,
+                guard_violations=done.guard_violations,
             )
         finally:
             self._sandbox.discard(root)
@@ -173,7 +191,17 @@ def metrics_from_json(item: dict[str, object]) -> RunMetrics:
         session=str(item.get("session") or LEAN_SESSION),
         context_tokens=_int(item.get("context_tokens")),
         loaded=_loaded(item.get("loaded")),
+        index=str(item.get("index") or "on"),
+        exploration_tokens_estimate=_int(item.get("exploration_tokens_estimate")),
+        raw_reads=_int(item.get("raw_reads")),
+        index_calls=_int(item.get("index_calls")),
+        out_of_plan_edits=_paths(item.get("out_of_plan_edits")),
+        guard_violations=_paths(item.get("guard_violations")),
     )
+
+
+def _paths(value: object) -> tuple[str, ...]:
+    return tuple(item for item in value if isinstance(item, str)) if isinstance(value, list) else ()
 
 
 def _loaded(value: object) -> tuple[int, int, int]:
@@ -197,6 +225,7 @@ def meta_from_json(item: dict[str, object]) -> BenchMeta:
         per_run_usd=_float(item.get("per_run_usd")) or 0.0,
         tasks=tuple(str(name) for name in tasks) if isinstance(tasks, list) else (),
         session=str(item.get("session") or LEAN_SESSION),
+        index=str(item.get("index") or "on"),
     )
 
 
@@ -221,7 +250,7 @@ def load_bench(workspace: Workspace, bench_id: str = "") -> BenchResult | None:
 class BenchRunner:
     def __init__(
         self,
-        execute: Callable[[BenchTask, Condition, int, float, str], RunMetrics],
+        execute: Callable[[BenchTask, Condition, int, float, str, str], RunMetrics],
         workspace: Workspace,
     ) -> None:
         self._execute = execute
@@ -239,7 +268,7 @@ class BenchRunner:
     ) -> BenchResult:
         by_name = {task.name: task for task in tasks}
         planned: tuple[PlannedRun, ...] = plan_runs(
-            tasks, conditions, meta.reps, meta.seed, sessions_for(meta.session)
+            tasks, conditions, meta.reps, meta.seed, sessions_for(meta.session), meta.index
         )
         metrics: list[RunMetrics] = []
         spent: float | None = 0.0
@@ -269,7 +298,12 @@ class BenchRunner:
                 )
             )
             result = self._execute(
-                by_name[item.task], item.condition, item.rep, meta.per_run_usd, item.session
+                by_name[item.task],
+                item.condition,
+                item.rep,
+                meta.per_run_usd,
+                item.session,
+                item.index,
             )
             metrics.append(result)
             spent = sum_costs((spent, result.cost_usd))

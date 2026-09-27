@@ -1,5 +1,5 @@
 name = "shop-version-flag"
-suites = ["mini", "full"]
+suites = ["mini", "full", "index"]
 fixture = "python_strong"
 prompt = "The shop CLI in src/shop/cli.py only prints 'shop'. Change main so it accepts an optional argv list: with --version it prints 'shop 0.1.0' and returns 0; with no arguments it keeps printing 'shop' and returns 0."
 

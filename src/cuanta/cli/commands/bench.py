@@ -21,7 +21,7 @@ DEFAULT_FIXTURES = Path("tests") / "fixtures" / "repos"
 @bench_app.command("run", help="Run every task and condition; --yes spends.")
 def run_command(
     ctx: typer.Context,
-    suite: Annotated[str, typer.Option("--suite", help="mini or full.")] = "mini",
+    suite: Annotated[str, typer.Option("--suite", help="mini, full, or index.")] = "mini",
     reps: Annotated[int, typer.Option("--reps", min=1, help="Repetitions per task.")] = 3,
     budget_usd: Annotated[
         float, typer.Option("--budget-usd", min=0.0, help="Cap for the whole bench.")
@@ -42,6 +42,9 @@ def run_command(
     profile: Annotated[
         str, typer.Option("--session", help="lean (default), full, or both to compare them.")
     ] = "lean",
+    index: Annotated[
+        str, typer.Option("--index", help="on or off for Cuanta conditions; baseline is off.")
+    ] = "on",
     task: Annotated[
         list[str] | None, typer.Option("--task", help="Only this task (repeatable).")
     ] = None,
@@ -64,6 +67,7 @@ def run_command(
             yes,
             profile,
             tuple(task or ()),
+            index,
         ),
     )
 
@@ -116,11 +120,12 @@ def _run(
     yes: bool,
     profile: str = "lean",
     only: tuple[str, ...] = (),
+    index: str = "on",
 ) -> "Document":
     from cuanta.bootstrap import Container
     from cuanta.cli.commands.route import check_choice
     from cuanta.cli.document import Document, Hint, KeyValues, Line
-    from cuanta.domain.bench import SESSION_PROFILES, BenchMeta, sessions_for
+    from cuanta.domain.bench import INDEX_MODES, SESSION_PROFILES, BenchMeta, sessions_for
     from cuanta.domain.errors import DomainFailure, NotAvailable
     from cuanta.domain.progress import Status
 
@@ -128,6 +133,7 @@ def _run(
     tasks_path = _resolve(session, tasks_dir, DEFAULT_TASKS)
     container = Container.for_project(session.project)
     check_choice(profile, SESSION_PROFILES, "--session")
+    check_choice(index, INDEX_MODES, "--index")
     tasks = container.bench_tasks(tasks_path, suite)
     if only:
         tasks = tuple(item for item in tasks if item.name in only)
@@ -145,6 +151,7 @@ def _run(
             ("suite", f"{suite} ({len(tasks)} tasks)"),
             ("conditions", ", ".join(item.value for item in conditions)),
             ("session", profile),
+            ("index", index),
             ("runs", f"{runs} ({reps} per task and condition)"),
             ("engine", f"claude {engine.version()} · main model {model}"),
             ("spend", f"at most ${ceiling:,.2f} (${per_run_usd:,.2f} per run)"),
@@ -170,6 +177,7 @@ def _run(
         per_run_usd=per_run_usd,
         tasks=tuple(task.name for task in tasks),
         session=profile,
+        index=index,
     )
     runner = container.bench_runner(
         _resolve(session, fixtures, DEFAULT_FIXTURES),
@@ -228,6 +236,7 @@ def _payload(result: "BenchResult") -> dict[str, object]:
 
     return {
         "ran": True,
+        "index": result.meta.index,
         "bench_id": result.meta.bench_id,
         "folder": result.folder,
         "stopped_early": result.stopped_early,
@@ -236,6 +245,7 @@ def _payload(result: "BenchResult") -> dict[str, object]:
             {
                 "condition": row.condition.value,
                 "session": row.session,
+                "index": row.index,
                 "runs": row.runs,
                 "accepted": row.accepted,
                 "tokens_per_accepted_median": row.tokens_per_accepted.median,
