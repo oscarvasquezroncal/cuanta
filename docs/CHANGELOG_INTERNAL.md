@@ -17,6 +17,15 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-09-27 — Anchored index knowledge
+- Shipped: section-scoped root and nested rulebooks, explicit documentation references,
+  importing test links with verification commands, and deduplicated ledger history with
+  outcome, retry and failure evidence. Reports and agent notes preserve original anchors.
+- Why: a previous finding must not silently become a current fact after source changes.
+- Tried and rejected: anchoring an old report to current content without historical proof;
+  such records remain stale. Exact unchanged ranges can be revalidated after unrelated edits.
+- Rule extracted: none.
+
 ## 2026-09-27 — Structural index sources
 - Shipped: deterministic Python and Tree-sitter syntax extraction for TS, JS, TSX and Go,
   preserving symbol identities, directed imports/exports, routes, hooks, stores, services and
