@@ -12,6 +12,7 @@ import pytest
 from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
 from cuanta.adapters.system.process_runner import SubprocessRunner
 from cuanta.bootstrap import Container
+from cuanta.domain.agents import parse_agent
 from cuanta.domain.graph_policy import GRAPHLESS_OVERRIDE, graphless_prompt
 from cuanta.domain.mandate import REQUEST_MARKER, extract_block
 from cuanta.ports.ledger import EventQuery
@@ -303,7 +304,13 @@ def test_routed_mandate_passes_agents_by_file_and_audits_each_agent(
     if not graph_available:
         assert tester_prompt.startswith(GRAPHLESS_OVERRIDE + "\n\n")
         tester_prompt = tester_prompt.removeprefix(GRAPHLESS_OVERRIDE + "\n\n")
-    assert tester_prompt in installed
+    definition = parse_agent(installed)
+    assert definition is not None
+    assert tester_prompt.startswith(definition.prompt + "\n\n")
+    indexed_context = tester_prompt.removeprefix(definition.prompt + "\n\n")
+    assert indexed_context.startswith("[L0 policy]")
+    assert "Protected paths are readonly." in indexed_context
+    assert "src/calc/__init__.py" in indexed_context
     assert agents["python-senior"]["model"] == "claude-opus-5-5"
     assert agents["docs-updater"]["model"] == "claude-haiku-4-5"
     audit = {row["agent"]: row for row in run["audit"]}
