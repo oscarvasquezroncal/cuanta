@@ -11,6 +11,17 @@ from typing import Any
 
 import pytest
 
+from cuanta.cli.commands.route import parse_role_models
+from cuanta.domain.models import ModelEntry, Tier
+from cuanta.domain.routing import (
+    ROLES,
+    Role,
+    RoutingPolicy,
+    default_requests,
+    depth_capped,
+    plan_route,
+)
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 from dev import acceptance, focus, gate, results, spec, trial
@@ -197,6 +208,66 @@ def test_trial_dry_run_has_no_subprocess_or_spend(
     assert trial.run(spec.load(write_spec(tmp_path)), True, None, False) == 0
     output = capsys.readouterr().out
     assert "--sandbox" in output and "spend $0.00" in output
+
+
+@pytest.mark.parametrize(
+    ("model", "tier"),
+    [("claude-sonnet-5", Tier.STANDARD), ("claude-opus-5-5", Tier.PREMIUM)],
+)
+def test_native_trial_role_pins_resolve_to_the_requested_models(
+    tmp_path: Path, model: str, tier: Tier
+) -> None:
+    matrix = definition(tmp_path)
+    chosen = replace(
+        matrix.trials[0],
+        depth="normal",
+        role_models=tuple(f"{role.value}=claude:{model}" for role in ROLES),
+    )
+    command = trial.command(matrix, chosen)
+    values = [command[index + 1] for index, value in enumerate(command) if value == "--role-model"]
+    assert values == [f"{role.value}={model}" for role in ROLES]
+    fallback = Tier.PREMIUM if tier is Tier.STANDARD else Tier.STANDARD
+    policy = depth_capped(
+        RoutingPolicy(
+            roles=dict.fromkeys(ROLES, fallback),
+            role_models={Role(role): value for role, value in parse_role_models(values).items()},
+        ),
+        Tier.PREMIUM,
+    )
+    models = (
+        ModelEntry(
+            "claude",
+            "sonnet",
+            "Sonnet",
+            "anthropic",
+            resolved="claude-sonnet-5",
+            tier=Tier.STANDARD,
+        ),
+        ModelEntry(
+            "claude", "opus", "Opus", "anthropic", resolved="claude-opus-5-5", tier=Tier.PREMIUM
+        ),
+    )
+    routes = plan_route(policy, models, default_requests(policy))
+    assert all(route.model is not None and route.model.resolved == model for route in routes)
+
+
+def test_cross_trial_preserves_qualified_role_models(tmp_path: Path) -> None:
+    matrix = definition(tmp_path)
+    values = ("analyst=claude:claude-sonnet-5", "senior=codex:gpt-6-sol")
+    chosen = replace(matrix.trials[0], cross_engine=True, role_models=values)
+    command = trial.command(matrix, chosen)
+    assert "--cross-engine" in command
+    assert (
+        tuple(command[index + 1] for index, value in enumerate(command) if value == "--role-model")
+        == values
+    )
+
+
+def test_native_trial_refuses_a_role_from_another_engine(tmp_path: Path) -> None:
+    matrix = definition(tmp_path)
+    chosen = replace(matrix.trials[0], role_models=("senior=codex:gpt-6-sol",))
+    with pytest.raises(ValueError, match="engine must match"):
+        trial.command(matrix, chosen)
 
 
 def test_trial_smoke_fake_commands_collect_metrics_without_outcome_decision(
