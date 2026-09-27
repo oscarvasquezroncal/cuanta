@@ -29,3 +29,28 @@ ledger was opened read-only and its byte hash remained unchanged.
 Owned MCP observations without a caller session remain uncertain. The capture proves the
 observed payload and this resolver's behavior; it does not guarantee that every engine
 version emits complete delegation boundaries.
+
+Request anatomy assigns each selected usage event exactly once. Start is the first request
+per run, session and agent. Writing is an output-dominant request after that agent's last
+observed tool call; its comparison uses fresh input plus cache write, excluding cache read.
+Other requests are exploration unless they match a handoff. A handoff is the next parent
+request after a matched closed child window with no intervening parent tool work. Its cache
+write must match the final child output within 50% plus 256 wrapper tokens. It is a heuristic,
+not proof that a model summarized the child or that those tokens were avoidable.
+
+The real fixture partitions into 2 start, 8 exploration, 1 writing and 1 handoff requests:
+65,648, 367,203, 59,855 and 49,255 tokens respectively. Their costs are $0.2483865,
+$0.1839955, $0.0615582 and $0.0515198, preserving 541,961 tokens and $0.54546 in total.
+The child output is 4,769 tokens; the next parent writes 6,717 cache tokens after 16.485 s.
+The explicit parent SDK request inside the child window remains a parent request.
+
+Second-context markers require a closed, unambiguous delegation window and an observed child
+start. Possible re-summary markers come from the handoff heuristic. Investigation advice
+suggests a single context; neither marker is a causal waste or billing estimate. JSON anatomy
+contains event identities and numerical usage, without raw prompts or tool parameters.
+
+Phase medians count complete priced attempts only. Missing role usage, any unknown request
+price, or fewer observations than a known positive role turn count exclude the attempt.
+This conservative turn check can exclude otherwise valid captures because provider turn
+semantics vary. Coverage is displayed; missing costs never become zero. Billed economic
+attempt totals, outcomes and cost per accepted change remain separate and unchanged.

@@ -7,6 +7,10 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Result Consumption and Spectrum show an exclusive request-phase anatomy with tokens,
+  requests and observed costs. Spectrum JSON includes safe per-agent phase records;
+  investigation advice identifies observed delegated contexts and possible handoffs.
+  Costs adds phase medians by task type with explicit coverage, preserving billed totals.
 - Tool attribution distinguishes empty-source defaults from explicit agent signals. Closed
   delegation windows resolve local tools before conservative API timestamp brackets; explicit
   SDK and named-agent requests retain their attribution. A scrubbed real capture covers the
