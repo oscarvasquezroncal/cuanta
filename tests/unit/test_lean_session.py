@@ -172,3 +172,43 @@ def test_lean_files_are_sorted_compact_and_content_addressed(tmp_path: Path) -> 
     assert keys == sorted(keys)
     assert Path(first[0]).name.startswith("lean-mcp-")
     assert Path(first[1]).name.startswith("lean-settings-")
+
+
+def test_owned_hooks_and_deny_rules_change_only_the_explicit_lean_profile(tmp_path: Path) -> None:
+    profile = LeanProfile(LocalWorkspace(tmp_path), lambda: parse_installed(json.dumps(INSTALLED)))
+    legacy = profile.files()
+    hooks: dict[str, object] = {"PreToolUse": [{"matcher": "Read", "hooks": []}]}
+    owned = profile.files(("Edit(src/protected/**)", "Write(src/protected/**)"), hooks)
+    settings = json.loads(Path(owned[1]).read_text(encoding="utf-8"))
+    assert owned[0] == legacy[0] and owned[1] != legacy[1]
+    assert settings["disableAllHooks"] is False
+    assert settings["hooks"] == hooks
+    assert settings["permissions"]["deny"] == ["Edit(src/protected/**)", "Write(src/protected/**)"]
+    assert all(value is False for value in settings["enabledPlugins"].values())
+    assert json.loads(Path(legacy[1]).read_text(encoding="utf-8"))["disableAllHooks"] is True
+
+
+def test_empty_setting_sources_excludes_user_project_and_local_settings() -> None:
+    request = EngineRequest("p", ".", {}, setting_sources=())
+    command = build_command(("claude",), request)
+    assert command[-2:] == ["--setting-sources", ""]
+    selected = EngineRequest("p", ".", {}, setting_sources=("project", "local"))
+    assert build_command(("claude",), selected)[-2:] == ["--setting-sources", "project,local"]
+    assert "--setting-sources" not in build_command(("claude",), EngineRequest("p", ".", {}))
+
+
+def test_readonly_normalization_keeps_explicit_strict_guard_tools() -> None:
+    request = EngineRequest(
+        "p",
+        ".",
+        {},
+        read_only=True,
+        strict_guard=True,
+        allowed_tools=("Read", "Grep", "Glob"),
+        disallowed_tools=("Write", "Edit", "Bash"),
+        tools=("Read", "Grep", "Glob"),
+    )
+    command = build_command(("claude",), request)
+    assert command[command.index("--tools") + 1] == "Read,Grep,Glob"
+    assert command[command.index("--allowedTools") + 1] == "Read,Grep,Glob"
+    assert command[command.index("--disallowedTools") + 1] == "Write,Edit,Bash"

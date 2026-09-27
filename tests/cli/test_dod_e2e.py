@@ -417,12 +417,13 @@ def test_depth_caps_the_spend_and_states_a_read_budget(
     assert "Agent,Task" in command
     assert "--agents" not in command
     assert "ONCE" not in prompt
+    assert "--tools Read,Grep,Glob" in command
+    assert "--tools Read,Grep,Glob,Bash" not in command
+    assert "Bash" in document["command"][document["command"].index("--disallowedTools") + 1]
     if graph_available:
-        assert "--tools Read,Grep,Glob,Bash" in command
         assert "You are architecture-analyst." in command
         assert "You are the codebase analyst for this repository" not in command
     else:
-        assert "--tools Read,Grep,Glob" in command
         assert "You are the codebase analyst for this repository" in command
         assert "You are architecture-analyst." not in command
         assert "graphify" not in command.lower()
