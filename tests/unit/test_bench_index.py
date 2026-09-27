@@ -86,7 +86,7 @@ def test_index_mode_flows_from_plan_to_executor_and_persisted_report(tmp_path: P
 
 def test_guard_violation_rejects_an_otherwise_accepted_bench_attempt() -> None:
     class Accepting(Sandbox):
-        def accept(self, task: BenchTask, root: str) -> tuple[bool, str]:
+        def accept(self, task: BenchTask, root: str, report: str | None = None) -> tuple[bool, str]:
             self.accepted.append(root)
             return True, "passed"
 

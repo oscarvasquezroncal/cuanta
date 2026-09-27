@@ -60,6 +60,136 @@ def agent_record(trace_id, agent, model):
     }
 
 
+def investigation_paths(root):
+    paths = (
+        "src/components/cart-drawer.tsx",
+        "src/stores/cart-store.ts",
+        "src/domain/cart.ts",
+        "src/lib/create-checkout.ts",
+    ) if (root / "src/lib/create-checkout.ts").is_file() else ("src/shop/pricing.py",)
+    return tuple(path for path in paths if (root / path).is_file())
+
+
+def investigation_citation(root, path, needle, span=0):
+    lines = (root / path).read_text(encoding="utf-8").splitlines()
+    line = next((number for number, text in enumerate(lines, 1) if needle in text), 0)
+    if not line or line + span > len(lines):
+        return ""
+    return f"{path}:{line}" + (f"-{line + span}" if span else "")
+
+
+def investigation_answer(root):
+    if (root / "src/lib/create-checkout.ts").is_file():
+        paths = investigation_paths(root)
+        if len(paths) != 4:
+            return "Investigation fixture unavailable."
+        citations = (
+            investigation_citation(root, paths[0], "createCheckout(cartStore.items)"),
+            investigation_citation(root, paths[1], "export const cartStore", 6),
+            investigation_citation(root, paths[2], "export function cartTotal", 1),
+            investigation_citation(root, paths[3], "export function createCheckout", 2),
+        )
+        if not all(citations):
+            return "Investigation source contract unavailable."
+        return (
+            "CartDrawer links Checkout to createCheckout(cartStore.items) "
+            f"at {citations[0]}. cartStore holds items "
+            f"and its total() calls cartTotal at {citations[1]}. "
+            f"cartTotal sums price times quantity at {citations[2]}. "
+            "createCheckout builds /checkout?total= with total.toFixed(2) "
+            f"at {citations[3]}."
+        )
+    if (root / "src/shop/pricing.py").is_file():
+        cart = investigation_citation(root, "src/shop/pricing.py", "def cart_total(", 2)
+        invoice = investigation_citation(root, "src/shop/pricing.py", "def invoice_total(", 2)
+        if not cart or not invoice:
+            return "Investigation source contract unavailable."
+        return (
+            "cart_total sums prices, applies percent discount, and rounds to two "
+            f"decimals at {cart}. invoice_total discounts amount, "
+            f"adds shipping, then rounds at {invoice}. Both repeat "
+            "discount maths; invoice_total includes shipping and cart_total does not."
+        )
+    return "Investigation fixture unavailable."
+
+
+def investigation_record(trace_id, second, kind, values):
+    values = {"event.name": kind, "session.id": "fake-session", **values}
+    attributes = []
+    for key, value in values.items():
+        field = "boolValue" if isinstance(value, bool) else "intValue" if isinstance(value, int) else "doubleValue" if isinstance(value, float) else "stringValue"
+        attributes.append({"key": key, "value": {field: value}})
+    return {
+        "timeUnixNano": str(1767225600000000000 + second * 1000000000),
+        "traceId": trace_id,
+        "body": {"stringValue": "claude_code." + kind},
+        "attributes": attributes,
+    }
+
+
+def investigation_records(trace_id, model, agents, root):
+    records = []
+    analyst = next((name for name in agents if "analyst" in name), "")
+
+    def record(second, kind, **values):
+        records.append(investigation_record(trace_id, second, kind, values))
+
+    def api(second, agent, fresh, output, cache_read=0, cache_write=0, cost=0.01):
+        record(second, "api_request", **{
+            "agent.name": agent,
+            "model": agents.get(agent, {}).get("model", model),
+            "input_tokens": fresh,
+            "output_tokens": output,
+            "cache_read_tokens": cache_read,
+            "cache_creation_tokens": cache_write,
+            "cost_usd": cost,
+        })
+
+    api(0, "main", 1200, 100, 5000, 700, 0.05)
+    second = 1
+    if analyst:
+        record(second, "tool_decision", **{
+            "agent.name": "main", "tool_name": "Agent", "tool_use_id": "investigation-agent",
+            "decision": "allowed", "tool_input": json.dumps({"subagent_type": analyst}),
+        })
+        second += 1
+        api(second, analyst, 400, 90, 800, 100)
+        second += 1
+    owner = analyst or "main"
+    for number, path in enumerate(investigation_paths(root)):
+        record(second, "tool_result", **{
+            "tool_name": "Read", "tool_use_id": f"investigation-read-{number}",
+            "success": True, "tool_result_size_bytes": len((root / path).read_bytes()),
+            "tool_input": json.dumps({"file_path": path}),
+        })
+        second += 1
+        if number == 0:
+            api(second, owner, 25, 5, 800 if analyst else 5000, cost=0.005)
+            second += 1
+    api(second, owner, 10, 360 if analyst else 600, 800 if analyst else 5000)
+    if analyst:
+        second += 1
+        record(second, "subagent_completed", agent_type=analyst, output_tokens=360)
+        second += 1
+        api(second, "main", 20, 100, 5000, 360, 0.02)
+        second += 1
+        api(second, "main", 10, 600, 5000)
+    return records
+
+
+def investigation_usage(records, model):
+    keys = {"input_tokens": "inputTokens", "output_tokens": "outputTokens", "cache_read_tokens": "cacheReadInputTokens", "cache_creation_tokens": "cacheCreationInputTokens", "cost_usd": "costUSD"}
+    usage = {}
+    for record in records:
+        values = {item["key"]: next(iter(item["value"].values())) for item in record["attributes"]}
+        if values["event.name"] != "api_request":
+            continue
+        row = usage.setdefault(values.get("model", model), {key: 0 for key in (*keys.values(), "thinkingTokens")})
+        for source, target in keys.items():
+            row[target] += values.get(source, 0)
+    return usage
+
+
 def post_telemetry(model, agents=None):
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     traceparent = os.environ.get("TRACEPARENT", "")
@@ -103,9 +233,12 @@ def post_telemetry(model, agents=None):
             ],
         },
     ]
-    forced = os.environ.get("FAKE_CLAUDE_AGENT_MODEL", "")
-    for name, spec in (agents or {}).items():
-        records.append(agent_record(trace_id, name, forced or spec.get("model", model)))
+    if os.environ.get("FAKE_CLAUDE_INVESTIGATION") == "1":
+        records = investigation_records(trace_id, model, agents or {}, pathlib.Path.cwd())
+    else:
+        forced = os.environ.get("FAKE_CLAUDE_AGENT_MODEL", "")
+        for name, spec in (agents or {}).items():
+            records.append(agent_record(trace_id, name, forced or spec.get("model", model)))
     body = json.dumps({"resourceLogs": [{"resource": {"attributes": resource}, "scopeLogs": [{"logRecords": records}]}]})
     request = urllib.request.Request(
         f"{endpoint}/v1/logs", data=body.encode(), headers={"Content-Type": "application/json"}
@@ -171,6 +304,32 @@ def mandate(root):
     path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
 
 
+def investigation_main(argv, root, model):
+    agents = {}
+    if "--agents" in argv:
+        source = argv[argv.index("--agents") + 1]
+        agents = json.loads(pathlib.Path(source).read_text(encoding="utf-8"))
+        if output := os.environ.get("FAKE_CLAUDE_AGENTS_OUT"):
+            pathlib.Path(output).write_text(json.dumps(agents), encoding="utf-8")
+    analyst = next((name for name in agents if "analyst" in name), "")
+    if analyst:
+        emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "investigation-agent", "name": "Agent", "input": {"subagent_type": analyst, "prompt": "Investigate the source and cite file:line."}}]}, "parent_tool_use_id": None})
+    for number, path in enumerate(investigation_paths(root)):
+        emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"investigation-read-{number}", "name": "Read", "input": {"file_path": path}}]}, "parent_tool_use_id": "investigation-agent" if analyst else None})
+    post_telemetry(model, agents)
+    report = os.environ.get("FAKE_CLAUDE_REPORT")
+    answer = pathlib.Path(report).read_text(encoding="utf-8") if report else investigation_answer(root)
+    usage = investigation_usage(investigation_records("", model, agents, root), model)
+    emit({"type": "assistant", "message": {"content": [{"type": "text", "text": answer}]}, "parent_tool_use_id": None})
+    emit({
+        "type": "result", "subtype": "success", "is_error": False,
+        "num_turns": 6 if analyst else 3, "duration_ms": 1234,
+        "session_id": "fake-session", "total_cost_usd": sum(row["costUSD"] for row in usage.values()),
+        "result": answer, "modelUsage": usage,
+    })
+    return int(os.environ.get("FAKE_CLAUDE_EXIT", "0"))
+
+
 def main(argv):
     if "--version" in argv:
         print("9.9.9 (Claude Code)")
@@ -193,6 +352,8 @@ def main(argv):
     root = pathlib.Path.cwd()
     emit({"type": "system", "subtype": "init", "session_id": "fake-session", "model": model,
           "apiKeySource": "none", "claude_code_version": "9.9.9"})
+    if os.environ.get("FAKE_CLAUDE_INVESTIGATION") == "1":
+        return investigation_main(argv, root, model)
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "Phase 1 — AUDIT or SEED done. Phase 2A next."}]}, "parent_tool_use_id": None})
     emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Agent", "input": {"subagent_type": "architecture-analyst", "prompt": "plan"}}]}, "parent_tool_use_id": None})
     emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": "CLAUDE.md"}}]}, "parent_tool_use_id": "t1"})

@@ -1,0 +1,17 @@
+name = "next-cart-investigation"
+suites = ["investigation"]
+fixture = "next_landing"
+prompt = "Investigate how the Checkout link gets its total from cart state. Trace CartDrawer, cartStore, createCheckout and cartTotal; explain quantity multiplication and URL rounding. Answer with file:line citations in the existing source. Read only; do not change any file or run commands."
+
+[request]
+type = "investigation"
+what = "Trace the checkout total from cart state to the Checkout link"
+why = "Which functions connect the cart items to the checkout URL, how does quantity affect the total, and where is the total rounded?"
+where = "src/components/cart-drawer.tsx src/stores/cart-store.ts src/domain/cart.ts src/lib/create-checkout.ts"
+constraints = "Read only. Cite actual source file:line anchors for every step."
+tests = "Deliverable: a written report explaining cartStore, createCheckout and cartTotal with source citations"
+out_of_scope = "All file changes and command execution"
+
+[answer]
+keywords = ["cartStore", "createCheckout", "cartTotal", "quantity", "toFixed"]
+citations = ['src/components/cart-drawer\.tsx:[1-9][0-9]*', 'src/stores/cart-store\.ts:[1-9][0-9]*', 'src/domain/cart\.ts:[1-9][0-9]*', 'src/lib/create-checkout\.ts:[1-9][0-9]*']
