@@ -118,7 +118,7 @@ def test_runner_stops_at_the_bench_budget_and_round_trips(tmp_path: Path) -> Non
     calls: list[tuple[str, Condition, int, float]] = []
 
     def execute(
-        task: BenchTask, condition: Condition, rep: int, cap: float, session: str
+        task: BenchTask, condition: Condition, rep: int, cap: float, session: str, index: str
     ) -> RunMetrics:
         calls.append((task.name, condition, rep, cap))
         return replace(_metrics(condition, True, 10, 3.0, rep), task=task.name)
@@ -174,7 +174,7 @@ def test_executor_skips_acceptance_for_capped_runs() -> None:
     assert metrics.retries == 1
     assert metrics.total_tokens == 100
     assert sandbox.accepted == []
-    assert sandbox.discarded == ["/tmp/t1-cuanta-1/True"]
+    assert sandbox.discarded == ["/tmp/t1-cuanta-1-on/True"]
 
 
 def test_executor_reports_rejections_and_errors() -> None:
@@ -183,7 +183,7 @@ def test_executor_reports_rejections_and_errors() -> None:
     rejected = executor(TASK, Condition.BASELINE, 2, 3.0)
     assert rejected.accepted is False
     assert rejected.error == "1 failed"
-    assert sandbox.accepted == ["/tmp/t1-baseline-2/False"]
+    assert sandbox.accepted == ["/tmp/t1-baseline-2-off/False"]
 
     def boom(*_: object) -> Attempt:
         raise DomainFailure("claude not found")
@@ -216,7 +216,7 @@ def test_both_sessions_double_the_plan_and_label_the_summary() -> None:
 
 def test_runner_stops_before_next_paid_run_when_cost_is_unknown(tmp_path: Path) -> None:
     def execute(
-        task: BenchTask, condition: Condition, rep: int, cap: float, session: str
+        task: BenchTask, condition: Condition, rep: int, cap: float, session: str, index: str
     ) -> RunMetrics:
         return _metrics(condition, False, 10, None, rep)
 
