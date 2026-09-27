@@ -285,6 +285,7 @@ Use `--help` on any command. Global `--plain` and `--json` control CLI output; `
 | `cuanta doctor` (`purr`) | Health check, with one fix per issue |
 | `cuanta init` | Detect, graph, telemetry, Forge, verify. `--dry-run`, `--skip-forge` |
 | `cuanta refresh` | Refresh Forge's knowledge, reindex the graph, report tier drift |
+| `cuanta index [--rebuild] [--status]` | Hash source, styles and documentation into a local incremental inventory, with counts and freshness; no model call |
 | `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--max-turns` for Claude, `--dry-run`, `--sandbox` to work in an isolated copy (`--keep` keeps the copy) |
 | `cuanta route --dry-run` | Show the routing plan for a request |
 | `cuanta runs list \| show \| open` | Stored runs and their reports, with the estimate shown at launch, the cap, the estimate error and the outcome |

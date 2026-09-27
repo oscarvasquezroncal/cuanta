@@ -51,3 +51,4 @@ What does NOT belong here: rules about how to use a flag (rulebook), history of 
 | extra `web` | `pyproject.toml` | installs `textual-serve` for `cuanta ui --web` | no |
 | focus `--snapshot-update` | `scripts/dev/focus.py` | updates intended Textual snapshots only with explicit TUI test paths | no |
 | trial `simple` (TOML) | `scripts/dev/spec.py`, `trial.py` | runs small probes without requiring Forge agents; incompatible with cross-engine mode | no |
+| `cuanta index --rebuild` / `--status` | `cli/commands/index.py`, `application/code_index.py` | hashes source, styles and explicit documentation/config inputs into copy-local `.cuanta/index.db`; rebuild preserves an old database backup and never changes the ledger; status reads the stored inventory | no |
