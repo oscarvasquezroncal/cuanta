@@ -102,7 +102,9 @@ class CrossEnginePipeline:
         estimator: Estimator | None = None,
         depth: str = "",
         allocator: Callable[[RoutePlan, str, str, float], Mapping[Role, float]] | None = None,
+        refresh_index: Callable[[], None] | None = None,
     ) -> None:
+        self._refresh_index = refresh_index
         self._estimator = estimator
         self._allocator = allocator
         self._depth = depth
@@ -146,6 +148,8 @@ class CrossEnginePipeline:
         return clip_evidence(text, capsule_id(digest))
 
     def run(self, request: MandateRequest, plan: RoutePlan, progress: ProgressSink) -> CrossReport:
+        if self._refresh_index is not None:
+            self._refresh_index()
         definitions = self._definitions()
         steps: list[CrossStep] = []
         self.completed = steps

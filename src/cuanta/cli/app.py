@@ -12,6 +12,7 @@ from cuanta.cli.commands import (
     cat,
     costs,
     doctor,
+    index,
     init,
     instinct,
     ledger,
@@ -77,6 +78,9 @@ app.command("test", help="Gateway: run the suite once, cluster failures into hai
     test.gateway_command
 )
 app.command("cat", help="Page through a stored capsule by level or line range.")(cat.cat_command)
+app.command("index", help="Update the deterministic local file index at zero model spend.")(
+    index.index_command
+)
 app.command("listen", help="Local OTLP/JSON collector (--background, --status, --stop).")(
     listen.listen_command
 )

@@ -78,6 +78,7 @@ if TYPE_CHECKING:
     from cuanta.application.cache_probe import CacheProbeReport
     from cuanta.application.cache_state import PrefixQuery
     from cuanta.application.cat_capsule import CatCapsule
+    from cuanta.application.code_index import IndexService
     from cuanta.application.costs import CostsQuery
     from cuanta.application.cross_engine import CrossEnginePipeline, CrossReport
     from cuanta.application.detect import DetectProject
@@ -164,6 +165,26 @@ class Container:
 
     def workspace(self) -> LocalWorkspace:
         return LocalWorkspace(self.project)
+
+    def index_service(self, rebuild: bool = False) -> IndexService:
+        from cuanta.adapters.storage.sqlite_index import SqliteIndex
+        from cuanta.adapters.system.index_inventory import LocalIndexInventory
+        from cuanta.application.code_index import IndexService
+
+        index = SqliteIndex(self.project / ".cuanta" / "index.db", rebuild=rebuild)
+        return IndexService(
+            index,
+            LocalIndexInventory(self.project, frozenset(self.config.exclusions)),
+            self.clock.now_iso,
+            recovered=index.recovered,
+        )
+
+    def refresh_index(self) -> None:
+        service = self.index_service()
+        try:
+            service.update()
+        finally:
+            service.close()
 
     def state_project(self) -> Path:
         return self.state_root or self.project
@@ -764,6 +785,7 @@ class Container:
             estimator=self.run_estimate,
             depth=depth,
             allocator=self.role_budget,
+            refresh_index=self.refresh_index,
         )
 
     def bench_runner(
@@ -968,6 +990,7 @@ class Container:
             sandbox=sandbox,
             estimator=self.run_estimate,
             shape_estimator=self.run_estimate,
+            refresh_index=self.refresh_index,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
