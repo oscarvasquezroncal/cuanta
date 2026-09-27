@@ -118,3 +118,29 @@ def test_routing_off_changes_nothing(tmp_path: Path) -> None:
     applied = routing(tmp_path, {}).apply(REQUEST, RouteOptions(mode="off"), "claude")
     assert not applied.active
     assert (applied.agents_file, applied.orchestrator, applied.single) == ("", "", "")
+
+
+def test_native_runs_reject_pins_they_cannot_honor(tmp_path: Path) -> None:
+    import pytest
+
+    from cuanta.domain.errors import DomainFailure
+
+    agents = tmp_path / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    for name in ("architecture-analyst", "python-senior", "tester", "docs-updater"):
+        (agents / f"{name}.md").write_text(AGENT.format(name=name), encoding="utf-8")
+    subject = routing(tmp_path, {})
+    cross = RouteOptions(mode="fixed", role_models=(("senior", "codex:gpt-5.6-sol"),))
+    with pytest.raises(DomainFailure, match="role pins cannot be honored") as found:
+        subject.apply(REQUEST, cross, "claude")
+    assert "this launch can only use claude; add --cross-engine" in str(found.value.hint)
+    single = RouteOptions(
+        mode="fixed", role_models=(("senior", "gpt-5.6-sol"), ("tester", "gpt-5.6-luna"))
+    )
+    with pytest.raises(DomainFailure, match="role pins cannot be honored"):
+        subject.apply(REQUEST, single, "codex")
+    honored = subject.apply(
+        REQUEST, RouteOptions(mode="fixed", role_models=(("senior", "opus"),)), "claude"
+    )
+    written = json.loads(Path(honored.agents_file).read_text(encoding="utf-8"))
+    assert written["python-senior"]["model"] == "claude-opus-5-5"
