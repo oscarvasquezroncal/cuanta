@@ -17,6 +17,15 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-09-27 — Local handling cards and search
+- Shipped: bounded file cards with current knowledge and source rules, BM25 identifier/path
+  search with graph/history reasons, and find/card/impact/facts commands. Jev reranking is
+  an explicit consented path/symbol metadata batch; tool-free Claude economy summaries
+  require estimate and confirmation. Free-form notes are kept local to avoid sharing code.
+- Why: agents need useful file context before spending on broad exploration.
+- Tried and rejected: a default embedding dependency and download. MiniLM's English model
+  and additional runtime do not yet have a verified local cold-start fit for bilingual use.
+- Rule extracted: none.
 ## 2026-09-27 — Anchored index knowledge
 - Shipped: section-scoped root and nested rulebooks, explicit documentation references,
   importing test links with verification commands, and deduplicated ledger history with

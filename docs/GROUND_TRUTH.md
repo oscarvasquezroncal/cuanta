@@ -147,3 +147,15 @@ Empty — nothing external was harvested at init (no prior docs existed). Fills 
   marks in increasing priority; zero disables a timeout. The repository keeps live tests
   unbounded unless explicitly marked. Source: https://pypi.org/project/pytest-timeout/ and
   `pyproject.toml`, `tests/conftest.py` — 2026-09-25.
+
+## Local embedding evaluation — 2026-09-27
+
+- The [all-MiniLM-L6-v2 model card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
+  labels the model English and Apache-2.0, with 384-dimensional embeddings. Its
+  [safetensors weights](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/tree/main)
+  are 90.9 MB; this is one artifact, not the entire runtime or repository.
+- [Sentence Transformers installation](https://www.sbert.net/docs/installation.html) requires
+  an additional Torch/Transformers stack. [PyTorch supports Windows](https://pytorch.org/get-started/locally/),
+  but platform support alone does not prove Cuanta's cold-start or bilingual relevance budget.
+- This workspace has no Torch, Sentence Transformers or ONNX Runtime installed. Cold-start
+  fit remains unmeasured; the optional semantic extra was declined without downloading it.
