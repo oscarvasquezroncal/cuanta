@@ -338,3 +338,34 @@ def test_frontend_repeated_same_line_bindings_and_exports_have_unique_identities
     result = AstIndexExtractor().extract(file, text, (file.path,))
     assert tuple(row.id for row in result.symbols) == ("bindings.js:1:run", "bindings.js:2:run")
     assert len({row.id for row in result.edges}) == len(result.edges)
+
+
+@pytest.mark.parametrize(
+    ("path", "language", "header", "declaration", "name"),
+    [
+        ("large.js", "javascript", "", "export function Checkout() {}", "Checkout"),
+        ("large.ts", "typescript", "", "export function Checkout() {}", "Checkout"),
+        (
+            "large.tsx",
+            "typescript",
+            "",
+            "export function Component() { return <section />; }",
+            "Component",
+        ),
+        ("large.go", "go", "package cart\n", "func Checkout() {}", "Checkout"),
+    ],
+)
+def test_long_native_ast_files_preserve_lines_beyond_small_integer_cache(
+    path: str, language: str, header: str, declaration: str, name: str
+) -> None:
+    text = header + "\n" * 300 + declaration + "\n"
+    file = _file(path, text, language)
+    extractor = AstIndexExtractor()
+    expected_line = 301 + header.count("\n")
+    for _ in range(3):
+        result = extractor.extract(file, text, (path,))
+        assert result.coverage == "ast"
+        symbol = next(row for row in result.symbols if row.text == name)
+        assert symbol.line == symbol.end_line == expected_line
+        exported = next(row for row in result.edges if row.relation == "exports")
+        assert exported.target == f"{path}:{expected_line}:{name}"
