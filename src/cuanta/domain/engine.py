@@ -78,6 +78,13 @@ class StepUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class PermissionDenial:
+    tool_name: str
+    tool_use_id: str = ""
+    path: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class RunResult:
     ok: bool
     subtype: str
@@ -89,6 +96,7 @@ class RunResult:
     duration_ms: int = 0
     denials: tuple[str, ...] = ()
     terminal_reason: str = ""
+    permission_denials: tuple[PermissionDenial, ...] = ()
 
 
 def cut_by_turns(subtype: str, terminal_reason: str = "") -> bool:

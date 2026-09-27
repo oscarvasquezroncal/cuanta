@@ -185,11 +185,21 @@ def test_permission_denials_and_registration() -> None:
     assert "Skill" in BASE_TOOLS
     line = (
         '{"type":"result","subtype":"success","is_error":false,"permission_denials":'
-        '[{"tool_name":"Skill","tool_use_id":"t1","tool_input":{}},"Bash"]}'
+        '[{"tool_name":"Skill","tool_use_id":"t1","tool_input":{}},"Bash",'
+        '{"tool_name":"Edit","tool_use_id":"t2","tool_input":{"file_path":"/w/protected.py"}},'
+        '{"tool_name":"Edit","tool_use_id":"t3","tool_input":{"file_path":"/w/other.py"}}]}'
     )
     result = parse_line(line)[0]
     assert isinstance(result, RunResult)
-    assert result.denials == ("Skill", "Bash")
+    assert result.denials == ("Skill", "Bash", "Edit")
+    assert [
+        (item.tool_name, item.tool_use_id, item.path) for item in result.permission_denials
+    ] == [
+        ("Skill", "t1", ""),
+        ("Bash", "", ""),
+        ("Edit", "t2", "/w/protected.py"),
+        ("Edit", "t3", "/w/other.py"),
+    ]
     assert registration(result.denials, 0) == (
         "deferred — the Skill tool was denied; Forge read SKILL.md off disk instead"
     )

@@ -274,7 +274,14 @@ class EngineLauncher:
                 turns=result.num_turns if result is not None else 0,
                 end_reason=end_reason,
             )
-            usage = _usage_events(finished, outcome, self._engine.name) if outcome else []
+            usage = (
+                [
+                    *_usage_events(finished, outcome, self._engine.name),
+                    *_denial_events(finished, outcome, self._engine.name),
+                ]
+                if outcome
+                else []
+            )
             finished = replace(finished, cost_usd=cost.value, cost_source=cost.kind)
             self._ledger.update_run(finished)
             if usage:
@@ -317,4 +324,24 @@ def _usage_events(run: Run, outcome: EngineOutcome, engine: str) -> list[LedgerE
             ts=run.ended_at,
         )
         for usage in outcome.result.models
+    ]
+
+
+def _denial_events(run: Run, outcome: EngineOutcome, engine: str) -> list[LedgerEvent]:
+    if outcome.result is None:
+        return []
+    return [
+        LedgerEvent(
+            run_id=run.id,
+            source=f"{engine}_stream",
+            session_id=outcome.result.session_id,
+            trace_id=run.trace_id,
+            kind="permission_denied",
+            tool_name=denial.tool_name,
+            tool_use_id=denial.tool_use_id,
+            file_path=denial.path,
+            success=False,
+            ts=run.ended_at,
+        )
+        for denial in outcome.result.permission_denials
     ]
