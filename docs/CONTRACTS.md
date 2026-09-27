@@ -76,6 +76,14 @@ Read-only rechecks: `claude --version`, `claude --help`, `codex --version`, `cod
 
 ## Repository tooling
 
+The Windows index replay also verified source declarations beyond line 256 with the locked
+Tree-sitter 0.26.0 wheels. Cuanta reads native Point rows through tuple indexing, preserving
+one-based line references. The `.row` getters reproduced an access violation on long files;
+the [locked binding source](https://github.com/tree-sitter/py-tree-sitter/blob/v0.26.0/tree_sitter/binding/point.c)
+returns borrowed tuple-item references. Four long-file grammar regressions and the actual
+inventory replay pass with tuple indexing. This finding does not imply compatibility with
+other binding versions.
+
 | ID | Contract | Engine / version | Status | Date | Evidence |
 |---|---|---|---|---|---|
 | RT-01 | Empty `attribution.commit` and `attribution.pr` suppress AI bylines | Claude Code settings reference | unverified | 2026-09-25 | [Settings reference](https://code.claude.com/docs/en/settings-reference#attribution) and `docs/GROUND_TRUTH.md` document the option. A live Claude-created commit was not used to verify runtime compliance; the repository's `commit-msg` hook independently enforces the message policy. |
