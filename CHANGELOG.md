@@ -7,6 +7,10 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Tool attribution distinguishes empty-source defaults from explicit agent signals. Closed
+  delegation windows resolve local tools before conservative API timestamp brackets; explicit
+  SDK and named-agent requests retain their attribution. A scrubbed real capture covers the
+  analyst reads without changing token or cost totals.
 - Bench runs accept `--index on|off` and report observed exploration and actual change
   boundaries. An index suite adds a protected-path fix while preserving existing suites.
   Disabling automatic index use retains lexical protection and explicit index commands.
