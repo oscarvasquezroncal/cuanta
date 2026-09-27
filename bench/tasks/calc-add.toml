@@ -1,5 +1,5 @@
 name = "calc-add"
-suites = ["mini", "full"]
+suites = ["mini", "full", "index"]
 fixture = "bugfix"
 prompt = "In this repo, add() in src/calc/__init__.py returns the difference instead of the sum, so tests/test_calc.py::test_add fails. Fix it. Do not change the tests or the signature of add."
 

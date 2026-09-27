@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from html import escape
 
+from cuanta.domain.change_plan import ChangePlan, guarded, path_matches
 from cuanta.domain.costs import sum_costs
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.routing import percentile
@@ -22,6 +23,7 @@ LEAN_SESSION = "lean"
 FULL_SESSION = "full"
 BOTH_SESSIONS = "both"
 SESSION_PROFILES = (LEAN_SESSION, FULL_SESSION, BOTH_SESSIONS)
+INDEX_MODES = ("on", "off")
 DEFAULT_ACCEPT = "{python} -m pytest -q -p no:cacheprovider {hidden}"
 
 
@@ -53,6 +55,7 @@ class PlannedRun:
     condition: Condition
     rep: int
     session: str = LEAN_SESSION
+    index: str = "on"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +79,12 @@ class RunMetrics:
     session: str = LEAN_SESSION
     context_tokens: int = 0
     loaded: tuple[int, int, int] = (0, 0, 0)
+    exploration_tokens_estimate: int = 0
+    raw_reads: int = 0
+    index_calls: int = 0
+    out_of_plan_edits: tuple[str, ...] = ()
+    guard_violations: tuple[str, ...] = ()
+    index: str = "on"
 
     @property
     def total_tokens(self) -> int:
@@ -105,12 +114,16 @@ class ConditionSummary:
     wall: Spread
     session: str = LEAN_SESSION
     context: Spread = field(default_factory=lambda: Spread(None, None, None))
+    index: str = "on"
 
     @property
     def label(self) -> str:
-        if self.session == LEAN_SESSION:
-            return self.condition.value
-        return f"{self.condition.value} · {self.session}"
+        label = self.condition.value
+        if self.session != LEAN_SESSION:
+            label += f" · {self.session}"
+        if self.index != "on" and self.condition is not Condition.BASELINE:
+            label += f" · index {self.index}"
+        return label
 
     @property
     def success(self) -> float:
@@ -131,6 +144,7 @@ class BenchMeta:
     per_run_usd: float
     tasks: tuple[str, ...]
     session: str = LEAN_SESSION
+    index: str = "on"
 
 
 def select(tasks: Sequence[BenchTask], suite: str) -> tuple[BenchTask, ...]:
@@ -141,12 +155,26 @@ def sessions_for(profile: str) -> tuple[str, ...]:
     return (LEAN_SESSION, FULL_SESSION) if profile == BOTH_SESSIONS else (profile,)
 
 
+def bench_boundaries(
+    plan: ChangePlan, before: Mapping[str, str], after: Mapping[str, str]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    changed = sorted(
+        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
+    )
+    outside = tuple(
+        path for path in changed if not any(path_matches(path, target.path) for target in plan.edit)
+    )
+    protected = tuple(path for path in changed if guarded(path, plan))
+    return outside, protected
+
+
 def plan_runs(
     tasks: Sequence[BenchTask],
     conditions: Sequence[Condition],
     reps: int,
     seed: int,
     sessions: Sequence[str] = (LEAN_SESSION,),
+    index: str = "on",
 ) -> tuple[PlannedRun, ...]:
     combos = [
         (task.name, condition, rep, session)
@@ -157,8 +185,15 @@ def plan_runs(
     ]
     random.Random(seed).shuffle(combos)
     return tuple(
-        PlannedRun(index + 1, task, condition, rep, session)
-        for index, (task, condition, rep, session) in enumerate(combos)
+        PlannedRun(
+            order + 1,
+            task,
+            condition,
+            rep,
+            session,
+            "off" if condition is Condition.BASELINE else index,
+        )
+        for order, (task, condition, rep, session) in enumerate(combos)
     )
 
 
@@ -172,16 +207,21 @@ def summarize(metrics: Sequence[RunMetrics]) -> tuple[ConditionSummary, ...]:
     rows: list[ConditionSummary] = []
     for condition in CONDITIONS:
         for session in (LEAN_SESSION, FULL_SESSION):
-            row = _summary(metrics, condition, session)
-            if row is not None:
-                rows.append(row)
+            for index in INDEX_MODES:
+                row = _summary(metrics, condition, session, index)
+                if row is not None:
+                    rows.append(row)
     return tuple(rows)
 
 
 def _summary(
-    metrics: Sequence[RunMetrics], condition: Condition, session: str
+    metrics: Sequence[RunMetrics], condition: Condition, session: str, index: str
 ) -> ConditionSummary | None:
-    runs = [item for item in metrics if item.condition is condition and item.session == session]
+    runs = [
+        item
+        for item in metrics
+        if item.condition is condition and item.session == session and item.index == index
+    ]
     if not runs:
         return None
     accepted = [item for item in runs if item.accepted]
@@ -197,6 +237,7 @@ def _summary(
         wall=spread([item.wall_s for item in runs]),
         session=session,
         context=spread(contexts),
+        index=index,
     )
 
 
@@ -284,8 +325,9 @@ def report_markdown(
         "for every condition.",
         f"- Budget: {_money(meta.per_run_usd)} per run, {_money(meta.budget_usd)} for the bench; "
         f"**{_money(spent)} spent** in total. A run that hits its cap counts as not accepted.",
-        f"- Session profile **{meta.session}**: a lean session loads no user plugins, hooks or "
-        "MCP servers; a full session loads everything the user's Claude Code loads.",
+        f"- Session profile **{meta.session}**: lean excludes user plugins, hooks and MCP "
+        "servers and may load Cuanta tools; full uses the user's Claude Code configuration.",
+        f"- Index **{meta.index}** for Cuanta conditions; baseline uses no Cuanta index.",
         f"- Started {meta.started_at} · bench `{meta.bench_id}`.",
         "",
         "| Condition | Runs | Accepted | Success | Tokens / accepted task (median, range) "
@@ -321,6 +363,26 @@ def report_markdown(
             f"{item.total_tokens:,} | {item.context_tokens:,} | "
             f"{' / '.join(str(count) for count in item.loaded)} | {_money(item.cost_usd)} | "
             f"{item.test_output_tokens:,} | {item.retries} |"
+        )
+    lines += [
+        "",
+        "## Exploration and change boundaries",
+        "",
+        "Returned bytes / 4 estimate exploration tokens; these are separate from API tokens.",
+        "Index calls measure observed tool use, not demonstrated savings. "
+        "Protected edits reject acceptance.",
+        "",
+        "| Task | Condition | Session | Index | Rep | Exploration tokens (estimate) "
+        "| Raw reads | Index calls | Out-of-plan edits | Guard violations |",
+        "|---|---|---|---|---:|---:|---:|---:|---|---|",
+    ]
+    for item in ordered:
+        lines.append(
+            f"| {item.task} | {item.condition.value} | {item.session} | {item.index} | "
+            f"{item.rep} | "
+            f"{item.exploration_tokens_estimate:,} | {item.raw_reads} | {item.index_calls} | "
+            f"{', '.join(item.out_of_plan_edits) or '-'} | "
+            f"{', '.join(item.guard_violations) or '-'} |"
         )
     routed = [item for item in metrics if item.models]
     if routed:

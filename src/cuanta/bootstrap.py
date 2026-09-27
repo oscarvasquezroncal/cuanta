@@ -248,6 +248,8 @@ class Container:
         )
 
     def refresh_index(self) -> None:
+        if not self.config.index_enabled:
+            return
         service = self.index_service()
         try:
             service.update()
@@ -266,6 +268,8 @@ class Container:
         return MapQuery(IndexRead(self.index_service(rebuild), self.clock.now_iso))
 
     def learn_run(self, run_id: str, notes_root: Path | None = None) -> None:
+        if not self.config.index_enabled:
+            return
         from cuanta.adapters.graph.file_graph import graph_path
         from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
         from cuanta.application.index_learning import IndexLearning
@@ -324,8 +328,13 @@ class Container:
             reports.save_meta(run_id, {**meta, "index_learning_error": type(error).__name__})
 
     def change_plan(self, request: MandateRequest) -> ChangePlan:
+        from cuanta.adapters.system.index_inventory import LocalIndexInventory
         from cuanta.application.change_plan import IndexChangePlan
+        from cuanta.domain.change_plan import compile_change_plan
 
+        if not self.config.index_enabled:
+            inventory = LocalIndexInventory(self.project, frozenset(self.config.exclusions))
+            return compile_change_plan(request, inventory.candidates(), (), (), (), (), (), ())
         reader = self.index_reader()
         try:
             reader.update()
@@ -537,7 +546,7 @@ class Container:
             lean_files=self.lean_profile().files,
             default_session=self.config.run_session,
             guard_files=self.guard_profile,
-            index_tools=self.config.index_tools,
+            index_tools=self.config.index_enabled and self.config.index_tools,
         )
 
     def guard_profile(self, spec: LaunchSpec) -> tuple[str, str]:
@@ -570,7 +579,11 @@ class Container:
                         "hooks": [{"type": "command", "command": command, "timeout": 10}],
                     }
                 ]
-        mcp = self.index_mcp_config() if self.config.index_tools else None
+        mcp = (
+            self.index_mcp_config()
+            if self.config.index_enabled and self.config.index_tools
+            else None
+        )
         return self.lean_profile().files(permissions_deny=denied, owned_hooks=hooks, owned_mcp=mcp)
 
     def index_mcp_config(self) -> dict[str, object]:
@@ -1175,7 +1188,7 @@ class Container:
             change_plan=self.change_plan,
             snapshot=self.project_snapshot,
             save_metrics=save_metrics,
-            context_pack=self.context_pack,
+            context_pack=self.context_pack if self.config.index_enabled else None,
             learn_run=self.learn_run if sandbox is None else None,
         )
 
@@ -1199,9 +1212,9 @@ class Container:
         sandbox = LocalBenchSandbox(fixtures, kit, self.runner, sys.executable, scratch, keep)
 
         def attempt(
-            task: BenchTask, condition: Condition, root: str, cap: float, session: str
+            task: BenchTask, condition: Condition, root: str, cap: float, session: str, index: str
         ) -> Attempt:
-            return self.bench_attempt(task, condition, root, cap, model, session)
+            return self.bench_attempt(task, condition, root, cap, model, session, index)
 
         executor = BenchExecutor(sandbox, attempt, self.clock.monotonic)
         return BenchRunner(executor, self.workspace())
@@ -1266,6 +1279,7 @@ class Container:
         cap: float,
         model: str,
         session: str = "lean",
+        index: str = "on",
     ) -> Attempt:
         from cuanta.application.bench import Attempt
         from cuanta.application.engine_run import LaunchSpec
@@ -1274,13 +1288,19 @@ class Container:
         from cuanta.application.progress import RecordingSink
         from cuanta.application.route_apply import RouteOptions
         from cuanta.application.spectrum import Selection
-        from cuanta.domain.bench import Condition
+        from cuanta.domain.bench import Condition, bench_boundaries
         from cuanta.domain.errors import NotAvailable
         from cuanta.domain.overhead import session_overhead
         from cuanta.domain.spectrum import LeakKind
         from cuanta.ports.ledger import EventQuery
 
         sub = replace(Container.for_project(Path(root)), runner=self.runner, clock=self.clock)
+        selected = "off" if condition is Condition.BASELINE else index
+        sub.config = replace(
+            sub.config, index_enabled=selected == "on", index_tools=selected == "on"
+        )
+        plan = sub.change_plan(task.request)
+        before = sub.project_snapshot()
         ledger = sub.ledger()
         try:
             models: tuple[tuple[str, str, str], ...] = ()
@@ -1321,6 +1341,7 @@ class Container:
                     (row.agent, row.planned, ", ".join(row.actual)) for row in report.audit
                 )
             spectrum = sub.spectrum_query(ledger).run(Selection(run=run.id)).report
+            outside, protected = bench_boundaries(plan, before, sub.project_snapshot())
             totals = spectrum.totals
             events = ledger.events(EventQuery(run_id=run.id))
             overhead = session_overhead(events, 0)
@@ -1344,6 +1365,16 @@ class Container:
                 models=models,
                 context_tokens=split.first_request if split is not None else 0,
                 loaded=(len(overhead.plugins), len(overhead.servers), len(overhead.hooks)),
+                index=selected,
+                exploration_tokens_estimate=spectrum.index.exploration_tokens_estimate,
+                raw_reads=spectrum.index.raw_reads,
+                index_calls=spectrum.index.index_calls,
+                out_of_plan_edits=tuple(
+                    dict.fromkeys((*spectrum.index.out_of_plan_edits, *outside))
+                ),
+                guard_violations=tuple(
+                    dict.fromkeys((*spectrum.index.guard_violations, *protected))
+                ),
             )
         finally:
             sub.close()
@@ -1392,7 +1423,7 @@ class Container:
             shape_estimator=self.run_estimate,
             refresh_index=self.refresh_index,
             change_plan=self.change_plan,
-            context_pack=self.context_pack,
+            context_pack=self.context_pack if self.config.index_enabled else None,
             learn_run=self.learn_run if sandbox is None else None,
         )
 
@@ -1409,7 +1440,7 @@ class Container:
             settings_env=lambda: settings_env(self.home, self.project),
             blast_radius=self.blast_radius,
             clock_iso=self.clock.now_iso,
-            index_tools=self.config.index_tools,
+            index_tools=self.config.index_enabled and self.config.index_tools,
             default_session=self.config.run_session,
         )
 

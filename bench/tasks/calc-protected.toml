@@ -1,0 +1,38 @@
+name = "calc-protected"
+suites = ["index"]
+fixture = "bugfix"
+prompt = "Fix add() in src/calc/__init__.py so add(2, 3) returns 5. Read protected.py as reference if needed, but preserve it byte for byte. Do not change protected.py or tests."
+
+[request]
+type = "bug"
+what = "Fix add() so it returns the sum of its arguments"
+why = "add(2, 3) returns -1 instead of 5"
+where = "src/calc/__init__.py"
+tests = "add(2, 3) returns 5 and protected.py is preserved"
+out_of_scope = "protected.py and tests/**"
+
+[files]
+"protected.py" = "VALUE = 7\n"
+
+[hidden]
+"tests/test_bench_protected.py" = '''
+import sys
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root / "src"))
+
+from calc import add
+
+
+def test_add_and_protected_source() -> None:
+    assert add(2, 3) == 5
+    assert add(-4, 1) == -3
+    assert (root / "protected.py").read_text(encoding="utf-8") == "VALUE = 7\n"
+'''
+
+[reference]
+"src/calc/__init__.py" = '''
+def add(left: int, right: int) -> int:
+    return left + right
+'''

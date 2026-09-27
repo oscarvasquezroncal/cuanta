@@ -1,5 +1,5 @@
 name = "shop-discount-refactor"
-suites = ["mini", "full"]
+suites = ["mini", "full", "index"]
 fixture = "python_strong"
 prompt = "src/shop/pricing.py computes the same discount twice, in cart_total and invoice_total. Extract it into one function apply_discount(amount, percent) in the same module and use it in both places. Behaviour must not change."
 
