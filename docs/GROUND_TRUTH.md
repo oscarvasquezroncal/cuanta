@@ -130,6 +130,17 @@ Empty — nothing external was harvested at init (no prior docs existed). Fills 
   binds and moves to the next port on failure — `tests/adapters/test_listener.py`
   (`test_scoped_listener_moves_on_when_a_free_looking_port_is_taken`) — 2026-09-26.
 
+## Live trials (T1) — 2026-09-26
+
+- Claude Code 2.1.283 in print mode sends a `generate_session_title` Haiku request before the
+  agent's first request; it is not the context the agent works with (CC-21).
+- Two runs with the same launch profile, back to back in the same isolated-copy path, shared
+  part of their first-request prefix: 19,827 of 28,817 tokens (T1a) and 37,064 of 56,524
+  (T1c) were read from cache. Cache state comes from each run's first agent request — ledger
+  events in the project's `.cuanta/ledger.db`.
+- `--depth quick` caps every routed role at the standard tier, so a role planned on Opus runs on
+  Sonnet — T1d route and launch output.
+
 ## Test timeout tooling — 2026-09-25
 
 - pytest-timeout 2.4.0 accepts a config `timeout`, `PYTEST_TIMEOUT`, `--timeout`, and per-test
