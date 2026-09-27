@@ -552,7 +552,6 @@ class Container:
 
     def guard_profile(self, spec: LaunchSpec) -> tuple[str, str]:
         import shlex
-        import subprocess
         import sys
 
         from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules
@@ -570,9 +569,8 @@ class Container:
         if self.config.read_discipline:
             hooks = {}
             for mode, event in (("pre", "PreToolUse"), ("post", "PostToolUse")):
-                arguments = [sys.executable, "-m", "cuanta.cli.hooks", mode]
-                command = (
-                    subprocess.list2cmdline(arguments) if os.name == "nt" else shlex.join(arguments)
+                command = shlex.join(
+                    [Path(sys.executable).as_posix(), "-m", "cuanta.cli.hooks", mode]
                 )
                 hooks[event] = [
                     {
