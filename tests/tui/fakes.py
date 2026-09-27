@@ -50,6 +50,7 @@ from cuanta.domain.assistant import (
 )
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.capsules import Level
+from cuanta.domain.change_plan import ChangePlan
 from cuanta.domain.config import Config
 from cuanta.domain.detection import (
     Detection,
@@ -746,6 +747,8 @@ class FakeServices:
     stories: dict[str, str] = field(default_factory=dict)
     understood: list[str] = field(default_factory=list)
     team_options: list[MandateOptions] = field(default_factory=list)
+    change_plan_result: ChangePlan = field(default_factory=ChangePlan)
+    change_plan_requests: list[MandateRequest] = field(default_factory=list)
     similar: tuple[Run, ...] = field(default_factory=lambda: SIMILAR_RUNS)
     onboarded: bool = True
     checks: list[str] = field(default_factory=list)
@@ -978,6 +981,10 @@ class FakeServices:
         plan = RoutePlan(policy, None, None, (), routes, "heuristic")
         cap = resolve_budget(options, request.type, 0.0)
         return plan, estimate(plan, self.similar, load_prices(), request.type, options.depth, cap)
+
+    def change_plan(self, request: MandateRequest) -> ChangePlan:
+        self.change_plan_requests.append(request)
+        return self.change_plan_result
 
     def understand(self, story: str) -> Understanding:
         self.understood.append(story)
