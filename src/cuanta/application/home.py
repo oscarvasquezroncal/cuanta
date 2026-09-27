@@ -12,6 +12,7 @@ from cuanta.domain.detection import ForgeState
 from cuanta.domain.ledger import Run
 from cuanta.domain.messages import msg
 from cuanta.domain.progress import Status
+from cuanta.domain.real_costs import CostReport, cost_report, costs_since
 from cuanta.ports.ledger import EventQuery, Ledger
 
 RECENT_RUNS = 8
@@ -26,6 +27,7 @@ class HomeSnapshot:
     next_step: CheckResult | None
     forge_version: str
     prefix: PrefixWindow = UNKNOWN_PREFIX
+    costs: CostReport | None = None
 
     @property
     def initialized(self) -> bool:
@@ -61,7 +63,9 @@ class HomeQuery:
         today: Callable[[], date],
         prefix: PrefixQuery,
         engine: str,
+        now_iso: Callable[[], str],
     ) -> None:
+        self._now_iso = now_iso
         self._doctor = doctor
         self._ledger_factory = ledger_factory
         self._has_ledger = has_ledger
@@ -75,12 +79,16 @@ class HomeQuery:
         today = self._today()
         runs: tuple[Run, ...] = ()
         daily: tuple[int, ...] = (0,) * 7
+        costs: CostReport | None = None
         if self._has_ledger():
             ledger = self._ledger_factory()
             try:
                 runs = ledger.runs(limit=RECENT_RUNS)
                 since = window_start(today).isoformat()
                 daily = daily_tokens(ledger.events(EventQuery(since=since)), today)
+                now = self._now_iso()
+                start = costs_since(now)
+                costs = cost_report(ledger.runs(since=start), start, now)
             finally:
                 ledger.close()
         return HomeSnapshot(
@@ -90,4 +98,5 @@ class HomeQuery:
             next_step(report),
             self._forge_version(),
             self._prefix.run(self._engine),
+            costs,
         )

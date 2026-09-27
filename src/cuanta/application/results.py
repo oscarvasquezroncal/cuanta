@@ -8,10 +8,13 @@ from cuanta.application.run_reports import RunReports
 from cuanta.application.trials import BASE_DIR, FILES_DIR, TrialStore, TrialSummary
 from cuanta.domain.cache import FirstRequestCache, cache_message
 from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
+from cuanta.domain.estimates import estimate_error
 from cuanta.domain.ledger import Run
 from cuanta.domain.mandate import INVESTIGATION, MandateRequest, Shape
 from cuanta.domain.messages import english
+from cuanta.domain.outcomes import CROSS_KIND, is_attempt, pipeline_running
 from cuanta.domain.overhead import SessionOverhead, session_overhead
+from cuanta.domain.real_costs import attempts
 from cuanta.domain.report import (
     ContextSplit,
     FileRef,
@@ -64,6 +67,17 @@ class ResultView:
     single: bool = False
     shape_known: bool = True
     trial: TrialSummary | None = None
+    actual_usd: float | None = None
+    actual_estimated: bool = False
+    in_flight: bool = False
+
+    @property
+    def decidable(self) -> bool:
+        return is_attempt(self.run) and not self.in_flight and not self.run.outcome
+
+    @property
+    def estimate_error(self) -> float | None:
+        return estimate_error(self.run.estimate_low, self.run.estimate_high, self.actual_usd)
 
     @property
     def cache(self) -> FirstRequestCache | None:
@@ -174,7 +188,9 @@ class ResultQuery:
         workspace: Workspace,
         ledger: Ledger,
         today: Callable[[], date],
+        now_iso: Callable[[], str] = lambda: "",
     ) -> None:
+        self._now_iso = now_iso
         self._workspace = workspace
         self._ledger = ledger
         self._reports = RunReports(workspace)
@@ -187,7 +203,11 @@ class ResultQuery:
             return None
         meta = self._reports.meta(run.id) or {}
         text = strip_preamble(self._reports.report(run.id) or "")
-        task_type = str(meta.get("task_type") or "")
+        task_type = str(meta.get("task_type") or run.task_type)
+        roles = self._roles(run)
+        now = self._now_iso()
+        found = attempts((run, *roles), now)
+        attempt = found[0] if found else None
         prompt_chars = meta.get("prompt_chars")
         events = self._ledger.events(EventQuery(run_id=run.id))
         fallback = next(
@@ -217,7 +237,16 @@ class ResultQuery:
             single=single,
             shape_known=shape_known,
             trial=trial,
+            actual_usd=attempt.cost if attempt is not None else run.cost_usd,
+            actual_estimated=attempt.estimated if attempt is not None else False,
+            in_flight=pipeline_running(run, roles, now),
         )
+
+    def _roles(self, run: Run) -> tuple[Run, ...]:
+        if run.kind != CROSS_KIND or run.parent_id:
+            return ()
+        children = self._ledger.runs(kind=CROSS_KIND, since=run.started_at)
+        return tuple(child for child in children if child.parent_id == run.id)
 
     def before(self, run_id: str, path: str) -> str | None:
         for snapshot in self._ledger.snapshots(run_id, START_PHASE):

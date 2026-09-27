@@ -78,6 +78,7 @@ if TYPE_CHECKING:
     from cuanta.application.cache_probe import CacheProbeReport
     from cuanta.application.cache_state import PrefixQuery
     from cuanta.application.cat_capsule import CatCapsule
+    from cuanta.application.costs import CostsQuery
     from cuanta.application.cross_engine import CrossEnginePipeline, CrossReport
     from cuanta.application.detect import DetectProject
     from cuanta.application.doctor import Doctor
@@ -95,6 +96,7 @@ if TYPE_CHECKING:
     from cuanta.application.mandate_flow import MandateFlow, MandateOptions, Prepared
     from cuanta.application.models import ModelService, ProbeOutcome
     from cuanta.application.new_files import NewFileReview
+    from cuanta.application.outcomes import RunOutcomes
     from cuanta.application.refresh import RefreshProject
     from cuanta.application.results import ResultQuery
     from cuanta.application.route_apply import MandateRouting
@@ -108,6 +110,7 @@ if TYPE_CHECKING:
     from cuanta.domain.assistant import Suggestions
     from cuanta.domain.bench import BenchTask, Condition
     from cuanta.domain.engine import EngineEvent
+    from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.instinct import Choice
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
@@ -636,6 +639,12 @@ class Container:
 
         return Drafts(FileDraftStore(self.cuanta_dir() / "drafts"), self.clock.now_iso)
 
+    def run_estimate(self, plan: RoutePlan | None, task_type: str, depth: str) -> RunEstimate:
+        from cuanta.adapters.system.prices import load_prices
+        from cuanta.application.estimate import run_estimate
+
+        return run_estimate(plan, self.shared_ledger().runs(), load_prices(), task_type, depth)
+
     def team_estimate(self, plan: RoutePlan, task_type: str, depth: str, cap: float) -> Estimate:
         from cuanta.adapters.system.prices import load_prices
         from cuanta.application.estimate import estimate
@@ -698,6 +707,7 @@ class Container:
         max_turns: int = 0,
         sandbox: SandboxLaunch | None = None,
         checkpoint: Callable[[], Message | None] | None = None,
+        depth: str = "",
     ) -> CrossEnginePipeline:
         from cuanta.application.cross_engine import CrossEnginePipeline
 
@@ -716,6 +726,8 @@ class Container:
             max_turns=max_turns if max_turns > 0 else self.config.max_turns,
             sandbox=sandbox,
             checkpoint=checkpoint,
+            estimator=self.run_estimate,
+            depth=depth,
         )
 
     def bench_runner(
@@ -747,7 +759,7 @@ class Container:
 
         from cuanta.application.results import ResultQuery
 
-        return ResultQuery(self.workspace(), ledger, date.today)
+        return ResultQuery(self.workspace(), ledger, date.today, self.clock.now_iso)
 
     def resolve_run(self, reference: str) -> str:
         from cuanta.domain.errors import DomainFailure
@@ -918,6 +930,7 @@ class Container:
             new_run_id=self.new_run_id,
             graph_mode=lambda: self.detector().graph_mode()[0],
             sandbox=sandbox,
+            estimator=self.run_estimate,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -1024,12 +1037,13 @@ class Container:
         budget_usd: float,
         max_turns: int,
         keep: bool,
+        depth: str = "",
     ) -> SandboxResult:
         def pipeline_for(
             copy: SandboxCopy, launch: SandboxLaunch, checkpoint: Callable[[], Message | None]
         ) -> CrossEnginePipeline:
             sub = self.sandbox_container(copy.root, launch.env)
-            return sub.cross_engine(ledger, budget_usd, max_turns, launch, checkpoint)
+            return sub.cross_engine(ledger, budget_usd, max_turns, launch, checkpoint, depth)
 
         def payload(report: CrossReport) -> dict[str, object]:
             return {
@@ -1065,6 +1079,17 @@ class Container:
         from cuanta.domain.terminal import classify
 
         return classify(probe_terminal(), os.environ)
+
+    def costs_query(self) -> CostsQuery:
+        from cuanta.application.costs import CostsQuery
+
+        has_ledger = (self.cuanta_dir() / "ledger.db").is_file
+        return CostsQuery(self.ledger, has_ledger, self.clock.now_iso)
+
+    def run_outcomes(self, ledger: Ledger) -> RunOutcomes:
+        from cuanta.application.outcomes import RunOutcomes
+
+        return RunOutcomes(ledger, self.trial_store(ledger), self.clock.now_iso)
 
     def runs_query(self) -> RunsQuery:
         from cuanta.application.ledger_view import RunsQuery
@@ -1343,6 +1368,7 @@ class Container:
             date.today,
             self.prefix_query(),
             self.config.engine,
+            self.clock.now_iso,
         )
 
     def prefix_query(self) -> PrefixQuery:

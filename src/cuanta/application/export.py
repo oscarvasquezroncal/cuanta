@@ -10,6 +10,7 @@ from typing import Any
 from cuanta.domain.errors import DomainFailure
 from cuanta.ports.ledger import EventQuery, Ledger
 
+MONEY_COLUMNS = frozenset({"cost_usd", "estimate_low", "estimate_high", "cap_usd"})
 TABLES = ("runs", "events", "test_runs", "decisions", "baselines")
 FORMATS = ("json", "csv")
 RAW_FIELD = "raw"
@@ -61,7 +62,7 @@ def _csv_text(rows: list[dict[str, Any]]) -> str:
         writer.writeheader()
         writer.writerows(
             {
-                key: "n/a" if key == "cost_usd" and value is None else value
+                key: "n/a" if key in MONEY_COLUMNS and value is None else value
                 for key, value in row.items()
             }
             for row in rows

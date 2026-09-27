@@ -286,7 +286,12 @@ class PrettyPresenter:
             border_style="muted",
         )
         for column in table.columns:
-            rich_table.add_column(Text(column.name), justify="right" if column.numeric else "left")
+            rich_table.add_column(
+                Text(column.name),
+                justify="right" if column.numeric else "left",
+                no_wrap=column.min_width > 0,
+                min_width=column.min_width or None,
+            )
         for row in table.rows:
             rich_table.add_row(*(Text(cell) for cell in row))
         return rich_table

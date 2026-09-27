@@ -14,6 +14,7 @@ from cuanta.domain.engine import (
     RunResult,
     cut_by_turns,
 )
+from cuanta.domain.estimates import RunEstimate
 from cuanta.domain.ids import trace_id_of, traceparent
 from cuanta.domain.ledger import LedgerEvent, Run
 from cuanta.domain.messages import msg
@@ -57,6 +58,7 @@ class LaunchSpec:
     temporary_copy: bool = False
     mode: str = ""
     env: tuple[tuple[str, str], ...] = ()
+    estimate: RunEstimate | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +158,7 @@ class EngineLauncher:
     ) -> Launch:
         run_id = spec.run_id or self._new_run_id()
         parent = traceparent(self._entropy(16), self._entropy(8))
+        guess = spec.estimate
         run = Run(
             id=run_id,
             kind=spec.kind,
@@ -172,6 +175,11 @@ class EngineLauncher:
             depth=spec.depth,
             max_turns=spec.max_turns,
             mode=spec.mode,
+            estimate_low=guess.low if guess else None,
+            estimate_high=guess.high if guess else None,
+            estimate_source=guess.source if guess else "",
+            estimate_samples=guess.samples if guess else 0,
+            cap_usd=spec.max_budget_usd,
         )
         self._ledger.add_run(run)
         if before is not None:

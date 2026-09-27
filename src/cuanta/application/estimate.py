@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.depth import (
@@ -14,10 +14,14 @@ from cuanta.domain.depth import (
     plan_cost,
     profile,
 )
+from cuanta.domain.estimates import RunEstimate, estimate_bounds
 from cuanta.domain.ledger import Run
 from cuanta.domain.messages import Message
 from cuanta.domain.pricing import Price, PriceTable
+from cuanta.domain.real_costs import known_cost
 from cuanta.domain.routing import CostRange, Role, cost_range
+
+Estimator = Callable[[RoutePlan | None, str, str], RunEstimate]
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,15 +40,16 @@ class Estimate:
     over: bool
     roles: tuple[RoleCost, ...]
     depth: str
+    bounds: RunEstimate = field(default_factory=RunEstimate)
 
 
 def similar_costs(runs: Sequence[Run], task_type: str, depth: str) -> list[float]:
     wanted = depth or DEFAULT_DEPTH.value
     return [
-        run.cost_usd
+        cost
         for run in runs
         if run.kind == "mandate"
-        and run.cost_usd is not None
+        and (cost := known_cost(run)) is not None
         and run.task_type == task_type
         and (run.depth or DEFAULT_DEPTH.value) == wanted
     ]
@@ -76,8 +81,7 @@ def estimate(
     similar = cost_range(similar_costs(runs, task_type, chosen.depth.value))
     priced = {route.role: route_price(plan, route.role, prices) for route in plan.routes}
     roles = tuple(role_cost(price, chosen, role) for role, price in priced.items())
-    known = [price for price in priced.values() if price is not None]
-    planned = plan_cost(known, chosen) if len(known) == len(priced) else None
+    planned = _planned(priced, chosen)
     return Estimate(
         similar=similar,
         planned=planned,
@@ -86,4 +90,25 @@ def estimate(
         over=over_cap(similar, planned, cap),
         roles=roles,
         depth=chosen.depth.value,
+        bounds=estimate_bounds(similar, planned),
     )
+
+
+def _planned(priced: Mapping[Role, Price | None], chosen: DepthProfile) -> float | None:
+    known = [price for price in priced.values() if price is not None]
+    return plan_cost(known, chosen) if len(known) == len(priced) else None
+
+
+def run_estimate(
+    plan: RoutePlan | None,
+    runs: Sequence[Run],
+    prices: PriceTable,
+    task_type: str,
+    depth: str,
+) -> RunEstimate:
+    chosen = profile(parse_depth(depth), task_type)
+    similar = cost_range(similar_costs(runs, task_type, chosen.depth.value))
+    if plan is None:
+        return estimate_bounds(similar, None)
+    priced = {route.role: route_price(plan, route.role, prices) for route in plan.routes}
+    return estimate_bounds(similar, _planned(priced, chosen))

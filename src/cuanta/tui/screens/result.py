@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from functools import partial
 
 from textual import work
 from textual.app import ComposeResult
@@ -22,16 +23,17 @@ from textual.widgets import (
 )
 
 from cuanta.application.results import ResultView
-from cuanta.application.trials import REJECTED
 from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
+from cuanta.domain.errors import CuantaError
 from cuanta.domain.guarantees import budget_stop_reason
 from cuanta.domain.handoff import Handoff
 from cuanta.domain.mandate import MandateRequest, MandateType
 from cuanta.domain.messages import msg
+from cuanta.domain.outcomes import CROSS_KIND, REJECTED, is_attempt
 from cuanta.domain.overhead import overhead_messages
 from cuanta.domain.report import link_file_refs
 from cuanta.tui.cache_text import first_request_content
-from cuanta.tui.fmt import run_money
+from cuanta.tui.fmt import money, run_money
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.screens.run_file import RunFileScreen
@@ -60,6 +62,9 @@ class ResultScreen(Screen[None]):
             super().__init__()
             self.request = request
 
+    class OutcomeChanged(Message):
+        pass
+
     class OpenSpectrum(Message):
         def __init__(self, run_id: str) -> None:
             super().__init__()
@@ -84,6 +89,10 @@ class ResultScreen(Screen[None]):
             yield Static(self._status(), id="result-status")
             yield Button(t("result.close"), id="result-close", compact=True)
         yield Static(self._facts(), id="result-facts")
+        with Horizontal(id="result-decision-row"):
+            yield Static("", id="result-decision")
+            yield Button(t("result.accept"), id="result-accept", variant="success", compact=True)
+            yield Button(t("result.reject"), id="result-reject", compact=True)
         budget_reason = budget_stop_reason(view.run.end_reason)
         if budget_reason is not None:
             yield Static(
@@ -201,7 +210,7 @@ class ResultScreen(Screen[None]):
             kind_label,
             mode,
             duration,
-            run_money(view.run, t),
+            attempt_money(view, t),
             view.run.model or t("wizard.engine_default"),
         ]
         if view.run.max_turns > 0:
@@ -231,9 +240,8 @@ class ResultScreen(Screen[None]):
 
     def _consumption(self) -> Content:
         t = self._t
-        run = self.view.run
         rows = [
-            t("result.cost_line", cost=run_money(run, t)),
+            t("result.cost_line", cost=attempt_money(self.view, t)),
             t("result.tests_line", tests=self.view.tests or t("spectrum.na")),
         ]
         overhead = self.view.overhead
@@ -263,9 +271,21 @@ class ResultScreen(Screen[None]):
         for agent, tokens in self.view.tokens_by_agent.items():
             agents.add_row(agent, f"{tokens:,}")
         self.query_one("#result-continue", Button).disabled = self.view.follow_up is None
+        self._paint_decision()
         if self.view.trial is not None:
             self._paint_trial()
             self.load_handoff()
+
+    def _paint_decision(self) -> None:
+        view = self.view
+        accept, reject = decision_offers(view)
+        content = decision_content(self._t, view, accept or reject)
+        widget = self.query_one("#result-decision", Static)
+        widget.update(content if content is not None else "")
+        widget.display = content is not None
+        self.query_one("#result-accept", Button).display = accept
+        self.query_one("#result-reject", Button).display = reject
+        self.query_one("#result-decision-row").display = content is not None or accept or reject
 
     def _paint_trial(self) -> None:
         t = self._t
@@ -393,8 +413,48 @@ class ResultScreen(Screen[None]):
         if view is None:
             return
         self.view = view
-        self._paint_trial()
-        self.load_handoff()
+        self._paint_decision()
+        if view.trial is not None:
+            self._paint_trial()
+            self.load_handoff()
+
+    def confirm_decision(self, accept: bool) -> None:
+        prefix = "result.accept" if accept else "result.reject"
+        self.app.push_screen(
+            ConfirmScreen(
+                self._t,
+                f"{prefix}_title",
+                f"{prefix}_body",
+                f"{prefix}_confirm",
+                f"{prefix}_cancel",
+            ),
+            partial(self.decision_answer, accept),
+        )
+
+    def decision_answer(self, accept: bool, confirmed: bool | None) -> None:
+        if confirmed:
+            self.decide(accept)
+
+    @work(thread=True, exclusive=True, group="decision", exit_on_error=False)
+    def decide(self, accept: bool) -> None:
+        run_id = self.view.run.id
+        try:
+            if accept:
+                self._services.accept_run(run_id)
+            else:
+                self._services.reject_run(run_id)
+        except CuantaError as error:
+            failed = self._t("result.decision_failed", error=str(error))
+            failed = f"{failed}\n{error.hint}" if error.hint else failed
+            self.app.call_from_thread(self.app.notify, failed, severity="error")
+            return
+        except Exception as error:
+            self.app.call_from_thread(self.app.notify, str(error), severity="error")
+            return
+        note = "result.accepted_note" if accept else "result.rejected_note"
+        self.app.call_from_thread(self.app.notify, self._t(note))
+        self.app.call_from_thread(self._refresh, self._services.result_view(run_id))
+        self.app.post_message(self.OutcomeChanged())
 
     @work(thread=True, exclusive=True, group="trial", exit_on_error=False)
     def apply_trial(self) -> None:
@@ -406,6 +466,7 @@ class ResultScreen(Screen[None]):
             return
         self.app.call_from_thread(self.app.notify, self._t("result.applied", files=files))
         self.app.call_from_thread(self._refresh, self._services.result_view(run_id))
+        self.app.post_message(self.OutcomeChanged())
 
     @work(thread=True, exclusive=True, group="trial", exit_on_error=False)
     def discard_trial(self) -> None:
@@ -417,6 +478,7 @@ class ResultScreen(Screen[None]):
             return
         self.app.call_from_thread(self.app.notify, self._t("result.discarded"))
         self.app.call_from_thread(self._refresh, self._services.result_view(run_id))
+        self.app.post_message(self.OutcomeChanged())
 
     @work(thread=True, exclusive=True, group="trial-copy", exit_on_error=False)
     def copy_commands(self) -> None:
@@ -472,6 +534,10 @@ class ResultScreen(Screen[None]):
             self.discard_trial()
         elif button == "result-copy-commands":
             self.copy_commands()
+        elif button == "result-accept":
+            self.confirm_decision(True)
+        elif button == "result-reject":
+            self.confirm_decision(False)
 
     @work(thread=True, exit_on_error=False)
     def save(self) -> None:
@@ -499,3 +565,66 @@ class ResultScreen(Screen[None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+def estimate_label(t: Catalog, view: ResultView) -> str:
+    run = view.run
+    if run.estimate_low is None:
+        return t("result.estimate_none")
+    na = t("spectrum.na")
+    low, high = money(run.estimate_low, na), money(run.estimate_high, na)
+    span = low if run.estimate_high in (None, run.estimate_low) else f"{low}–{high}"
+    if run.estimate_source == "history":
+        return t("result.estimate_history", span=span, count=run.estimate_samples)
+    return t("result.estimate_plan", span=span)
+
+
+def error_label(t: Catalog, error: float | None) -> str:
+    if error is None:
+        return t("spectrum.na")
+    return t("result.error_in_range") if error == 0 else f"{error:+.0%}"
+
+
+def attempt_money(view: ResultView, t: Catalog) -> str:
+    run = view.run
+    if run.kind != CROSS_KIND or run.parent_id or view.actual_usd == run.cost_usd:
+        return run_money(run, t)
+    value = money(view.actual_usd, t("spectrum.na"))
+    if view.actual_usd is not None and view.actual_estimated:
+        return t("cost.estimated", cost=value)
+    return value
+
+
+def decision_offers(view: ResultView) -> tuple[bool, bool]:
+    if not view.decidable:
+        return False, False
+    trial = view.trial
+    return trial is None or not trial.trial.applicable, trial is None
+
+
+def decision_content(t: Catalog, view: ResultView, offered: bool) -> Content | None:
+    run = view.run
+    if not is_attempt(run):
+        return None
+    lines: list[Content] = []
+    if run.estimate_source:
+        actual = money(view.actual_usd, t("spectrum.na"))
+        if view.actual_usd is not None and view.actual_estimated:
+            actual = t("cost.estimated", cost=actual)
+        parts: list[tuple[str, str]] = [
+            (f"{t('result.decision_estimate')}  ", "bold"),
+            (f"{estimate_label(t, view)}    ", ""),
+            (f"{t('result.decision_actual')}  ", "bold"),
+            (actual, ""),
+        ]
+        if run.estimate_low is not None:
+            parts.append((f"    {t('result.decision_error')}  ", "bold"))
+            parts.append((error_label(t, view.estimate_error), ""))
+        lines.append(Content.assemble(*parts))
+    when = run.outcome_at[:16].replace("T", " ")
+    if run.outcome:
+        style = "$success" if run.outcome != REJECTED else "$error"
+        lines.append(Content.styled(t(f"result.outcome_{run.outcome}", at=when), style))
+    elif offered:
+        lines.append(Content.styled(t("result.outcome_pending"), "$text-muted"))
+    return Content("\n").join(lines) if lines else None

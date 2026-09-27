@@ -77,6 +77,9 @@ LISTENER_AUTO = "auto"
 
 
 class CuantaApp(App[None]):
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        return {**super().get_theme_variable_defaults(), "sky": "ansi_bright_cyan"}
+
     CSS_PATH = "cuanta.tcss"
     TITLE = "cuanta"
     HORIZONTAL_BREAKPOINTS = [
@@ -456,6 +459,9 @@ class CuantaApp(App[None]):
     def _to_base(self) -> None:
         while len(self.screen_stack) > 1:
             self.pop_screen()
+
+    def on_result_screen_outcome_changed(self, _: ResultScreen.OutcomeChanged) -> None:
+        self.load_home()
 
     async def on_result_screen_open_spectrum(self, message: ResultScreen.OpenSpectrum) -> None:
         self._to_base()

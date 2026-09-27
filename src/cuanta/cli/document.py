@@ -30,6 +30,7 @@ class KeyValues:
 class Column:
     name: str
     numeric: bool = False
+    min_width: int = 0
 
 
 @dataclass(frozen=True, slots=True)

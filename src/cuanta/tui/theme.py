@@ -32,6 +32,7 @@ class Palette:
     error: str
     text: str
     muted: str
+    sky: str
 
 
 DARK = Palette(
@@ -46,6 +47,7 @@ DARK = Palette(
     error="#EF8A94",
     text="#F6E3D4",
     muted="#9AA0B8",
+    sky="#8FD3E8",
 )
 LIGHT = Palette(
     background="#F7F7FB",
@@ -59,6 +61,7 @@ LIGHT = Palette(
     error="#C0404F",
     text="#2A2733",
     muted="#6B7087",
+    sky="#2B83A3",
 )
 
 
@@ -84,6 +87,7 @@ def build(name: str, palette: Palette, dark: bool) -> Theme:
             "footer-background": palette.surface,
             "footer-key-foreground": palette.primary,
             "block-cursor-text-style": "bold",
+            "sky": palette.sky,
         },
     )
 

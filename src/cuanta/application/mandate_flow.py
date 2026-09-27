@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 from cuanta.application.engine_run import DEFAULT_DENIED, EngineLauncher, LaunchSpec
+from cuanta.application.estimate import Estimator
 from cuanta.application.instinct import DecisionScope
 from cuanta.application.mandate import Composed, MandateReport, MandateService, allowed_tools
 from cuanta.application.route_apply import Applied, MandateRouting, RouteOptions
@@ -20,6 +21,7 @@ from cuanta.domain.depth import (
 from cuanta.domain.detection import GraphMode, Stack
 from cuanta.domain.engine import EngineEvent
 from cuanta.domain.errors import CuantaError, DomainFailure, NotAvailable
+from cuanta.domain.estimates import RunEstimate
 from cuanta.domain.guarantees import readonly_unavailable
 from cuanta.domain.mandate import (
     INVESTIGATION,
@@ -66,6 +68,7 @@ class MandateOptions:
     temporary_copy: bool = False
     sandbox: bool = False
     keep_copy: bool = False
+    estimate: RunEstimate | None = None
 
 
 def isolated(spec: LaunchSpec, sandbox: SandboxLaunch | None, claude: bool) -> LaunchSpec:
@@ -166,8 +169,10 @@ class MandateFlow:
         new_run_id: Callable[[], str] | None = None,
         graph_mode: Callable[[], GraphMode] = lambda: GraphMode.NONE,
         sandbox: SandboxLaunch | None = None,
+        estimator: Estimator | None = None,
     ) -> None:
         self._sandbox = sandbox
+        self._estimator = estimator
         self._has_agents = has_agents
         self._scope = scope or DecisionScope()
         self._new_run_id = new_run_id
@@ -234,6 +239,8 @@ class MandateFlow:
             applied = replace(applied, agents=None, agents_file="")
         routed = applied.orchestrator or applied.single if applied is not None else ""
         depth = self._depth(options.depth, request.type)
+        cap = resolve_budget(options, request.type, self._default_budget)
+        guess = self._estimate(options, applied, request.type, preview)
         budget_line = read_budget_line(depth, graph_available) if depth is not None else ""
         system = (
             analyst_system_prompt(self._analyst_body(), budget_line, graph_available)
@@ -253,7 +260,7 @@ class MandateFlow:
             effort=depth.effort if depth is not None and claude else "",
             append_system_prompt=system,
             unset_env=applied.unset if applied is not None else (),
-            max_budget_usd=resolve_budget(options, request.type, self._default_budget),
+            max_budget_usd=cap,
             max_turns=(resolve_max_turns(options, depth, self._default_max_turns) if claude else 0),
             tools=(
                 investigation_builtin_tools(options.simple, shape, graph_available)
@@ -268,6 +275,7 @@ class MandateFlow:
             depth=options.depth,
             read_only=investigation,
             temporary_copy=options.temporary_copy,
+            estimate=guess,
         )
         sandbox = self._launch(options)
         base = isolated(base, sandbox, claude)
@@ -297,6 +305,20 @@ class MandateFlow:
                 self._service.link_decisions(options.intake_scope, run_id)
         spec = replace(base, prompt=composed.prompt, scope=composed.hint.option)
         return Prepared(composed, engine_name, launcher, spec, applied)
+
+    def _estimate(
+        self,
+        options: MandateOptions,
+        applied: Applied | None,
+        task_type: str,
+        preview: bool,
+    ) -> RunEstimate | None:
+        if options.estimate is not None:
+            return options.estimate
+        if preview or self._estimator is None:
+            return None
+        plan = applied.plan if applied is not None else None
+        return self._estimator(plan, task_type, options.depth)
 
     def _launch(self, options: MandateOptions) -> SandboxLaunch | None:
         if self._sandbox is not None or not options.sandbox:

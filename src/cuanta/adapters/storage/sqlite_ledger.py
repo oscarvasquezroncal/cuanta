@@ -26,6 +26,7 @@ from cuanta.domain.sandbox import SANDBOX_MODE
 from cuanta.ports.ledger import EventQuery
 
 RUN_COLUMNS = tuple(item.name for item in fields(Run))
+OUTCOME_COLUMNS = frozenset({"outcome", "outcome_at", "outcome_reason"})
 LOCK_RETRY_S = 10.0
 EVENT_COLUMNS = tuple(item.name for item in fields(LedgerEvent) if item.name != "id")
 TEST_RUN_COLUMNS = tuple(item.name for item in fields(TestRunRecord))
@@ -145,13 +146,28 @@ class SqliteLedger:
         )
 
     def update_run(self, run: Run) -> None:
-        self.add_run(run)
+        kept = [name for name in RUN_COLUMNS if name != "id" and name not in OUTCOME_COLUMNS]
+        assignments = ", ".join(f"{name} = ?" for name in kept)
+        values = [getattr(run, name) for name in kept]
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                f"UPDATE runs SET {assignments} WHERE id = ?", (*values, run.id)
+            )
+            if cursor.rowcount:
+                return
+            columns = ", ".join(RUN_COLUMNS)
+            connection.execute(
+                f"INSERT INTO runs ({columns}) VALUES ({_placeholders(RUN_COLUMNS)})",
+                astuple(run),
+            )
 
     def get_run(self, run_id: str) -> Run | None:
         rows = self._query("SELECT * FROM runs WHERE id = ?", (run_id,))
         return Run(**{name: rows[0][name] for name in RUN_COLUMNS}) if rows else None
 
-    def runs(self, kind: str = "", hu_ref: str = "", limit: int = 0) -> tuple[Run, ...]:
+    def runs(
+        self, kind: str = "", hu_ref: str = "", limit: int = 0, since: str = ""
+    ) -> tuple[Run, ...]:
         clauses, parameters = [], []
         if kind:
             clauses.append("kind = ?")
@@ -159,6 +175,9 @@ class SqliteLedger:
         if hu_ref:
             clauses.append("hu_ref = ?")
             parameters.append(hu_ref)
+        if since:
+            clauses.append("started_at >= ?")
+            parameters.append(since)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         suffix = f" LIMIT {int(limit)}" if limit else ""
         rows = self._query(f"SELECT * FROM runs {where} ORDER BY id DESC{suffix}", parameters)
@@ -356,11 +375,12 @@ class SqliteLedger:
             (1 if accepted else 0, run_id),
         )
 
-    def set_run_outcome(self, run_id: str, outcome: str, at: str) -> bool:
+    def set_run_outcome(self, run_id: str, outcome: str, at: str, reason: str = "") -> bool:
         with self._transaction() as connection:
             cursor = connection.execute(
-                "UPDATE runs SET outcome = ?, outcome_at = ? WHERE id = ? AND outcome = ''",
-                (outcome, at, run_id),
+                "UPDATE runs SET outcome = ?, outcome_at = ?, outcome_reason = ? "
+                "WHERE id = ? AND outcome = ''",
+                (outcome, at, reason, run_id),
             )
             return cursor.rowcount == 1
 

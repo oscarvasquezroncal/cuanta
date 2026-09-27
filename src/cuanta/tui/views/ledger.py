@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from contextlib import suppress
 
+from rich.style import Style
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
+from textual.color import Color, ColorParseError
 from textual.containers import Horizontal, Vertical
 from textual.content import Content
 from textual.css.query import NoMatches
@@ -13,13 +15,28 @@ from textual.widgets import Button, DataTable, Input, Label, Select, Static
 
 from cuanta.application.ledger_view import RunFilter, facets, filter_runs
 from cuanta.domain.ledger import Run
-from cuanta.tui.fmt import run_money
+from cuanta.domain.real_costs import CostReport, CostRow
+from cuanta.tui.chips import MIX_KEYS, TYPE_KEYS, chip_variable
+from cuanta.tui.fmt import cost_money, run_money
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.services import Services
 from cuanta.tui.widgets.facts import Facts
 
 ANY = ""
 COLUMNS = ("col_started", "col_kind", "col_engine", "col_status", "col_cost")
+COST_COLUMNS = (
+    "col_type",
+    "col_runs",
+    "col_accepted",
+    "col_per_accepted",
+    "col_spend",
+    "col_missing",
+    "col_median",
+    "col_time",
+    "col_error",
+)
+MINUTE = 60
+HOUR = 3600
 
 
 class LedgerView(Vertical):
@@ -41,6 +58,7 @@ class LedgerView(Vertical):
         self.shown: tuple[Run, ...] = ()
         self.selected = ""
         self._loaded = False
+        self.costs: CostReport | None = None
 
     def compose(self) -> ComposeResult:
         t = self._t
@@ -60,6 +78,7 @@ class LedgerView(Vertical):
                 yield Input(placeholder=t("ledger.since_placeholder"), id="filter-since")
         with Horizontal(id="ledger-meta"):
             yield Static("", id="ledger-count")
+            yield Button(t("ledger.show_costs"), id="ledger-costs-toggle", compact=True)
             yield Button(t("ledger.export_json"), id="export-json", compact=True)
             yield Button(t("ledger.export_csv"), id="export-csv", compact=True)
         with Horizontal(id="ledger-body"):
@@ -72,10 +91,19 @@ class LedgerView(Vertical):
                     Content.styled(t("ledger.select_hint"), "$text-muted"), id="ledger-fields"
                 )
                 yield Button(t("result.view"), id="ledger-result", variant="primary", compact=True)
+        with Vertical(id="ledger-costs", classes="card"):
+            yield Static(t("costs.title"), classes="card-title")
+            yield DataTable(id="ledger-costs-table", cursor_type="none", zebra_stripes=True)
+            yield Static("", id="ledger-costs-note")
 
     def on_mount(self) -> None:
         with suppress(NoMatches):
             self._setup()
+        self.app.theme_changed_signal.subscribe(self, self._theme_changed)
+
+    def _theme_changed(self, _: object) -> None:
+        if self.costs is not None:
+            self.show_costs(self.costs)
 
     def _setup(self) -> None:
         self.query_one("#ledger-result", Button).display = False
@@ -193,3 +221,97 @@ class LedgerView(Vertical):
         elif button == "ledger-result" and self.selected:
             event.stop()
             self.post_message(self.ResultRequested(self.selected))
+        elif button == "ledger-costs-toggle":
+            event.stop()
+            showing = not self.has_class("-costs")
+            self.set_class(showing, "-costs")
+            event.button.label = self._t("ledger.show_runs" if showing else "ledger.show_costs")
+            if showing:
+                self.load_costs()
+
+    @work(thread=True, exclusive=True, group="ledger-costs", exit_on_error=False)
+    def load_costs(self) -> None:
+        try:
+            report = self._services.real_costs()
+        except Exception as error:
+            self.app.call_from_thread(self.app.notify, str(error), severity="error")
+            return
+        self.app.call_from_thread(self.show_costs, report)
+
+    def show_costs(self, report: CostReport) -> None:
+        t = self._t
+        self.costs = report
+        table = self.query_one("#ledger-costs-table", DataTable)
+        table.clear(columns=True)
+        colors = self.app.theme_variables
+        body: list[tuple[str, Text, tuple[str, ...]]] = [
+            ("head-type", Text(t("costs.by_type"), style="bold"), ())
+        ]
+        for row in report.by_type:
+            style = chip_style(colors.get(chip_variable(row.key), ""))
+            label = Text(t(TYPE_KEYS.get(row.key, "costs.type_untyped")), style=style)
+            body.append((f"type-{row.key}", label, cost_cells(t, row)))
+        body.append(("head-mix", Text(t("costs.by_mix"), style="bold"), ()))
+        for row in report.by_mix:
+            label = Text(t(MIX_KEYS.get(row.key, "costs.mix_other")))
+            body.append((f"mix-{row.key}", label, cost_cells(t, row)))
+        headers = [t(f"costs.{key}") for key in COST_COLUMNS[1:]]
+        widths = [
+            max(len(header), *(len(cells[index]) for _, _, cells in body if cells))
+            for index, header in enumerate(headers)
+        ]
+        table.add_column(Text(t("costs.col_type")), key=COST_COLUMNS[0])
+        for key, header, width in zip(COST_COLUMNS[1:], headers, widths, strict=True):
+            table.add_column(Text(header.rjust(width)), key=key)
+        for key, label, cells in body:
+            shown = cells or ("",) * len(widths)
+            padded = (Text(cell.rjust(width)) for cell, width in zip(shown, widths, strict=True))
+            table.add_row(label, *padded, key=key)
+        note = self.query_one("#ledger-costs-note", Static)
+        if report.empty:
+            note.update(Content.styled(t("costs.empty"), "$text-muted"))
+        else:
+            note.update(Content.styled(t("costs.note", since=report.since[:10]), "$text-muted"))
+
+
+def cost_cells(t: Catalog, row: CostRow) -> tuple[str, ...]:
+    na = t("spectrum.na")
+    if not row.runs:
+        return ("0", "0", "–", "–", "–", "–", "–", "–")
+    spend = row.spend
+    per = cost_money(row.per_accepted, na, spend.lower_bound, row.estimated)
+    time = compact_seconds(t, row.median_seconds) if row.median_seconds is not None else "–"
+    error = row.median_error
+    shown_error = (
+        "–"
+        if error is None
+        else t("result.error_in_range")
+        if row.error_in_range
+        else f"{error:+.0%}"
+    )
+    return (
+        str(row.runs),
+        str(row.accepted),
+        per,
+        cost_money(spend.value, na, spend.lower_bound, row.estimated),
+        str(spend.missing),
+        cost_money(row.median_cost, na, estimated=row.estimated),
+        time,
+        shown_error,
+    )
+
+
+def compact_seconds(t: Catalog, seconds: float) -> str:
+    if seconds < MINUTE:
+        return t("costs.seconds", value=f"{seconds:.0f}")
+    if seconds < HOUR:
+        return t("costs.minutes", value=f"{seconds / MINUTE:.1f}")
+    return t("costs.hours", value=f"{seconds / HOUR:.1f}")
+
+
+def chip_style(value: str) -> Style:
+    try:
+        color = Color.parse(value).rich_color
+    except ColorParseError:
+        return Style(bold=True)
+    return Style(bold=True, color=color)

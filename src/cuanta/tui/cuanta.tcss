@@ -247,6 +247,42 @@ Screen.-icons #week-card, Screen.-single #week-card {
     height: 3;
 }
 
+#home-costs {
+    height: auto;
+}
+
+#ledger-costs {
+    display: none;
+    height: 1fr;
+}
+
+#ledger-costs-table {
+    height: 1fr;
+}
+
+#ledger.-costs #ledger-costs {
+    display: block;
+}
+
+#ledger.-costs #ledger-body, #ledger.-costs #ledger-filters {
+    display: none;
+}
+
+#result-decision-row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#result-decision {
+    width: 1fr;
+    height: auto;
+}
+
+#result-decision-row Button {
+    width: auto;
+    margin-left: 1;
+}
+
 Screen.-single #activity, Screen.-icons #activity {
     layout: vertical;
 }

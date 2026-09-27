@@ -10,10 +10,12 @@ from textual.widgets import Button, DataTable, Sparkline, Static
 from cuanta.application.home import HomeSnapshot
 from cuanta.domain.fixes import FixKind, classify
 from cuanta.domain.progress import Status
+from cuanta.domain.real_costs import CostReport
 from cuanta.domain.voice import Mood
 from cuanta.tui.cache_text import prefix_content
+from cuanta.tui.chips import TYPE_KEYS, chip_variable
 from cuanta.tui.commands import HEALTH, INIT, MANDATES, SPECTRUM, TESTS
-from cuanta.tui.fmt import compact, glyph, grouped, run_money, status_style
+from cuanta.tui.fmt import compact, cost_money, glyph, grouped, run_money, status_style
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.widgets.facts import Facts
 from cuanta.tui.widgets.flow import FlowRow
@@ -33,6 +35,9 @@ FIX_LABELS = {
     FixKind.COPY: "health.copy",
 }
 RUN_COLUMNS = ("col_kind", "col_engine", "col_status", "col_cost", "col_started")
+HOME_TYPES = ("investigation", "fix", "feature")
+LABEL_WIDTH = 22
+VALUE_WIDTH = 10
 
 
 class HomeView(VerticalScroll):
@@ -77,6 +82,9 @@ class HomeView(VerticalScroll):
                 yield Sparkline([0] * 7, id="week")
                 yield Static("", id="week-total")
                 yield Static("", id="home-prefix")
+        with Vertical(id="costs-card", classes="card"):
+            yield Static(t("costs.title"), classes="card-title")
+            yield Static(Content.styled(t("app.loading"), "$text-muted"), id="home-costs")
 
     def on_mount(self) -> None:
         table = self.query_one("#runs", DataTable)
@@ -108,6 +116,7 @@ class HomeView(VerticalScroll):
         self._show_actions(snapshot.initialized)
         self._show_next(snapshot)
         self._show_runs(snapshot)
+        self.query_one("#home-costs", Static).update(costs_card(t, snapshot.costs))
         week = self.query_one("#week", Sparkline)
         week.data = [float(value) for value in snapshot.daily]
         total = compact(sum(snapshot.daily))
@@ -180,6 +189,45 @@ class HomeView(VerticalScroll):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         event.stop()
         self.post_message(self.Go(SPECTRUM, str(event.row_key.value or "")))
+
+
+def costs_card(t: Catalog, report: CostReport | None) -> Content:
+    if report is None or report.empty:
+        return Content.styled(t("costs.empty"), "$text-muted")
+    na = t("spectrum.na")
+    lines: list[Content] = []
+    for key in HOME_TYPES:
+        row = report.row(key)
+        known = row.spend.known if row is not None else 0
+        value = (
+            cost_money(row.median_cost, na, estimated=row.estimated)
+            if row is not None and row.runs
+            else "–"
+        )
+        lines.append(
+            Content.assemble(
+                (t(TYPE_KEYS[key]).ljust(LABEL_WIDTH), f"bold ${chip_variable(key)}"),
+                (value.rjust(VALUE_WIDTH), ""),
+                ("  ", ""),
+                (t("costs.median_of", count=known), "$text-muted"),
+            )
+        )
+    total = report.total
+    spend = total.spend
+    per = cost_money(total.per_accepted, na, spend.lower_bound, total.estimated)
+    lines.append(
+        Content.assemble(
+            (t("costs.per_accepted").ljust(LABEL_WIDTH), "bold"),
+            (per.rjust(VALUE_WIDTH), ""),
+            ("  ", ""),
+            (t("costs.accepted_of", accepted=total.accepted, runs=total.runs), "$text-muted"),
+        )
+    )
+    if spend.lower_bound:
+        lines.append(Content.styled(t("costs.lower_bound", count=spend.missing), "$text-muted"))
+    if total.estimated:
+        lines.append(Content.styled(t("costs.estimated_note"), "$text-muted"))
+    return Content("\n").join(lines)
 
 
 def _run_status(status: str) -> Status:
