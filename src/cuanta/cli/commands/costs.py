@@ -18,6 +18,12 @@ TYPE_LABELS = {
 }
 HEADERS = ("group", "runs", "acc.", "per acc.", "spend", "n/a", "median", "time", "err.")
 CENT = 0.01
+COMPLETION_LABELS = {
+    "complete": "complete",
+    "complete_skipped": "complete, optional roles skipped",
+    "partial": "partial",
+    "failed": "failed",
+}
 MIX_LABELS = {
     "claude": "Claude",
     "codex": "Codex",
@@ -57,6 +63,10 @@ def _costs(session: Session, since: str) -> "Document":
         _table(f"by type since {report.since[:10]} UTC", report.by_type, TYPE_LABELS),
         _table("by engine mix", report.by_mix, MIX_LABELS),
     ]
+    if report.by_completion:
+        blocks.append(
+            _table("cross-engine runs by completion", report.by_completion, COMPLETION_LABELS)
+        )
     if report.phase_medians and not report.empty:
         blocks.append(_phase_table(report.phase_medians))
         blocks.append(
@@ -198,6 +208,7 @@ def costs_payload(report: "CostReport") -> dict[str, object]:
         "since": report.since,
         "by_type": [row_payload(row) for row in report.by_type],
         "by_engine_mix": [row_payload(row) for row in report.by_mix],
+        "by_completion": [row_payload(row) for row in report.by_completion],
         "total": row_payload(report.total),
         "phase_medians": [phase_payload(row) for row in report.phase_medians],
     }

@@ -60,7 +60,9 @@ class CostsQuery:
         ledger_factory: Callable[[], Ledger],
         has_ledger: Callable[[], bool],
         now_iso: Callable[[], str],
+        completion: Callable[[str], str] | None = None,
     ) -> None:
+        self._completion = completion
         self._ledger_factory = ledger_factory
         self._has_ledger = has_ledger
         self._now_iso = now_iso
@@ -77,6 +79,11 @@ class CostsQuery:
             phases = _phase_reports(
                 items, {run.id: run for run in runs}, ledger.events(EventQuery(since=start))
             )
-            return report_attempts(items, start, phases)
+            states = (
+                {item.run.id: self._completion(item.run.id) for item in items}
+                if self._completion is not None
+                else None
+            )
+            return report_attempts(items, start, phases, states)
         finally:
             ledger.close()

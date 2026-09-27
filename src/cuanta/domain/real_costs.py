@@ -22,6 +22,8 @@ CROSS_MIX = "cross-engine"
 MIX_ORDER = ("claude", "codex", CROSS_MIX)
 ALL = "all"
 
+COMPLETION_ORDER = ("complete", "complete_skipped", "partial", "failed")
+
 
 @dataclass(frozen=True, slots=True)
 class Attempt:
@@ -103,6 +105,7 @@ class CostReport:
     by_mix: tuple[CostRow, ...]
     total: CostRow
     phase_medians: tuple[PhaseCostRow, ...] = ()
+    by_completion: tuple[CostRow, ...] = ()
 
     @property
     def empty(self) -> bool:
@@ -239,8 +242,22 @@ def phase_cost_rows(
     return tuple(rows)
 
 
+def completion_rows(items: Sequence[Attempt], completion: Mapping[str, str]) -> tuple[CostRow, ...]:
+    grouped: dict[str, list[Attempt]] = {}
+    for item in items:
+        state = completion.get(item.run.id, "")
+        if state:
+            grouped.setdefault(state, []).append(item)
+    ordered = [key for key in COMPLETION_ORDER if key in grouped]
+    ordered.extend(sorted(key for key in grouped if key not in COMPLETION_ORDER))
+    return tuple(cost_row(key, grouped[key]) for key in ordered)
+
+
 def report_attempts(
-    items: Sequence[Attempt], since: str, phases: Mapping[str, AnatomyReport] | None = None
+    items: Sequence[Attempt],
+    since: str,
+    phases: Mapping[str, AnatomyReport] | None = None,
+    completion: Mapping[str, str] | None = None,
 ) -> CostReport:
     return CostReport(
         since=since,
@@ -248,6 +265,7 @@ def report_attempts(
         by_mix=_rows(items, MIX_ORDER, "mix"),
         total=cost_row(ALL, items),
         phase_medians=phase_cost_rows(items, phases) if phases is not None else (),
+        by_completion=completion_rows(items, completion) if completion else (),
     )
 
 

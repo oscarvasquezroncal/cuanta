@@ -237,7 +237,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
     from cuanta.cli.document import Document, Hint, KeyValues, Line, MarkdownText, Verbatim
     from cuanta.cli.fmt import usd
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
-    from cuanta.domain.messages import english
+    from cuanta.domain.messages import english, msg
     from cuanta.domain.overhead import overhead_messages, overhead_payload
 
     container = Container.for_project(session.project)
@@ -256,6 +256,18 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "turns": run.turns,
         "end_reason": run.end_reason,
         "status": run.status,
+        "completion": view.completion or None,
+        "verification": [
+            {
+                "role": item.role,
+                "attempt": item.attempt,
+                "passed": item.passed,
+                "total": item.total,
+                "seconds": item.seconds,
+                "model_cost_usd": 0.0,
+            }
+            for item in view.verification
+        ],
         "engine": run.engine,
         "model": run.model,
         "cost_usd": run.cost_usd,
@@ -317,12 +329,24 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
             else "pipeline",
         ),
         ("status", run.status),
+        *(
+            (("completion", english(msg(f"completion.{view.completion}"))),)
+            if view.completion
+            else ()
+        ),
         ("engine", f"{run.engine} · {run.model or 'default model'}"),
         ("duration", duration),
         ("cost", usd(run.cost_usd, run.cost_source)),
         *_decision_rows(view),
         *turn_rows,
         ("files changed", str(len(view.changed_files))),
+        *(
+            (
+                f"verify {item.role} #{item.attempt}",
+                f"{item.passed}/{item.total} passed in {item.seconds:.1f} s, $0 model spend",
+            )
+            for item in view.verification
+        ),
         *_trial_rows(view.trial),
     )
     blocks: list[Block] = [KeyValues(rows)]
