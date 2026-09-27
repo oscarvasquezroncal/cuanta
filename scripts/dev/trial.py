@@ -70,8 +70,15 @@ def command(spec: Spec, trial: Trial) -> list[str]:
         arguments.extend(["--cross-engine", "--cross-budget-usd", str(trial.cap)])
     if trial.simple:
         arguments.append("--simple")
-    for role in trial.role_models:
-        arguments.extend(["--role-model", role])
+    for value in trial.role_models:
+        serialized = value
+        role, _, reference = value.partition("=")
+        engine, qualified, model = reference.partition(":")
+        if not trial.cross_engine and qualified:
+            if engine != trial.engine:
+                raise ValueError("Native role model engine must match the trial engine")
+            serialized = f"{role}={model}"
+        arguments.extend(["--role-model", serialized])
     if trial.model:
         arguments.extend(["--model", trial.model])
     if trial.shape:
