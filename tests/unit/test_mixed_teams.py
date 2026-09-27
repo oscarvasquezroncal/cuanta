@@ -163,13 +163,15 @@ def test_codex_file_guard_prepares_planned_files_and_finds_unreadable_ones(tmp_p
             EditTarget("src/kept.ts", 1.0),
             EditTarget("src/*.css", 0.5),
             EditTarget("pkg/__init__.py", 0.8),
+            EditTarget("metadata.metadataBase", 0.8),
+            EditTarget("middleware.ts", 0.8),
         )
     )
     created = guard.prepare(plan)
-    assert created == ("src/new.ts", "src/empty.ts", "pkg/__init__.py")
+    assert created == ("src/new.ts", "src/empty.ts", "pkg/__init__.py", "middleware.ts")
     assert (tmp_path / "src/new.ts").read_text(encoding="utf-8") == ""
     (tmp_path / "src/new.ts").write_text("filled\n", encoding="utf-8")
-    assert guard.settle(created) == ("src/empty.ts",)
+    assert guard.settle(created) == ("src/empty.ts", "middleware.ts")
     assert (tmp_path / "pkg/__init__.py").exists()
     assert not (tmp_path / "src/empty.ts").exists()
     assert guard.prepare(None) == ()
@@ -207,3 +209,52 @@ def test_pins_accept_engine_and_resolved_model_names() -> None:
     assert pinned(CATALOG, "codex:gpt-6-sol") is CATALOG[2]
     assert pinned(CATALOG, "codex:claude-sonnet-5") is None
     assert pinned(CATALOG, "claude-opus-5-5") is CATALOG[1]
+
+
+def test_the_recommended_mix_follows_cost_per_accepted_change() -> None:
+    from cuanta.domain.team import advice_message, mix_attempts, recommend_mix
+
+    def pipeline(
+        root: str, engines: tuple[str, str], costs: tuple[float | None, ...], outcome: str
+    ) -> list[Run]:
+        return [
+            Run(
+                root,
+                "cross",
+                engine=engines[0],
+                scope="analyst",
+                task_type="feature",
+                cost_usd=costs[0],
+                outcome=outcome,
+            ),
+            Run(
+                f"{root}s",
+                "cross",
+                engine=engines[1],
+                scope="senior",
+                task_type="feature",
+                cost_usd=costs[1],
+                parent_id=root,
+            ),
+        ]
+
+    runs = [
+        *pipeline("A1", ("claude", "claude"), (0.4, 0.5), "accepted"),
+        *pipeline("A2", ("claude", "claude"), (0.4, 0.5), "rejected"),
+        *pipeline("B1", ("claude", "codex"), (0.3, 0.4), "accepted"),
+        *pipeline("C1", ("codex", "claude"), (0.2, None), "accepted"),
+        *pipeline("P1", ("claude", "claude"), (0.1, 0.1), ""),
+        Run("M", "mandate", engine="claude", task_type="feature", cost_usd=0.1, outcome="accepted"),
+    ]
+    attempts = mix_attempts(runs)
+    assert len(attempts) == 4
+    advice = recommend_mix(attempts, "feature")
+    assert advice is not None
+    assert (advice.mix, advice.attempts, advice.accepted) == (Mix.CLAUDE_PLANS, 1, 1)
+    assert advice.per_accepted == pytest.approx(0.7)
+    assert recommend_mix(attempts, "bug") is None
+    text = english(advice_message(advice, "feature"))
+    assert text == (
+        "Measured feature runs recommend Claude plans, Codex writes: $0.7000 per accepted change "
+        "(attempts: 1)"
+    )

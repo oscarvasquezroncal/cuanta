@@ -348,6 +348,10 @@ def test_a_second_failure_passes_the_results_to_the_tester(tmp_path: Path) -> No
     assert "Verification failures:" in tester and "src/layout.ts:1 still broken" in tester
     assert "the tester receives the results" in " ".join(recorder.texts())
     assert report.state is CompletionState.PARTIAL
+    assert report.stopped is not None
+    assert (
+        english(report.stopped) == "the checks still fail after tester; the change is not verified"
+    )
 
 
 def test_a_protected_change_stops_before_the_next_role_and_names_it(tmp_path: Path) -> None:
@@ -538,3 +542,35 @@ def test_a_salvaged_senior_leaves_the_run_partial(tmp_path: Path) -> None:
     report, _ = harness.run({Role.ANALYST: "claude", Role.SENIOR: "claude", Role.TESTER: "claude"})
     assert report.steps[1].salvaged
     assert report.state is CompletionState.PARTIAL and not report.ok
+    assert report.stopped is not None
+    assert english(report.stopped) == (
+        "senior stopped at its budget share before finishing; the change may be incomplete"
+    )
+
+
+def test_a_blocked_writer_ends_the_run_as_partial_and_names_the_cause(tmp_path: Path) -> None:
+    seed(tmp_path)
+    blocked = '{"status": "blocked", "blocked_reason": "the analyst plan JSON is missing"}'
+    harness = Harness(tmp_path, {"senior": [Act(blocked, 0.05)]})
+    report, _ = harness.run()
+    assert [step.role for step in report.steps] == [Role.ANALYST, Role.SENIOR]
+    assert report.state is CompletionState.PARTIAL and not report.ok
+    assert report.stopped is not None
+    assert english(report.stopped) == (
+        "senior reported that it is blocked: the analyst plan JSON is missing"
+    )
+    assert harness.prompt_of("tester") == []
+
+
+def test_after_a_partial_handoff_the_next_role_is_told_to_continue(tmp_path: Path) -> None:
+    seed(tmp_path)
+    harness = Harness(
+        tmp_path,
+        {"analyst": [Act("reading", 0.65)]},
+        budget=1.0,
+        shares={Role.ANALYST: 0.28, Role.SENIOR: 0.4, Role.TESTER: 0.2, Role.DOCS: 0.12},
+    )
+    harness.run()
+    senior = harness.prompt_of("senior")[0]
+    assert "That does not block you" in senior
+    assert "That does not block you" not in harness.prompt_of("analyst")[0]

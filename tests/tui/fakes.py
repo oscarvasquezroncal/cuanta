@@ -105,7 +105,7 @@ from cuanta.domain.routing import (
     with_mix,
 )
 from cuanta.domain.sandbox import ChangeKind
-from cuanta.domain.team import RoleCard, team_cards
+from cuanta.domain.team import MixAdvice, RoleCard, team_cards
 from cuanta.domain.telemetry import WiringPlan, WiringReport, WiringState
 from cuanta.domain.terminal import TerminalKind, TerminalReport
 from cuanta.tui.services import ALL_IMPORTED, LoopState, TelemetryPanel
@@ -814,6 +814,7 @@ class FakeServices:
     stories: dict[str, str] = field(default_factory=dict)
     understood: list[str] = field(default_factory=list)
     team_options: list[MandateOptions] = field(default_factory=list)
+    advice: MixAdvice | None = None
     change_plan_result: ChangePlan = field(default_factory=ChangePlan)
     change_plan_requests: list[MandateRequest] = field(default_factory=list)
     similar: tuple[Run, ...] = field(default_factory=lambda: SIMILAR_RUNS)
@@ -1064,6 +1065,9 @@ class FakeServices:
                 frozenset({"codex"}),
             )
         return team_cards(plan.routes, {}, 0.0, lambda engine: False)
+
+    def team_advice(self, task_type: str) -> MixAdvice | None:
+        return self.advice
 
     def change_plan(self, request: MandateRequest) -> ChangePlan:
         self.change_plan_requests.append(request)

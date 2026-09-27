@@ -12,6 +12,8 @@ from cuanta.application.assistant import sent_payload
 from cuanta.application.intake import Understanding
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixState, PrefixWindow
 from cuanta.domain.change_plan import ChangePlan
+from cuanta.domain.routing import Mix
+from cuanta.domain.team import MixAdvice
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.cache_text import clock_time
 from cuanta.tui.screens.confirm import ConfirmScreen
@@ -461,6 +463,7 @@ def test_see_what_is_sent_matches_the_payload() -> None:
 def test_a_team_mix_routes_roles_across_engines_and_explains_each_card() -> None:
     services = FakeServices(engines=(("claude", True), ("codex", True)))
     services.change_plan_result = ChangePlan(verify=("npx tsc --noEmit", "npm run build"))
+    services.advice = MixAdvice(Mix.CLAUDE_ONLY, 2, 2, 0.91)
 
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
         wizard = await open_wizard(app, pilot)
@@ -473,6 +476,7 @@ def test_a_team_mix_routes_roles_across_engines_and_explains_each_card() -> None
         await wait_for(pilot, lambda: current(wizard) == "team")
         note = wizard.query_one("#wiz-mix-note", Static)
         assert "Native pipeline" in render(note)
+        await wait_for(pilot, lambda: "recommend Claude only: $0.9100" in render(note))
         wizard.query_one("#mix-claude-plans-codex-writes", Button).press()
         await wait_for(pilot, lambda: services.team_options[-1].mix == "claude-plans-codex-writes")
         await wait_for(pilot, lambda: "runs separately" in render(note))
