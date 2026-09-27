@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shlex
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -254,9 +256,13 @@ def test_native_gsap_launch_composes_guards_owned_settings_and_isolated_hooks(
         assert settings["disableAllHooks"] is not discipline
         if discipline:
             assert set(settings["hooks"]) == {"PreToolUse", "PostToolUse"}
+            commands = [
+                settings["hooks"][event][0]["hooks"][0]["command"] for event in settings["hooks"]
+            ]
+            assert all("cuanta.cli.hooks" in command for command in commands)
+            assert all("\\" not in command for command in commands)
             assert all(
-                "cuanta.cli.hooks" in settings["hooks"][event][0]["hooks"][0]["command"]
-                for event in settings["hooks"]
+                shlex.split(command)[0] == Path(sys.executable).as_posix() for command in commands
             )
         else:
             assert "hooks" not in settings
