@@ -223,3 +223,41 @@ def test_spawn_events_carry_millisecond_timestamps() -> None:
     assert iso_ms(1_790_306_064_000) == "2026-09-25T03:14:24.000Z"
     event = spawn_event("r", "t", 1_790_306_064_123)
     assert (event.kind, event.source, event.ts) == ("spawn", "cuanta", "2026-09-25T03:14:24.123Z")
+
+
+def test_clean_mcp_disconnect_preserves_verified_startup_connection() -> None:
+    events = [
+        otlp(
+            "mcp_server_connection",
+            "2026-09-25T03:14:24Z",
+            {
+                "server_name": "cuanta",
+                "status": "connected",
+                "duration_ms": 474,
+            },
+        ),
+        otlp(
+            "mcp_server_connection",
+            "2026-09-25T03:14:46Z",
+            {
+                "server_name": "cuanta",
+                "status": "disconnected",
+                "duration_ms": 21471,
+            },
+        ),
+    ]
+    (server,) = session_overhead(events, 0).servers
+    assert server.ok and server.duration_ms == 474
+    failed = otlp(
+        "mcp_server_connection",
+        "2026-09-25T03:14:47Z",
+        {
+            "server_name": "cuanta",
+            "status": "disconnected",
+            "error": "lost connection",
+        },
+    )
+    (server,) = session_overhead([*events, failed], 0).servers
+    assert not server.ok and server.error == "lost connection"
+    (server,) = session_overhead(events[1:], 0).servers
+    assert not server.ok
