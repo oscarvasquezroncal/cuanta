@@ -17,6 +17,12 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-09-27 — Mixed teams on the landing page
+- Shipped: X3 matrix of three frozen requests by three presets in sandbox copies; blocked roles stop the pipeline as partial and name the cause; roles after a partial handoff are told to continue; role history counts budget-stopped runs; native caps are recorded per role so the learned margin measures the right cap; Team recommends a preset from measured cost per accepted change.
+- Why: the first Claude plans, Codex writes trial showed a Codex senior refusing a salvaged analyst handoff while later roles kept spending; the learned margin read the pipeline cap on root roles and measured no overrun.
+- Tried and rejected: repeating the blocked trial (the remaining matrix cap could not absorb a Codex overrun); changing the margin model mid-matrix (a USD-based margin fits the observed one-request overshoot better, recorded for V5).
+- Rule extracted: none.
+
 ## 2026-09-27 — Mixed teams that finish
 - Shipped: structured, accumulating role handoffs with anchored facts and stale marks; cuanta-run verification between roles with one repair turn; role floors, history-based shares, learned soft caps, salvage handoffs and optional-role skips; guards after every role; Codex overrun accounting; readable new files for Codex writers on Windows; pins honored or rejected; `--mix` presets and Team cards; completion states in results and costs; index tools by default for pipeline roles.
 - Why: in X1 and V4 the mixed pipeline stopped at the first role that hit its share, later roles rediscovered the analyst's work from plain text, only an agent could check builds, and file guards ran after the last role. V4's feature and fix pipelines had index tools and a connected server but called only `note`, because the index guidance came last in the prompt.
