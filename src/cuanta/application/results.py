@@ -70,6 +70,8 @@ class ResultView:
     actual_usd: float | None = None
     actual_estimated: bool = False
     in_flight: bool = False
+    pipeline_seconds: float | None = None
+    estimate_factor: float | None = None
 
     @property
     def decidable(self) -> bool:
@@ -84,7 +86,18 @@ class ResultView:
         return self.overhead.cache if self.overhead is not None else None
 
     @property
+    def terminal_turn(self) -> bool:
+        return (
+            self.run.engine == "claude"
+            and self.run.end_reason == TURN_LIMIT_SUBTYPE
+            and self.run.max_turns > 0
+            and self.run.turns > self.run.max_turns
+        )
+
+    @property
     def duration_s(self) -> float | None:
+        if self.run.kind == CROSS_KIND and not self.run.parent_id:
+            return self.pipeline_seconds
         return _seconds_between(self.run.started_at, self.run.ended_at)
 
     @property
@@ -156,6 +169,8 @@ def run_markdown(view: ResultView) -> str:
         turns = f"{run.turns}/{run.max_turns}"
         cut = " · cut by turn limit" if run.end_reason == TURN_LIMIT_SUBTYPE else ""
         lines.append(f"- Turns: {turns}{cut}")
+        if view.terminal_turn:
+            lines.append("- The engine's raw count includes the terminal turn-limit result.")
     elif run.end_reason == TURN_LIMIT_SUBTYPE:
         lines.append(f"- Turns: {run.turns} · cut by turn limit")
     if view.split is not None:
@@ -240,6 +255,12 @@ class ResultQuery:
             actual_usd=attempt.cost if attempt is not None else run.cost_usd,
             actual_estimated=attempt.estimated if attempt is not None else False,
             in_flight=pipeline_running(run, roles, now),
+            pipeline_seconds=attempt.seconds if attempt is not None else None,
+            estimate_factor=(
+                float(factor)
+                if isinstance(factor := meta.get("estimate_factor"), int | float)
+                else None
+            ),
         )
 
     def _roles(self, run: Run) -> tuple[Run, ...]:

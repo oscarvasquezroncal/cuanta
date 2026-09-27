@@ -411,6 +411,17 @@ ENGLISH: dict[str, str] = {
     "cross.done": "run {run}",
     "cross.skipped": "{role}: no model routed, skipped",
     "cross.budget": "the cross-engine budget is spent",
+    "cross.role_budget": "{role} has no remaining reserved budget",
+    "cross.share": "{role} budget share: ${cap}",
+    "sandbox.record_failed": (
+        "sandbox changes could not be collected ({error}); copy kept, result cannot be applied"
+    ),
+    "route.build_unavailable": (
+        "Codex builds are unverified on this Windows host; tester stays on Claude"
+    ),
+    "guarantee.codex_builds": (
+        "Codex cannot verify npm/npx builds on this Windows host (CX-09 is open)"
+    ),
     "cross.cost_unknown": (
         "the next role cannot start because a previous cost is unknown "
         "and the remaining budget cannot be calculated"
@@ -474,6 +485,7 @@ ENGLISH: dict[str, str] = {
     "estimate.one": "Based on 1 similar run: {cost}",
     "estimate.few": "Based on {count} similar runs: {low} to {high}",
     "estimate.plan": "Estimate from the plan: ~{cost}",
+    "estimate.calibrated": "Estimate from the plan: ~{cost} · factor {factor} from {count} runs",
     "estimate.none": "No prices yet to estimate this plan.",
     "route.policy_role": "{role} on {tier} because your policy uses {tier} for {purpose}",
     "route.instinct_scope": "Instinct picked {tier} for a {scope} request",

@@ -988,6 +988,7 @@ class MandateWizard(Vertical):
     ) -> None:
         t = self._t
         costs = {item.role: item for item in estimate.roles}
+        mixed = len({route.engine for route in plan.routes if route.model is not None}) > 1
         cards = self.query_one("#team-cards", Vertical)
         await cards.remove_children(".team-card")
         if engine != self.engine or revision != self._team_revision or not self.kind:
@@ -998,16 +999,23 @@ class MandateWizard(Vertical):
             model = route.model.id if route.model else t("wizard.engine_default")
             tier = t(f"models.tier_{route.tier.value}") if route.tier else "–"
             cost = costs.get(route.role)
+            warning = self._services.build_warning(route.engine)
             spread = (
                 t("wizard.role_cost", low=money(cost.low), high=money(cost.high))
                 if cost is not None and cost.low is not None
                 else ""
             )
+            if mixed and cost is not None and cost.share > 0:
+                spread = f"{spread}  {t('wizard.role_share', cap=money(cost.share))}".strip()
             body = Content.assemble(
                 (f"{t(f'models.role_{route.role.value}')}", "bold"),
                 (f"  {spread}\n" if spread else "\n", "$text-muted"),
                 (f"{model} · {tier}\n", "$accent"),
                 (t.message(route.reason), "$text-muted"),
+                (
+                    f"\n{t.message(warning)}" if warning is not None else "",
+                    "$warning",
+                ),
             )
             options = [(t("wizard.keep_plan"), AUTO_MODEL), *((name, name) for name in models)]
             select = Select(

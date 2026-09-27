@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from cuanta.application.engine_run import EngineLauncher, LaunchSpec
@@ -20,6 +20,7 @@ from cuanta.domain.mandate import (
 )
 from cuanta.domain.messages import Message, msg
 from cuanta.domain.progress import Status, finished, note, started
+from cuanta.domain.role_budgets import allocate_budget
 from cuanta.domain.routing import Role
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch
 from cuanta.ports.capsules import CapsuleStore
@@ -40,6 +41,7 @@ class CrossStep:
     cost_usd: float | None
     handoff: str
     cost_source: CostSource = "unknown"
+    budget_usd: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +101,10 @@ class CrossEnginePipeline:
         checkpoint: Callable[[], Message | None] | None = None,
         estimator: Estimator | None = None,
         depth: str = "",
+        allocator: Callable[[RoutePlan, str, str, float], Mapping[Role, float]] | None = None,
     ) -> None:
         self._estimator = estimator
+        self._allocator = allocator
         self._depth = depth
         self._sandbox = sandbox
         self._checkpoint = checkpoint
@@ -148,6 +152,16 @@ class CrossEnginePipeline:
         spent: float | None = 0.0
         handoff = ""
         parent = ""
+        active = {
+            role: None
+            for role in CROSS_ORDER
+            if (route := plan.route(role)) is not None and route.model is not None
+        }
+        shares = (
+            self._allocator(plan, request.type, self._depth, self._budget)
+            if self._allocator is not None
+            else allocate_budget(active, self._budget)
+        )
         for role in CROSS_ORDER:
             route = plan.route(role)
             if route is None or route.model is None:
@@ -158,6 +172,13 @@ class CrossEnginePipeline:
             remaining = self._budget - spent if spent is not None else 0.0
             if self._budget > 0 and remaining <= 0:
                 return CrossReport(tuple(steps), False, spent, msg("cross.budget"))
+            future = CROSS_ORDER[CROSS_ORDER.index(role) + 1 :]
+            reserved = sum(shares.get(later, 0.0) for later in future)
+            role_cap = max(0.0, remaining - reserved) if self._budget > 0 else 0.0
+            if self._budget > 0 and role_cap <= 1e-9:
+                return CrossReport(
+                    tuple(steps), False, spent, msg("cross.role_budget", role=role.value)
+                )
             read_only = role is Role.ANALYST or request.type == INVESTIGATION
             refusal = readonly_unavailable(route.engine) if read_only else None
             if refusal is not None:
@@ -172,15 +193,22 @@ class CrossEnginePipeline:
             model = route.model.resolved or route.model.id
             key = f"cross-{role.value}"
             progress.publish(
-                started(key, msg("cross.step", role=role.value, engine=route.engine, model=model))
+                started(
+                    key,
+                    msg("cross.step", role=role.value, engine=route.engine, model=model),
+                )
             )
+            if role_cap > 0:
+                progress.publish(
+                    note(Status.INFO, msg("cross.share", role=role.value, cap=f"{role_cap:.4f}"))
+                )
             spec = LaunchSpec(
                 kind=CROSS_KIND,
                 prompt=role_prompt(body, role, request, handoff),
                 cwd=self._cwd,
                 allowed_tools=tools_of(definition) if route.engine == "claude" else (),
                 model=model,
-                max_budget_usd=remaining if self._budget > 0 else 0.0,
+                max_budget_usd=role_cap,
                 max_turns=self._max_turns if route.engine == "claude" else 0,
                 scope=role.value,
                 parent_id=parent,
@@ -188,6 +216,7 @@ class CrossEnginePipeline:
                 task_type=request.type,
                 depth=self._depth,
                 estimate=None if parent else self._estimate(plan, request.type),
+                pipeline_budget_usd=self._budget if not parent else 0.0,
             )
             launch = launcher.launch(
                 self._isolated(spec, route.engine), lambda _: None, self._started
@@ -209,6 +238,7 @@ class CrossEnginePipeline:
                     cost,
                     handoff,
                     launch.run.cost_source,
+                    role_cap,
                 )
             )
             progress.publish(

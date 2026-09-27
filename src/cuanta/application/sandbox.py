@@ -55,6 +55,7 @@ class SandboxResult:
     removed: bool
     report: MandateReport | None = None
     cross: CrossReport | None = None
+    record_error: str = ""
 
 
 class TrialRecorder:
@@ -420,6 +421,7 @@ class SandboxRunner:
         run_id, engine = "", ""
         trial: Trial | None = None
         rescue = False
+        record_error = ""
         try:
             flow = flow_for(copy, launch)
             prepared = flow.prepare(request, signatures, replace(options, temporary_copy=True))
@@ -428,9 +430,20 @@ class SandboxRunner:
                 on_start(flow, prepared)
             report = flow.run(prepared, progress, observer, verdict)
             extra = payload(report) if payload is not None else {}
-            trial = self._record(
-                copy, report.run.id, request, engine, report.text, extra, keep, progress
-            )
+            try:
+                trial = self._record(
+                    copy, report.run.id, request, engine, report.text, extra, keep, progress
+                )
+            except OSError as error:
+                record_error = type(error).__name__
+                failed = replace(report.run, status="failed", end_reason="error_sandbox_record")
+                self._ledger.update_run(failed)
+                report = replace(report, run=failed)
+                rescue = True
+                self._guard(copy, progress, report.run.id)
+                progress.publish(
+                    note(Status.FAIL, msg("sandbox.record_failed", error=record_error))
+                )
         except BaseException:
             if trial is None:
                 trial = self._rescue(copy, run_id, request, engine, "", keep, progress)
@@ -438,7 +451,9 @@ class SandboxRunner:
             raise
         finally:
             removed = self._finish(copy, keep, progress, rescue)
-        return SandboxResult(trial, str(copy.root), removed, report=report)
+        return SandboxResult(
+            trial, str(copy.root), removed, report=report, record_error=record_error
+        )
 
     def run_cross(
         self,
@@ -455,6 +470,7 @@ class SandboxRunner:
         trial: Trial | None = None
         rescue = False
         pipeline: CrossEnginePipeline | None = None
+        record_error = ""
         try:
             pipeline = pipeline_for(copy, launch, lambda: self.checkpoint(copy))
             report = pipeline.run(request, plan, progress)
@@ -462,7 +478,20 @@ class SandboxRunner:
                 extra = payload(report) if payload is not None else {}
                 first = report.steps[0].run_id
                 text = cross_text(report.steps)
-                trial = self._record(copy, first, request, "cross", text, extra, keep, progress)
+                try:
+                    trial = self._record(copy, first, request, "cross", text, extra, keep, progress)
+                except OSError as error:
+                    record_error = type(error).__name__
+                    root_run = self._ledger.get_run(first)
+                    if root_run is not None:
+                        self._ledger.update_run(
+                            replace(root_run, status="failed", end_reason="error_sandbox_record")
+                        )
+                    rescue = True
+                    self._guard(copy, progress, first)
+                    progress.publish(
+                        note(Status.FAIL, msg("sandbox.record_failed", error=record_error))
+                    )
         except BaseException:
             steps = tuple(pipeline.completed) if pipeline is not None else ()
             current = pipeline.current if pipeline is not None else ""
@@ -476,7 +505,9 @@ class SandboxRunner:
             raise
         finally:
             removed = self._finish(copy, keep, progress, rescue)
-        return SandboxResult(trial, str(copy.root), removed, cross=report)
+        return SandboxResult(
+            trial, str(copy.root), removed, cross=report, record_error=record_error
+        )
 
 
 def _state_message(paths: Sequence[str], count: int) -> Message:

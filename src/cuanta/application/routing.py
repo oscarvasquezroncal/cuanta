@@ -27,6 +27,7 @@ from cuanta.domain.routing import (
     plan_route,
     policy_reason,
     raise_for_risk,
+    route_role,
 )
 from cuanta.ports.ledger import Ledger
 
@@ -96,11 +97,13 @@ class RouteAdvisor:
         catalog: Callable[[], Sequence[ModelEntry]],
         ledger: Ledger,
         clock_iso: Callable[[], str],
+        build_blocked: frozenset[str] = frozenset(),
     ) -> None:
         self._decisions = decisions
         self._catalog = catalog
         self._ledger = ledger
         self._clock_iso = clock_iso
+        self._build_blocked = build_blocked
 
     def _state(self, inputs: RouteInputs, scope: str) -> dict[str, object]:
         return {
@@ -210,6 +213,19 @@ class RouteAdvisor:
             ]
         requests = [clarity_capped(request, inputs.clarity) for request in requests]
         routes = plan_route(policy, entries, requests)
+        if len(policy.engines) > 1 and self._build_blocked:
+            protected: list[RoleRoute] = []
+            for route in routes:
+                chosen = route
+                if route.role is Role.TESTER and route.engine in self._build_blocked:
+                    pinned = dict(policy.role_models)
+                    pinned.pop(Role.TESTER, None)
+                    safe = replace(policy, engines=("claude",), role_models=pinned)
+                    wanted = next(item for item in requests if item.role is Role.TESTER)
+                    fallback = route_role(safe, entries, wanted)
+                    chosen = replace(fallback, reason=msg("route.build_unavailable"))
+                protected.append(chosen)
+            routes = tuple(protected)
         return RoutePlan(policy, scope, risk, tuple(requests), routes, backend)
 
     def record(self, run_id: str, task_type: str, plan: RoutePlan) -> None:

@@ -51,8 +51,8 @@ from cuanta.domain.fixes import Fix, FixAction
 from cuanta.domain.handoff import Handoff, parse_workflow
 from cuanta.domain.ledger import Decision, Run
 from cuanta.domain.loop import LOOP_OUT_OF_SCOPE, LoopGate, loop_gate
-from cuanta.domain.mandate import MandateRequest
-from cuanta.domain.messages import english, msg
+from cuanta.domain.mandate import MandateRequest, Shape, parse_shape, single_context
+from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.models import ModelEntry
 from cuanta.domain.progress import ProgressEvent
 from cuanta.domain.real_costs import CostReport
@@ -203,6 +203,8 @@ class Services(Protocol):
 
     def routing_policy(self) -> RoutingPolicy: ...
 
+    def build_warning(self, engine: str) -> Message | None: ...
+
     def save_routing(self, values: Mapping[str, object]) -> None: ...
 
     def routing_stats(self) -> tuple[RoleStats, ...]: ...
@@ -257,6 +259,9 @@ class CallbackSink:
 
 
 class ContainerServices:
+    def build_warning(self, engine: str) -> Message | None:
+        return msg("guarantee.codex_builds") if engine == "codex" and os.name == "nt" else None
+
     def __init__(self, project: Path) -> None:
         self._project = project
         self._flow: MandateFlow | None = None
@@ -733,7 +738,16 @@ class ContainerServices:
                 engine=options.engine or container.config.engine,
             )
             cap = resolve_budget(options, request.type, container.config.budget_usd)
-            return plan, container.team_estimate(plan, request.type, options.depth, cap)
+            shape = options.simple or single_context(
+                request.type, options.simple, parse_shape(options.shape)
+            )
+            return plan, container.team_estimate(
+                plan,
+                request.type,
+                options.depth,
+                cap,
+                (Shape.SINGLE if shape else Shape.PIPELINE).value,
+            )
         finally:
             container.close()
 
