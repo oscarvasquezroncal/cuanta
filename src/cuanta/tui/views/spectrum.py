@@ -26,6 +26,7 @@ from cuanta.tui.cache_text import first_request_text
 from cuanta.tui.fmt import compact, glyph, money, status_style
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.index_text import index_content
+from cuanta.tui.read_efficiency_text import utilization_note
 from cuanta.tui.services import ALL_IMPORTED, Services
 from cuanta.tui.widgets.flow import FlowRow
 
@@ -232,10 +233,17 @@ class SpectrumView(VerticalScroll):
         value = money(cost.value) if cost.value is not None else t("spectrum.na")
         self._metric("cost", value, t.message(cost.message, cost.source))
         use = report.utilization
+        note = utilization_note(t, use.label, use.formula)
         if use.value is None:
-            self._metric("utilization", t("spectrum.na"), t.message(use.why))
+            reason = t.message(use.why) or t("read_efficiency.unknown")
+            self._metric("utilization", t("spectrum.na"), f"{note}\n{reason}")
         else:
-            self._metric("utilization", f"{use.value:.0%}", t("spectrum.heuristic_label"))
+            metric = report.read_efficiency
+            if use.label == metric.label and metric.value is not None:
+                note += "\n" + t(
+                    "read_efficiency.counts", useful=metric.useful_count, read=metric.read_count
+                )
+            self._metric("utilization", f"{use.value:.0%}", note)
         empty = t("spectrum.no_rows")
         for view in VIEWS:
             rows = [(row.key, row.tokens, row.share) for row in result.rows(view)[:12]]

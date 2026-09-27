@@ -38,6 +38,8 @@ def render(template: str, values: Mapping[str, str]) -> str:
 
 
 ENGLISH: dict[str, str] = {
+    "read_efficiency.no_reads": "No successful source reads were observed.",
+    "read_efficiency.missing_report": "The report needed to count cited files is unavailable.",
     "leak.second_context": (
         "Delegated context initialized with {tokens} fresh/cache-write tokens (observed)."
     ),

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from cuanta.application.index_reporting import run_index_metrics
+from cuanta.application.results import stored_shape
 from cuanta.domain.anatomy import analyze_anatomy
 from cuanta.domain.errors import DomainFailure
 from cuanta.domain.ledger import LedgerEvent, RouteAudit, Run
@@ -12,6 +13,7 @@ from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.outcomes import CROSS_KIND
 from cuanta.domain.overhead import SessionOverhead, session_overhead
 from cuanta.domain.pricing import PriceTable
+from cuanta.domain.read_efficiency import read_efficiency
 from cuanta.domain.spectrum import (
     Row,
     SpectrumReport,
@@ -19,6 +21,7 @@ from cuanta.domain.spectrum import (
     Window,
     analyze,
     changed_paths,
+    file_utilization,
     grouped,
     plan_weeks,
     plan_windows,
@@ -68,10 +71,14 @@ class SpectrumQuery:
         ledger: Ledger,
         prices: PriceTable | None = None,
         metadata: Callable[[str], Mapping[str, object] | None] | None = None,
+        reports: Callable[[str], str | None] | None = None,
+        roots: Callable[[Run], Sequence[str]] | None = None,
     ) -> None:
         self._ledger = ledger
         self._prices = prices
         self._metadata = metadata
+        self._reports = reports
+        self._roots = roots
 
     def _runs(self, selection: Selection) -> tuple[Run, ...]:
         if selection.run and HU_PATTERN.match(selection.run):
@@ -126,6 +133,9 @@ class SpectrumQuery:
                 changed = changed | changed_paths(start, end)
             resolved = resolved or self._resolved(run.id)
         title = self._label(selection, runs)
+        task_type = runs[0].task_type if len(runs) == 1 else ""
+        if len(runs) == 1 and self._metadata is not None:
+            task_type = str((self._metadata(runs[0].id) or {}).get("task_type") or task_type)
         report = analyze(
             english(title),
             events,
@@ -134,7 +144,7 @@ class SpectrumQuery:
             snapshotted,
             self._prices,
             title,
-            runs[0].task_type if len(runs) == 1 else "",
+            task_type,
         )
         index_events, index_runs = self._metric_inputs(events, runs)
         report = replace(
@@ -142,6 +152,40 @@ class SpectrumQuery:
             index=run_index_metrics(index_events, index_runs, self._metadata),
             anatomy=analyze_anatomy(resolve_agents(index_events)),
         )
+        if self._reports is not None:
+            texts = {run.id: self._reports(run.id) for run in index_runs}
+            identities = set(texts)
+            primary = [run for run in index_runs if run.parent_id not in identities]
+            known = bool(primary) and all(texts[run.id] is not None for run in primary)
+            text = "\n".join(texts[run.id] or "" for run in primary) if known else None
+            edited = set(changed)
+            fallback = False
+            for run in index_runs:
+                meta = self._metadata(run.id) or {} if self._metadata else {}
+                paths = meta.get("changed_files")
+                if isinstance(paths, list | tuple):
+                    edited.update(path for path in paths if isinstance(path, str))
+                single, shape_known = stored_shape(
+                    meta, run, str(meta.get("task_type") or run.task_type)
+                )
+                if run in primary and texts[run.id] is None and (not single or not shape_known):
+                    fallback = True
+            efficiency = read_efficiency(
+                index_events,
+                text,
+                tuple(edited),
+                task_type,
+                project_roots=tuple(root for run in index_runs for root in self._roots(run))
+                if self._roots
+                else (),
+            )
+            report = replace(
+                report,
+                read_efficiency=efficiency,
+                utilization=report.utilization
+                if fallback
+                else file_utilization(efficiency, report.totals.total),
+            )
         audits = self._ledger.route_audits(runs[0].id) if len(runs) == 1 else ()
         return SpectrumResult(report, runs, tuple(events), audits)
 

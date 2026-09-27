@@ -14,6 +14,7 @@ from cuanta.domain.index_metrics import IndexMetrics, index_metrics
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pricing import CostEstimate, PriceTable, estimate_cost
+from cuanta.domain.read_efficiency import ReadEfficiency
 from cuanta.domain.telemetry import agent_from_signals
 
 USAGE_KINDS = frozenset({"api_request", "sse_event:response.completed"})
@@ -624,6 +625,9 @@ class Utilization:
     total_tokens: int
     label: str = UTILIZATION_LABEL
     why: Message | None = None
+    formula: str = "useful tool tokens / total API tokens"
+    read_files: int = 0
+    useful_files: int = 0
 
     @property
     def reason(self) -> str:
@@ -632,6 +636,19 @@ class Utilization:
 
 NO_SNAPSHOTS = msg("spectrum.no_snapshots")
 NO_TOKENS = msg("spectrum.no_tokens")
+
+
+def file_utilization(report: ReadEfficiency, total_tokens: int) -> Utilization:
+    return Utilization(
+        report.value,
+        0,
+        total_tokens,
+        label=report.label,
+        why=msg(f"read_efficiency.{report.why}") if report.why else None,
+        formula=report.formula,
+        read_files=report.read_count,
+        useful_files=report.useful_count,
+    )
 
 
 def utilization(
@@ -785,6 +802,7 @@ class SpectrumReport:
     title: Message | None = None
     index: IndexMetrics = field(default_factory=IndexMetrics)
     anatomy: AnatomyReport = field(default_factory=AnatomyReport)
+    read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
 
 
 def analyze(

@@ -1651,11 +1651,18 @@ class Container:
 
     def spectrum_query(self, ledger: Ledger) -> SpectrumQuery:
         from cuanta.adapters.system.prices import load_prices
+        from cuanta.application.read_reporting import ReadReporting
         from cuanta.application.run_reports import RunReports
         from cuanta.application.spectrum import SpectrumQuery
 
+        workspace = self.state_workspace()
+        reporting = ReadReporting(workspace, ledger, str(self.project))
         return SpectrumQuery(
-            ledger, load_prices(), metadata=RunReports(self.state_workspace()).meta
+            ledger,
+            load_prices(),
+            metadata=RunReports(workspace).meta,
+            reports=reporting.report,
+            roots=reporting.roots,
         )
 
     def set_project_value(self, dotted: str, value: object) -> None:

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from cuanta.application.index_reporting import run_index_metrics
+from cuanta.application.read_reporting import ReadReporting
 from cuanta.application.run_reports import RunReports
 from cuanta.application.trials import BASE_DIR, FILES_DIR, TrialStore, TrialSummary
 from cuanta.domain.anatomy import AnatomyReport, analyze_anatomy
@@ -17,6 +18,7 @@ from cuanta.domain.mandate import INVESTIGATION, MandateRequest, Shape
 from cuanta.domain.messages import english
 from cuanta.domain.outcomes import CROSS_KIND, is_attempt, pipeline_running
 from cuanta.domain.overhead import SessionOverhead, session_overhead
+from cuanta.domain.read_efficiency import ReadEfficiency, read_efficiency
 from cuanta.domain.real_costs import attempts
 from cuanta.domain.report import (
     ContextSplit,
@@ -31,7 +33,7 @@ from cuanta.domain.report import (
     unified_diff,
 )
 from cuanta.domain.sandbox import trial_folder
-from cuanta.domain.spectrum import resolve_agents
+from cuanta.domain.spectrum import changed_paths, resolve_agents
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.workspace import Workspace
 
@@ -78,6 +80,7 @@ class ResultView:
     estimate_factor: float | None = None
     index: IndexMetrics = field(default_factory=IndexMetrics)
     anatomy: AnatomyReport = field(default_factory=AnatomyReport)
+    read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
 
     @property
     def decidable(self) -> bool:
@@ -215,6 +218,7 @@ class ResultQuery:
         self._workspace = workspace
         self._ledger = ledger
         self._reports = RunReports(workspace)
+        self._read_reporting = ReadReporting(workspace, ledger)
         self._trials = TrialStore(workspace, ledger, lambda: "")
         self._today = today
 
@@ -223,7 +227,8 @@ class ResultQuery:
         if run is None:
             return None
         meta = self._reports.meta(run.id) or {}
-        text = strip_preamble(self._reports.report(run.id) or "")
+        raw_report = self._reports.report(run.id)
+        text = strip_preamble(raw_report or "")
         task_type = str(meta.get("task_type") or run.task_type)
         roles = self._roles(run)
         now = self._now_iso()
@@ -239,6 +244,10 @@ class ResultQuery:
         single, shape_known = stored_shape(meta, run, task_type)
         trial = self._trials.summary(run.id)
         changed = trial.trial.paths if trial is not None else _strings(meta.get("changed_files"))
+        observed_changes = set(changed) | changed_paths(
+            {item.path: item.sha256 for item in self._ledger.snapshots(run.id, "start")},
+            {item.path: item.sha256 for item in self._ledger.snapshots(run.id, "end")},
+        )
         index_events = list(events)
         for role in roles:
             index_events.extend(self._ledger.events(EventQuery(run_id=role.id)))
@@ -272,6 +281,15 @@ class ResultQuery:
             ),
             index=run_index_metrics(index_events, (run, *roles), self._reports.meta),
             anatomy=analyze_anatomy(resolve_agents(index_events)),
+            read_efficiency=read_efficiency(
+                index_events,
+                raw_report,
+                tuple(observed_changes),
+                task_type,
+                project_roots=tuple(
+                    root for owner in (run, *roles) for root in self._read_reporting.roots(owner)
+                ),
+            ),
         )
 
     def _roles(self, run: Run) -> tuple[Run, ...]:

@@ -1005,3 +1005,12 @@ stale = "Stale facts: {count}"
 guard = "Protected-path edits: {count}"
 out_of_plan = "Edits outside the plan: {count}"
 
+[read_efficiency]
+title = "Read efficiency"
+label_v2 = "file utilization v2"
+counts = "{useful} useful / {read} files read"
+version_formula = "{version}: {formula}"
+formula_investigation = "cited files read / files read"
+formula_code = "(edited or cited) files read / files read"
+formula_v1 = "useful tool tokens / total API tokens"
+unknown = "Not enough observations to calculate utilization."
