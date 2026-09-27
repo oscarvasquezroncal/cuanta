@@ -83,6 +83,7 @@ if TYPE_CHECKING:
     from cuanta.application.code_index import IndexService
     from cuanta.application.costs import CostsQuery
     from cuanta.application.cross_engine import CrossEnginePipeline, CrossReport
+    from cuanta.application.cross_files import CodexFileGuard
     from cuanta.application.detect import DetectProject
     from cuanta.application.doctor import Doctor
     from cuanta.application.drafts import Drafts
@@ -115,6 +116,7 @@ if TYPE_CHECKING:
     from cuanta.application.telemetry import TelemetryService, TranscriptImport
     from cuanta.application.tests_view import LatestTests
     from cuanta.application.trials import TrialStore
+    from cuanta.application.verification import Verifier
     from cuanta.domain.assistant import Suggestions
     from cuanta.domain.bench import BenchTask, Condition
     from cuanta.domain.change_plan import ChangePlan
@@ -126,7 +128,7 @@ if TYPE_CHECKING:
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.pack import ContextPack
-    from cuanta.domain.routing import CostRange, Role, RoutingPolicy
+    from cuanta.domain.routing import CostRange, Mix, Role, RoutingPolicy
     from cuanta.domain.sandbox import SandboxLaunch
     from cuanta.domain.shells import Shell
     from cuanta.domain.terminal import TerminalReport
@@ -548,6 +550,7 @@ class Container:
             default_session=self.config.run_session,
             guard_files=self.guard_profile,
             index_tools=self.config.index_enabled and self.config.index_tools,
+            index_server=self.index_server_command(),
         )
 
     def guard_profile(self, spec: LaunchSpec) -> tuple[str, str]:
@@ -578,12 +581,16 @@ class Container:
                         "hooks": [{"type": "command", "command": command, "timeout": 10}],
                     }
                 ]
-        mcp = (
-            self.index_mcp_config()
-            if self.config.index_enabled and self.config.index_tools
-            else None
-        )
+        wanted = self.config.index_tools if spec.index_tools is None else spec.index_tools
+        mcp = self.index_mcp_config() if self.config.index_enabled and wanted else None
         return self.lean_profile().files(permissions_deny=denied, owned_hooks=hooks, owned_mcp=mcp)
+
+    def index_server_command(self) -> tuple[str, ...]:
+        import sys
+
+        if not self.config.index_enabled:
+            return ()
+        return (sys.executable, "-m", "cuanta", "--project", str(self.project), "mcp", "serve")
 
     def index_mcp_config(self) -> dict[str, object]:
         import sys
@@ -974,16 +981,18 @@ class Container:
         scope: Choice | None = None,
         risk: float | None = None,
         engine: str = "",
+        mix: Mix | None = None,
     ) -> tuple[RoutePlan, CostRange]:
         from cuanta.application.estimate import similar_costs
         from cuanta.application.routing import RouteInputs, with_overrides
         from cuanta.domain.depth import parse_depth, profile
         from cuanta.domain.mandate import MandateRequest as Request
-        from cuanta.domain.routing import cost_range, depth_capped, roles_that_run
+        from cuanta.domain.routing import cost_range, depth_capped, roles_that_run, with_mix
 
         policy = with_overrides(self.routing_policy(), route, preset, role_models)
         if engine:
             policy = replace(policy, engines=(engine,))
+        policy = with_mix(policy, mix)
         if depth:
             policy = depth_capped(policy, profile(parse_depth(depth), task_type).tier_cap)
         if scope is None:
@@ -1193,7 +1202,64 @@ class Container:
                 else None
             ),
             learn_run=self.learn_run if sandbox is None else None,
+            verifier=self.verifier().run,
+            lines_of=self.project_lines,
+            reads_of=lambda run_id: self.read_ranges(ledger, run_id),
+            margin=lambda: self.budget_margin(ledger),
+            index_tools=self.pipeline_index_tools,
+            new_files=self.codex_file_guard() if os.name == "nt" else None,
         )
+
+    def verifier(self) -> Verifier:
+        from cuanta.application.verification import Verifier
+
+        env = {name: value for name, value in self.extra_env if name != STATE_ROOT_ENV}
+        return Verifier(self.runner, self.project, os.name == "nt", env or None)
+
+    def project_lines(self, relative: str) -> list[str] | None:
+        text = self.workspace().read_text(relative)
+        return text.splitlines() if text is not None else None
+
+    def read_ranges(self, ledger: Ledger, run_id: str) -> tuple[tuple[str, int, int], ...]:
+        from cuanta.domain.read_efficiency import read_ranges
+        from cuanta.ports.ledger import EventQuery
+
+        return read_ranges(ledger.events(EventQuery(run_id=run_id)), str(self.project))
+
+    def budget_margin(self, ledger: Ledger) -> float:
+        from cuanta.application.run_reports import RunReports
+        from cuanta.domain.role_budgets import Overrun, learned_margin
+
+        reports = RunReports(self.state_workspace())
+        samples: list[Overrun] = []
+        for run in ledger.runs():
+            if (
+                run.engine != "claude"
+                or run.end_reason != "error_max_budget_usd"
+                or run.cost_usd is None
+            ):
+                continue
+            native = (reports.meta(run.id) or {}).get("native_cap_usd")
+            if isinstance(native, int | float) and native > 0:
+                samples.append(Overrun(float(native), run.cost_usd))
+            elif run.cap_usd and (run.kind != "cross" or run.parent_id):
+                samples.append(Overrun(run.cap_usd, run.cost_usd))
+        return learned_margin(tuple(samples))
+
+    def build_blocked(self) -> frozenset[str]:
+        return frozenset({"codex"}) if os.name == "nt" else frozenset()
+
+    def pipeline_index_tools(self, engine: str) -> bool:
+        return (
+            self.config.index_enabled
+            and self.config.pipeline_index_tools
+            and engine in {"claude", "codex"}
+        )
+
+    def codex_file_guard(self) -> CodexFileGuard:
+        from cuanta.application.cross_files import CodexFileGuard
+
+        return CodexFileGuard(self.workspace(), frozenset(self.config.exclusions))
 
     def project_snapshot(self) -> dict[str, str]:
         workspace = self.workspace()
@@ -1526,6 +1592,7 @@ class Container:
                 else None
             ),
             learn_run=self.learn_run if sandbox is None else None,
+            pipeline_index_tools=self.config.index_enabled and self.config.pipeline_index_tools,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -1541,7 +1608,8 @@ class Container:
             settings_env=lambda: settings_env(self.home, self.project),
             blast_radius=self.blast_radius,
             clock_iso=self.clock.now_iso,
-            index_tools=self.config.index_enabled and self.config.index_tools,
+            index_tools=self.config.index_enabled
+            and (self.config.index_tools or self.config.pipeline_index_tools),
             default_session=self.config.run_session,
         )
 
@@ -1704,9 +1772,16 @@ class Container:
 
     def costs_query(self) -> CostsQuery:
         from cuanta.application.costs import CostsQuery
+        from cuanta.application.run_reports import RunReports
 
         has_ledger = (self.cuanta_dir() / "ledger.db").is_file
-        return CostsQuery(self.ledger, has_ledger, self.clock.now_iso)
+        reports = RunReports(self.state_workspace())
+
+        def completion(run_id: str) -> str:
+            value = (reports.meta(run_id) or {}).get("completion")
+            return value if isinstance(value, str) else ""
+
+        return CostsQuery(self.ledger, has_ledger, self.clock.now_iso, completion)
 
     def run_outcomes(self, ledger: Ledger) -> RunOutcomes:
         from cuanta.application.outcomes import RunOutcomes
@@ -1969,7 +2044,7 @@ class Container:
             catalog=lambda: service.view().entries,
             ledger=ledger,
             clock_iso=self.clock.now_iso,
-            build_blocked=frozenset({"codex"}) if os.name == "nt" else frozenset(),
+            build_blocked=self.build_blocked(),
         )
 
     def latest_tests(self) -> LatestTests:

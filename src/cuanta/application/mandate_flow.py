@@ -73,6 +73,7 @@ class MandateOptions:
     keep_copy: bool = False
     estimate: RunEstimate | None = None
     plan_overrides: tuple[tuple[str, str], ...] = ()
+    mix: str = ""
 
 
 def isolated(spec: LaunchSpec, sandbox: SandboxLaunch | None, claude: bool) -> LaunchSpec:
@@ -180,7 +181,9 @@ class MandateFlow:
         context_pack: Callable[[MandateRequest, str, str, ChangePlan | None], ContextPack]
         | None = None,
         learn_run: Callable[[str], None] | None = None,
+        pipeline_index_tools: bool = False,
     ) -> None:
+        self._pipeline_index_tools = pipeline_index_tools
         self._learn_run = learn_run
         self._refresh_index = refresh_index
         self._change_plan = change_plan
@@ -317,6 +320,11 @@ class MandateFlow:
             shape=(Shape.SINGLE if options.simple or single else Shape.PIPELINE).value,
             change_plan=protection,
             stable_prefix=pack is not None,
+            index_tools=(
+                True
+                if claude and applied is not None and applied.agents and self._pipeline_index_tools
+                else None
+            ),
         )
         sandbox = self._launch(options)
         base = isolated(base, sandbox, claude)

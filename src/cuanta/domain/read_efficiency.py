@@ -201,3 +201,62 @@ def read_efficiency(
         available=available,
         why="" if available else "no_reads" if not reads else "missing_report",
     )
+
+
+def _relative_to(value: str, project_root: str) -> str:
+    text = value.strip().replace("\\", "/")
+    root = project_root.strip().replace("\\", "/").rstrip("/")
+    if root and text.casefold().startswith(root.casefold() + "/"):
+        return text[len(root) + 1 :]
+    if PureWindowsPath(text).drive or text.startswith("/"):
+        return ""
+    return text.removeprefix("./")
+
+
+def _line_number(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _span(parameters: dict[str, object]) -> tuple[int, int]:
+    lines = parameters.get("lines")
+    if isinstance(lines, str):
+        match = re.fullmatch(r"\s*(\d+)\s*(?:[-:]\s*(\d+))?\s*", lines)
+        if match is not None:
+            start = int(match[1])
+            return start, int(match[2]) if match[2] else start
+    offset = _line_number(parameters.get("offset"))
+    limit = _line_number(parameters.get("limit"))
+    start = max(1, offset or 1)
+    if limit is not None and limit > 0:
+        return start, start + limit - 1
+    return start, 0
+
+
+def read_ranges(
+    events: Sequence[LedgerEvent], project_root: str
+) -> tuple[tuple[str, int, int], ...]:
+    completed = {_identity(event) for event in events if event.kind in RESULT_KINDS}
+    found: dict[tuple[str, int, int], None] = {}
+    for event in events:
+        if event.kind not in RESULT_KINDS | {"tool_use"}:
+            continue
+        if event.kind == "tool_use" and event.tool_use_id and _identity(event) in completed:
+            continue
+        values = _attributes(event)
+        if not _read_tool(event, values) or not _usable(event, values):
+            continue
+        path = _relative_to(_event_path(event, values), project_root)
+        if not path:
+            continue
+        parameters = dict(values)
+        for key in ("tool_input", "tool.parameters", "arguments"):
+            parameters.update(_object(values.get(key)))
+        start, end = _span(parameters)
+        found[path, start, end] = None
+    return tuple(found)

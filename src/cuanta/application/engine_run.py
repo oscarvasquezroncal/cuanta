@@ -58,6 +58,7 @@ class LaunchSpec:
     read_only: bool = False
     temporary_copy: bool = False
     mode: str = ""
+    index_tools: bool | None = None
     env: tuple[tuple[str, str], ...] = ()
     estimate: RunEstimate | None = None
     shape: str = ""
@@ -88,7 +89,9 @@ class EngineLauncher:
         default_session: str = FULL,
         guard_files: Callable[[LaunchSpec], tuple[str, str]] | None = None,
         index_tools: bool = False,
+        index_server: tuple[str, ...] = (),
     ) -> None:
+        self._index_server = index_server
         self._lean_files = lean_files
         self._guard_files = guard_files
         self._index_tools = index_tools
@@ -127,10 +130,15 @@ class EngineLauncher:
         session = spec.session or self._default_session
         plan = spec.change_plan or (ChangePlan(read_only=True) if spec.read_only else None)
         strict = plan is not None and (plan.read_only or bool(plan.guard))
+        indexed = self._index_tools if spec.index_tools is None else spec.index_tools
         own_profile = (
             self._engine.name == "claude"
             and self._guard_files is not None
-            and (strict or (session == LEAN and spec.kind in {"mandate", "cross"}))
+            and (
+                strict
+                or (session == LEAN and spec.kind in {"mandate", "cross"})
+                or (spec.index_tools is True and spec.kind == "cross")
+            )
         )
         if own_profile and self._guard_files is not None:
             mcp_config, settings_file = self._guard_files(spec)
@@ -147,7 +155,7 @@ class EngineLauncher:
             allowed = tools
             denied = tuple(dict.fromkeys((*denied, *deny_rules(plan), *EXECUTION)))
         system = spec.append_system_prompt
-        if own_profile and self._index_tools:
+        if own_profile and indexed:
             from cuanta.domain.index_tools import INDEX_CONTRACT, INDEX_TOOLS
 
             allowed = tuple(dict.fromkeys((*allowed, *INDEX_TOOLS)))
@@ -174,6 +182,11 @@ class EngineLauncher:
             temporary_copy=spec.temporary_copy,
             setting_sources=() if own_profile else None,
             strict_guard=strict and self._engine.name == "claude",
+            index_server=(
+                (*self._index_server, "--run-id", run_id)
+                if indexed and self._index_server and self._engine.name == "codex"
+                else ()
+            ),
         )
 
     @contextmanager

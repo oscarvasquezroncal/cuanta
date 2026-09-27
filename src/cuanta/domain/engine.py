@@ -138,6 +138,7 @@ class EngineRequest:
     temporary_copy: bool = False
     setting_sources: tuple[str, ...] | None = None
     strict_guard: bool = False
+    index_server: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
