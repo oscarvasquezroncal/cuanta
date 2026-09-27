@@ -62,3 +62,11 @@ class IndexStatus:
     elapsed_s: float = 0.0
     recovered: bool = False
     content_hash: str = ""
+    coverage_by_kind: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class IndexStructure:
+    symbols: tuple[IndexRow, ...] = ()
+    edges: tuple[IndexRow, ...] = ()
+    coverage: str = "unsupported"

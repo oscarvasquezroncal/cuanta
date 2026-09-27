@@ -167,6 +167,8 @@ class Container:
         return LocalWorkspace(self.project)
 
     def index_service(self, rebuild: bool = False) -> IndexService:
+        from cuanta.adapters.graph.index_ast import AstIndexExtractor
+        from cuanta.adapters.graph.index_graph import LocalIndexGraph
         from cuanta.adapters.storage.sqlite_index import SqliteIndex
         from cuanta.adapters.system.index_inventory import LocalIndexInventory
         from cuanta.application.code_index import IndexService
@@ -177,6 +179,8 @@ class Container:
             LocalIndexInventory(self.project, frozenset(self.config.exclusions)),
             self.clock.now_iso,
             recovered=index.recovered,
+            extractor=AstIndexExtractor(),
+            graph=LocalIndexGraph(self.project, self.runner),
         )
 
     def refresh_index(self) -> None:
