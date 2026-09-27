@@ -289,7 +289,9 @@ class LocalIndexKnowledge:
         for run in sorted(runs.values(), key=lambda item: item.id):
             root = self._root(run, runs)
             roots = self._roots(run, root)
-            paths: set[str] = set()
+            paths = set(self._native_edits(run, roots))
+            for path in paths:
+                self._remember(history, root, path, "edit", run.ended_at, retries.get(root.id, 0))
             for event in ledger.events(EventQuery(run_id=run.id)):
                 path = _relative(event.file_path, roots)
                 action = (
@@ -357,6 +359,21 @@ class LocalIndexKnowledge:
                         retries.get(root.id, 0),
                     )
         return tuple(history[key] for key in sorted(history))
+
+    def _native_edits(self, run: Run, roots: tuple[str, ...]) -> tuple[str, ...]:
+        meta = _json(self._state, f".cuanta/runs/{run.id}/run.json")
+        paths: set[str] = set()
+        for key in ("actual_edited_paths", "changed_files"):
+            values = meta.get(key)
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                path = _relative(value, roots) if isinstance(value, str) else ""
+                if path and (
+                    _bytes(self._project, path) is not None or _bytes(self._state, path) is not None
+                ):
+                    paths.add(path)
+        return tuple(sorted(paths))
 
     @staticmethod
     def _root(run: Run, runs: dict[str, Run]) -> Run:
