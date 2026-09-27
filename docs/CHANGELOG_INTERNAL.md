@@ -17,6 +17,12 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-09-27 — Mixed teams that finish
+- Shipped: structured, accumulating role handoffs with anchored facts and stale marks; cuanta-run verification between roles with one repair turn; role floors, history-based shares, learned soft caps, salvage handoffs and optional-role skips; guards after every role; Codex overrun accounting; readable new files for Codex writers on Windows; pins honored or rejected; `--mix` presets and Team cards; completion states in results and costs; index tools by default for pipeline roles.
+- Why: in X1 and V4 the mixed pipeline stopped at the first role that hit its share, later roles rediscovered the analyst's work from plain text, only an agent could check builds, and file guards ran after the last role. V4's feature and fix pipelines had index tools and a connected server but called only `note`, because the index guidance came last in the prompt.
+- Tried and rejected: running model-suggested verify commands (they run outside any sandbox); passing verification outputs into the recorded patch; lowering Codex's Windows sandbox mode to run builds (K1: unelevated mode still cannot spawn piped children).
+- Rule extracted: none.
+
 ## 2026-09-27 — Compiled change plans and protected paths
 - Shipped: local change-plan compiler and `plan --for`, confidence and indexed regression commands, bilingual exclusions, movable Confirm chips and Team counts, consistent override composition, strict Claude tool/settings/agent policies, actual edit/guard telemetry and refusal to apply protected trial edits. Snapshots cover styles, documents, hidden project paths and file modes; sandbox manifests remain authoritative.
 - Why: preserve explicit exclusions through launch and detect real edits independently of model claims.
