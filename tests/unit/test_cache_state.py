@@ -64,6 +64,41 @@ def test_cache_uses_the_same_first_request_as_context_split() -> None:
     assert cache.total == split.first_request == 20
 
 
+def test_the_session_title_request_is_not_the_first_agent_request() -> None:
+    from cuanta.domain.overhead import startup_of
+
+    events = [
+        LedgerEvent(kind="user_prompt", ts="2026-09-27T01:39:57.853Z", agent="main"),
+        LedgerEvent(
+            kind="api_request",
+            ts="2026-09-27T01:39:58.630Z",
+            agent="generate_session_title",
+            query_source="generate_session_title",
+            input_tokens=1431,
+            output_tokens=12,
+            duration_ms=790,
+        ),
+        LedgerEvent(
+            kind="api_request",
+            ts="2026-09-27T01:39:59.666Z",
+            agent="main",
+            query_source="sdk",
+            input_tokens=2,
+            cache_read_tokens=19_827,
+            cache_write_tokens=8_988,
+            output_tokens=74,
+            duration_ms=1785,
+        ),
+    ]
+    cache = first_request_cache(events)
+    split = context_split(events, 400)
+    startup = startup_of(events)
+    assert cache is not None and cache.state is CacheState.WARM
+    assert cache.total == 28_817 and cache.read == 19_827
+    assert split is not None and split.first_request == 28_817
+    assert startup is not None and startup.output_tokens == 74
+
+
 def test_prefix_window_uses_last_usage_event_and_measured_ttl() -> None:
     events = [
         LedgerEvent(kind="api_request", ts="2026-01-05T10:00:00Z", cache_write_tokens=100),
