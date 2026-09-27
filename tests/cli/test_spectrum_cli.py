@@ -55,6 +55,17 @@ def test_spectrum_json_contract(seeded: Path) -> None:
     )
     assert totals["cost_usd"] == 0.9
     assert document["utilization"]["label"] == "heuristic v1"
+    assert document["index"] == {
+        "index_calls": 0,
+        "raw_reads": 2,
+        "exploration_calls": 2,
+        "index_hit_rate": 0.0,
+        "exploration_tokens_estimate": 8000,
+        "stale_facts": 0,
+        "findings_saved": 0,
+        "guard_violations": [],
+        "out_of_plan_edits": [],
+    }
     assert document["utilization"]["value"] > 0
     kinds = {leak["kind"] for leak in document["leaks"]}
     assert {"repeated_read", "test_output", "amplification"} <= kinds

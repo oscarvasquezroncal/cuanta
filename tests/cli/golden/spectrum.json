@@ -7,6 +7,17 @@
     "value": 0.9
   },
   "imported": {},
+  "index": {
+    "exploration_calls": 2,
+    "exploration_tokens_estimate": 8000,
+    "findings_saved": 0,
+    "guard_violations": [],
+    "index_calls": 0,
+    "index_hit_rate": 0.0,
+    "out_of_plan_edits": [],
+    "raw_reads": 2,
+    "stale_facts": 0
+  },
   "leaks": [
     {
       "agent": "tester",

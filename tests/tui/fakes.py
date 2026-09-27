@@ -33,6 +33,7 @@ from cuanta.application.mandate_flow import (
     MandateSetup,
     resolve_budget,
 )
+from cuanta.application.map import MapFile, MapStatus
 from cuanta.application.models import CatalogView, ProbeOutcome
 from cuanta.application.new_files import NewFilePair
 from cuanta.application.results import ResultView, RunFile
@@ -51,6 +52,7 @@ from cuanta.domain.assistant import (
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.capsules import Level
 from cuanta.domain.change_plan import ChangePlan
+from cuanta.domain.code_index import HandlingCard, IndexRow, IndexStatus, SearchHit
 from cuanta.domain.config import Config
 from cuanta.domain.detection import (
     Detection,
@@ -708,6 +710,63 @@ class FakeServices:
             Selection(since=ALL_SESSIONS) if run_id == ALL_IMPORTED else Selection(run=run_id)
         )
         return SpectrumQuery(ledger, load_prices()).run(selection)
+
+    def map_status(self, rebuild: bool = False) -> MapStatus:
+        self.calls.append("map_rebuild" if rebuild else "map_status")
+        return MapStatus(IndexStatus(2, coverage=0.9, updated_at=FIXED_TIME), 1)
+
+    def map_search(self, query: str) -> tuple[SearchHit, ...]:
+        self.calls.append("map_search")
+        if not query.strip():
+            return ()
+        return (
+            SearchHit(
+                "src/shop/cart.py",
+                4.3,
+                ("cart", "checkout"),
+                ("src/shop/page.py -> src/shop/cart.py (imports)",),
+                ("src/shop/cart.py:1-2",),
+                0.5,
+                ("matched: cart, checkout", "facts: src/shop/cart.py:1-2"),
+            ),
+        )
+
+    def map_file(self, path: str) -> MapFile:
+        self.calls.append("map_file")
+        if path != "src/shop/cart.py":
+            raise ValueError("The file is not indexed")
+        fresh = IndexRow(
+            "fresh",
+            path,
+            "current",
+            "agent-note:cart.py:1-2",
+            "Checkout totals",
+            1,
+            2,
+            "anchor:current",
+            "note",
+        )
+        stale = replace(fresh, id="stale", text="Old selector", stale=True)
+        return MapFile(
+            HandlingCard(
+                path,
+                path + " | code\nPurpose Checkout totals\nRisk fan-in=1 centrality=1 exports=0",
+                24,
+                "code",
+                "Checkout totals",
+            ),
+            (
+                IndexRow(
+                    "edge", "src/shop/page.py", "current", "ast", target=path, relation="imports"
+                ),
+            ),
+            (fresh,),
+            (stale,),
+        )
+
+    def map_revalidate(self) -> MapStatus:
+        self.calls.append("map_revalidate")
+        return MapStatus(IndexStatus(2, coverage=0.9, updated_at=FIXED_TIME), 1)
 
     def import_sessions(self) -> dict[str, int]:
         self.imports += 1
