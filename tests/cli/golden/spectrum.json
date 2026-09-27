@@ -1,4 +1,270 @@
 {
+  "anatomy": {
+    "agents": [
+      {
+        "agent": "main",
+        "phases": [
+          {
+            "phase": "start",
+            "totals": {
+              "cache_read": 20000,
+              "cache_write": 3000,
+              "cost_usd": 0.4,
+              "fresh_input": 4000,
+              "output": 800,
+              "reasoning": 0,
+              "requests": 1
+            }
+          },
+          {
+            "phase": "exploration",
+            "totals": {
+              "cache_read": 56000,
+              "cache_write": 0,
+              "cost_usd": 0.30000000000000004,
+              "fresh_input": 1500,
+              "output": 700,
+              "reasoning": 0,
+              "requests": 2
+            }
+          },
+          {
+            "phase": "writing",
+            "totals": {
+              "cache_read": 0,
+              "cache_write": 0,
+              "cost_usd": 0.0,
+              "fresh_input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "requests": 0
+            }
+          },
+          {
+            "phase": "handoff",
+            "totals": {
+              "cache_read": 0,
+              "cache_write": 0,
+              "cost_usd": 0.0,
+              "fresh_input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "requests": 0
+            }
+          }
+        ],
+        "totals": {
+          "cache_read": 76000,
+          "cache_write": 3000,
+          "cost_usd": 0.7000000000000001,
+          "fresh_input": 5500,
+          "output": 1500,
+          "reasoning": 0,
+          "requests": 3
+        }
+      },
+      {
+        "agent": "tester",
+        "phases": [
+          {
+            "phase": "start",
+            "totals": {
+              "cache_read": 10000,
+              "cache_write": 500,
+              "cost_usd": 0.2,
+              "fresh_input": 2000,
+              "output": 300,
+              "reasoning": 0,
+              "requests": 1
+            }
+          },
+          {
+            "phase": "exploration",
+            "totals": {
+              "cache_read": 0,
+              "cache_write": 0,
+              "cost_usd": 0.0,
+              "fresh_input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "requests": 0
+            }
+          },
+          {
+            "phase": "writing",
+            "totals": {
+              "cache_read": 0,
+              "cache_write": 0,
+              "cost_usd": 0.0,
+              "fresh_input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "requests": 0
+            }
+          },
+          {
+            "phase": "handoff",
+            "totals": {
+              "cache_read": 0,
+              "cache_write": 0,
+              "cost_usd": 0.0,
+              "fresh_input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "requests": 0
+            }
+          }
+        ],
+        "totals": {
+          "cache_read": 10000,
+          "cache_write": 500,
+          "cost_usd": 0.2,
+          "fresh_input": 2000,
+          "output": 300,
+          "reasoning": 0,
+          "requests": 1
+        }
+      }
+    ],
+    "events": [
+      {
+        "agent": "main",
+        "cost_usd": 0.4,
+        "event_id": 1,
+        "phase": "start",
+        "run_id": "01KFIXTURERUN0000000000000",
+        "session_id": "s1",
+        "tokens": 27800,
+        "totals": {
+          "cache_read": 20000,
+          "cache_write": 3000,
+          "cost_usd": 0.4,
+          "fresh_input": 4000,
+          "output": 800,
+          "reasoning": 0,
+          "requests": 1
+        },
+        "ts": "2026-01-05T10:00:00Z"
+      },
+      {
+        "agent": "main",
+        "cost_usd": 0.2,
+        "event_id": 3,
+        "phase": "exploration",
+        "run_id": "01KFIXTURERUN0000000000000",
+        "session_id": "s1",
+        "tokens": 27500,
+        "totals": {
+          "cache_read": 26000,
+          "cache_write": 0,
+          "cost_usd": 0.2,
+          "fresh_input": 1000,
+          "output": 500,
+          "reasoning": 0,
+          "requests": 1
+        },
+        "ts": "2026-01-05T10:01:00Z"
+      },
+      {
+        "agent": "tester",
+        "cost_usd": 0.2,
+        "event_id": 6,
+        "phase": "start",
+        "run_id": "01KFIXTURERUN0000000000000",
+        "session_id": "s1",
+        "tokens": 12800,
+        "totals": {
+          "cache_read": 10000,
+          "cache_write": 500,
+          "cost_usd": 0.2,
+          "fresh_input": 2000,
+          "output": 300,
+          "reasoning": 0,
+          "requests": 1
+        },
+        "ts": "2026-01-05T10:03:00Z"
+      },
+      {
+        "agent": "main",
+        "cost_usd": 0.1,
+        "event_id": 8,
+        "phase": "exploration",
+        "run_id": "01KFIXTURERUN0000000000000",
+        "session_id": "s1",
+        "tokens": 30700,
+        "totals": {
+          "cache_read": 30000,
+          "cache_write": 0,
+          "cost_usd": 0.1,
+          "fresh_input": 500,
+          "output": 200,
+          "reasoning": 0,
+          "requests": 1
+        },
+        "ts": "2026-01-05T10:05:00Z"
+      }
+    ],
+    "heuristic": "Exclusive request phases; writing compares output with fresh input plus cache write, excluding cache read. Handoff matches a closed child window to the next parent request when cache write is within 50% of final child output plus 256 wrapper tokens. These are observed heuristics, not causal token attribution.",
+    "phases": [
+      {
+        "phase": "start",
+        "totals": {
+          "cache_read": 30000,
+          "cache_write": 3500,
+          "cost_usd": 0.6000000000000001,
+          "fresh_input": 6000,
+          "output": 1100,
+          "reasoning": 0,
+          "requests": 2
+        }
+      },
+      {
+        "phase": "exploration",
+        "totals": {
+          "cache_read": 56000,
+          "cache_write": 0,
+          "cost_usd": 0.30000000000000004,
+          "fresh_input": 1500,
+          "output": 700,
+          "reasoning": 0,
+          "requests": 2
+        }
+      },
+      {
+        "phase": "writing",
+        "totals": {
+          "cache_read": 0,
+          "cache_write": 0,
+          "cost_usd": 0.0,
+          "fresh_input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "requests": 0
+        }
+      },
+      {
+        "phase": "handoff",
+        "totals": {
+          "cache_read": 0,
+          "cache_write": 0,
+          "cost_usd": 0.0,
+          "fresh_input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "requests": 0
+        }
+      }
+    ],
+    "totals": {
+      "cache_read": 86000,
+      "cache_write": 3500,
+      "cost_usd": 0.9,
+      "fresh_input": 7500,
+      "output": 1800,
+      "reasoning": 0,
+      "requests": 4
+    }
+  },
   "audit": [],
   "calibration": {},
   "cost": {
