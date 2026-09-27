@@ -288,6 +288,7 @@ Use `--help` on any command. Global `--plain` and `--json` control CLI output; `
 | `cuanta index [--rebuild] [--status]` | Build a deterministic source, style and documentation index, with symbols, directed imports, freshness and coverage; no model call |
 | `cuanta find <terms>` / `card <path>` / `impact <path>` / `facts [<path>] [--stale]` | Search with ranking reasons, bounded file cards, connected files and current facts or records awaiting revalidation; local by default |
 | `cuanta index --summaries` | Preview a Claude economy summary batch and its estimate; explicit `--yes` permits the shown capped spend; unchanged hashes reuse the cache |
+| `cuanta plan --for <request>` | Compile Edit, Read only, Protected and Verify sets locally; show confidence and exact writer deny rules without a model call |
 | `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--max-turns` for Claude, `--dry-run`, `--sandbox` to work in an isolated copy (`--keep` keeps the copy) |
 | `cuanta route --dry-run` | Show the routing plan for a request |
 | `cuanta runs list \| show \| open` | Stored runs and their reports, with the estimate shown at launch, the cap, the estimate error and the outcome |
