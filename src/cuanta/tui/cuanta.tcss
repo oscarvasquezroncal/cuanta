@@ -613,6 +613,12 @@ Screen.-single #agent-cards, Screen.-icons #agent-cards {
     text-overflow: ellipsis;
 }
 
+#metric-utilization .metric-note {
+    height: auto;
+    text-wrap: wrap;
+    text-overflow: fold;
+}
+
 #spectrum-tabs {
     height: auto;
     min-height: 16;

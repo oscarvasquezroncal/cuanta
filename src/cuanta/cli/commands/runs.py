@@ -230,6 +230,8 @@ def _load(container: "Container", run_id: str) -> "ResultView":
 
 
 def _show(session: Session, run_id: str, markdown: bool) -> "Document":
+    from dataclasses import asdict
+
     from cuanta.application.results import run_markdown
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Document, Hint, KeyValues, Line, MarkdownText, Verbatim
@@ -280,6 +282,11 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "sections": [section.key for section in view.sections],
         "overhead": overhead_payload(view.overhead) if view.overhead is not None else None,
         "trial": _trial_payload(view.trial),
+        "read_efficiency": {
+            **asdict(view.read_efficiency),
+            "read_count": view.read_efficiency.read_count,
+            "useful_count": view.read_efficiency.useful_count,
+        },
     }
     if markdown:
         text = run_markdown(view)

@@ -1438,3 +1438,16 @@ stale = "Hechos desactualizados: {count}"
 guard = "Ediciones de rutas protegidas: {count}"
 out_of_plan = "Ediciones fuera del plan: {count}"
 
+[read_efficiency]
+title = "Eficiencia de lecturas"
+label_v2 = "utilización de archivos v2"
+counts = "{useful} útiles / {read} archivos leídos"
+version_formula = "{version}: {formula}"
+formula_investigation = "archivos leídos y citados / archivos leídos"
+formula_code = "archivos leídos y (editados o citados) / archivos leídos"
+formula_v1 = "tokens útiles de herramientas / tokens totales de API"
+unknown = "Faltan observaciones para calcular la utilización."
+
+[msg.read_efficiency]
+no_reads = "No se observaron lecturas correctas de código fuente."
+missing_report = "El informe para contar los archivos citados no está disponible."

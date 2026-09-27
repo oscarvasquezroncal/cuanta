@@ -150,6 +150,7 @@ def _spectrum(
                 if utilization.value is not None
                 else f"n/a ({utilization.reason})",
             ),
+            ("utilization formula", utilization.formula),
             ("source", report.source),
         )
     )
@@ -340,6 +341,11 @@ def _payload(result: Any, view: Any, plan: bool, imported: dict[str, Any]) -> di
         "overhead": overhead_payload(result.overhead),
         "index": asdict(report.index),
         "anatomy": asdict(report.anatomy),
+        "read_efficiency": {
+            **asdict(report.read_efficiency),
+            "read_count": report.read_efficiency.read_count,
+            "useful_count": report.read_efficiency.useful_count,
+        },
         "audit": [
             {
                 "agent": audit.agent,
@@ -371,6 +377,9 @@ def _payload(result: Any, view: Any, plan: bool, imported: dict[str, Any]) -> di
             "value": None if utilization.value is None else round(utilization.value, 4),
             "useful_tokens": utilization.useful_tokens,
             "label": utilization.label,
+            "formula": utilization.formula,
+            "read_files": utilization.read_files,
+            "useful_files": utilization.useful_files,
             "reason": utilization.reason,
         },
         "tree": _branch_payload(report.tree),
