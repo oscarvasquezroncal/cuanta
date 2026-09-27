@@ -77,9 +77,13 @@ def related(files: list[Path], root: Path) -> list[str]:
     return sorted(selected)
 
 
-def run(paths: list[str]) -> int:
+def run(paths: list[str], snapshot_update: bool = False) -> int:
     report = Report("focus")
     try:
+        if snapshot_update and (
+            not paths or any(not path.replace("\\", "/").startswith("tests/tui/") for path in paths)
+        ):
+            raise ValueError("Snapshot updates require explicit TUI test paths")
         files = [ROOT / path for path in paths] if paths else changed(ROOT)
         expanded: list[Path] = []
         for path in files:
@@ -130,6 +134,7 @@ def run(paths: list[str]) -> int:
                     "-m",
                     "not live and not perf",
                     f"--junitxml={xml}",
+                    *(["--snapshot-update"] if snapshot_update and name == "related" else []),
                     *targets,
                 ),
                 xml=xml,
@@ -143,7 +148,9 @@ def run(paths: list[str]) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check changed files and their importing tests.")
     parser.add_argument("paths", nargs="*")
-    return run(parser.parse_args().paths)
+    parser.add_argument("--snapshot-update", action="store_true")
+    options = parser.parse_args()
+    return run(options.paths, options.snapshot_update)
 
 
 if __name__ == "__main__":

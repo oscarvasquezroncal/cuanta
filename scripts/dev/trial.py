@@ -68,6 +68,8 @@ def command(spec: Spec, trial: Trial) -> list[str]:
     ]
     if trial.cross_engine:
         arguments.extend(["--cross-engine", "--cross-budget-usd", str(trial.cap)])
+    if trial.simple:
+        arguments.append("--simple")
     for role in trial.role_models:
         arguments.extend(["--role-model", role])
     if trial.model:
@@ -118,6 +120,7 @@ def collect(report: Report, spec: Spec, trial: Trial, launch: dict[str, Any]) ->
         "cost_usd": actual,
         "cost_source": source,
         "estimate": run.get("estimate"),
+        "estimate_factor": run.get("estimate_factor"),
         "duration_s": duration,
         "turns": run.get("turns"),
         "max_turns": run.get("max_turns"),
