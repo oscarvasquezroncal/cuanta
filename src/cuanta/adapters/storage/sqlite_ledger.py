@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from cuanta.adapters.storage.migrations import LATEST_VERSION, MIGRATIONS
+from cuanta.adapters.storage.readonly_snapshot import closed_snapshot_uri
 from cuanta.domain.ledger import (
     Baseline,
     Capsule,
@@ -60,12 +61,20 @@ def _event(row: sqlite3.Row) -> LedgerEvent:
 
 
 class SqliteLedger:
-    def __init__(self, path: Path, *, read_only: bool = False) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False, immutable: bool = False) -> None:
+        if immutable and not read_only:
+            raise ValueError("An immutable ledger snapshot requires read_only=True")
         if not read_only:
             path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._lock = threading.Lock()
-        database = f"{path.resolve().as_uri()}?mode=ro" if read_only else path
+        database = (
+            closed_snapshot_uri(path, "ledger")
+            if immutable
+            else f"{path.resolve().as_uri()}?mode=ro"
+            if read_only
+            else path
+        )
         try:
             self._connection = sqlite3.connect(
                 database, uri=read_only, check_same_thread=False, timeout=30, isolation_level=None
@@ -87,6 +96,12 @@ class SqliteLedger:
                 raise ValueError(
                     f"read-only ledger schema {current} requires schema {LATEST_VERSION}"
                 )
+            if immutable:
+                try:
+                    self._connection.execute(f"SELECT {', '.join(RUN_COLUMNS)} FROM runs LIMIT 0")
+                except sqlite3.DatabaseError as error:
+                    self._connection.close()
+                    raise ValueError("immutable ledger run columns are incompatible") from error
             return
         self._retry(lambda: self._connection.execute("PRAGMA journal_mode=WAL"))
         self._connection.execute("PRAGMA synchronous=NORMAL")

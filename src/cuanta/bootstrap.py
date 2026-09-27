@@ -88,6 +88,7 @@ if TYPE_CHECKING:
     from cuanta.application.drafts import Drafts
     from cuanta.application.engine_run import EngineLauncher, LaunchSpec
     from cuanta.application.estimate import Estimate
+    from cuanta.application.file_costs import FileCostsQuery
     from cuanta.application.gateway import RunGateway
     from cuanta.application.home import HomeQuery
     from cuanta.application.index_read import IndexRead
@@ -1587,6 +1588,19 @@ class Container:
         from cuanta.domain.terminal import classify
 
         return classify(probe_terminal(), os.environ)
+
+    def file_costs_query(self) -> FileCostsQuery:
+        from cuanta.adapters.storage.sqlite_index import SqliteIndex
+        from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
+        from cuanta.application.file_costs import FileCostsQuery
+
+        state = self.cuanta_dir()
+        return FileCostsQuery(
+            lambda: SqliteIndex(state / "index.db", read_only=True),
+            lambda: SqliteLedger(state / "ledger.db", read_only=True, immutable=True),
+            self.clock.now_iso,
+            error_types=(OSError, ValueError, sqlite3.DatabaseError),
+        )
 
     def costs_query(self) -> CostsQuery:
         from cuanta.application.costs import CostsQuery
