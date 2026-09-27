@@ -7,6 +7,9 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- `models stats --files` reads existing closed snapshots for file/task/mix history priors
+  and retrospective known-cost allocation. Unknown prices, unallocated cost and stale or
+  estimated samples stay visible; the query creates, migrates and repairs no stores.
 - Result Consumption and Spectrum show read efficiency with an explicit file-based formula.
   Successful raw and Cuanta page reads count unique source files; investigations count cited
   reads and code work counts edited or cited reads. Saved sandbox aliases normalize to source

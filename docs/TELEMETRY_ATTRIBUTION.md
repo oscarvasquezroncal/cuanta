@@ -68,3 +68,22 @@ Source and recorded sandbox roots map absolute paths to relative source paths, i
 copies that were removed. External paths and prefix lookalikes are not basename-matched.
 Cross-role read efficiency includes observed child reads while legacy Spectrum token totals
 retain their selection scope. Missing pipeline reports preserve the v1 token heuristic.
+
+## File history and allocated cost
+
+`cuanta models stats --files` reads existing compatible closed index and ledger snapshots.
+It never creates either store, migrates a schema, repairs corruption, refreshes models or
+calls an engine. Missing, incompatible, linked or busy snapshots are visibly unavailable.
+Ordinary `models stats` keeps its existing behavior.
+
+The index owns task history and its existing 30-day half-life, outcome, retry and stale-anchor
+weights. No file-priors ledger migration exists. Each grouped attempt's known cost is allocated
+once across unique files with observed read/edit/cite history, using normalized existing
+history priors. Duplicate actions and cross-engine child roles cannot multiply the allocation.
+Rows group by file, task type and mix; cross-engine cost is not attributed to an individual
+role model. These retrospective allocations are heuristics, not measured or causal file cost.
+
+Unknown prices remain unavailable, with explicit unknown samples and known subtotals. Known
+cost with no usable history remains unallocated. The report conserves known total as allocated
+plus unallocated cost. Estimated-price and stale-history samples remain visible. Deleted or
+stale file history can still explain past allocation; it does not claim current source freshness.
