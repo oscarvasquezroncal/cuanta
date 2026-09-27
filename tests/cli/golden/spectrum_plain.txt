@@ -18,6 +18,15 @@ Stale facts: 0
 Protected-path edits: 0
 Edits outside the plan: 0
 
+cost anatomy (observed requests)
+phase        tokens  requests     cost
+-----------  ------  --------  -------
+start        40,600         2  $0.6000
+exploration  58,200         2  $0.3000
+writing           0         0  $0.0000
+handoff           0         0  $0.0000
+Exclusive request phases; writing compares output with fresh input plus cache write, excluding cache read. Handoff matches a closed child window to the next parent request when cache write is within 50% of final child output plus 256 wrapper tokens. These are observed heuristics, not causal token attribution.
+
 run 01KFIXTURERUN0000000000000 · mandate · HU-007  98.8K · 100.0%
   - main  86.0K · 87.0%
     - claude-opus  86.0K · 87.0%

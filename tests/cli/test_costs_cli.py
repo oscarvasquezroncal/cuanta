@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
-from cuanta.domain.ledger import Run
+from cuanta.domain.ledger import LedgerEvent, Run
 from tests.fakes import FakeRunner
 from tests.support import invoke
 
@@ -104,6 +104,64 @@ def test_costs_count_every_attempt_and_never_show_unknown_as_zero(
     assert "≥$1.20*" in table
     bad = invoke(["costs", "--since", "yesterday", "--project", str(tmp_path)])
     assert bad.exit_code == 1
+
+
+def test_costs_add_phase_medians_with_observed_request_coverage(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    _seed(tmp_path, _run("A", "bug", 1.0), _run("B", "bug", 2.0))
+    ledger = SqliteLedger(tmp_path / ".cuanta" / "ledger.db")
+    try:
+        ledger.add_events(
+            (
+                LedgerEvent(
+                    run_id="A",
+                    source="claude_code",
+                    session_id="A",
+                    agent="main",
+                    kind="api_request",
+                    ts="2025-12-20T10:00:00Z",
+                    cost_usd=0.1,
+                    input_tokens=100,
+                    output_tokens=20,
+                ),
+                LedgerEvent(
+                    run_id="A",
+                    source="claude_code",
+                    session_id="A",
+                    agent="main",
+                    kind="tool_result",
+                    ts="2025-12-20T10:00:05Z",
+                    tool_name="Read",
+                ),
+                LedgerEvent(
+                    run_id="A",
+                    source="claude_code",
+                    session_id="A",
+                    agent="main",
+                    kind="api_request",
+                    ts="2025-12-20T10:00:10Z",
+                    cost_usd=0.2,
+                    input_tokens=100,
+                    output_tokens=20,
+                ),
+            )
+        )
+    finally:
+        ledger.close()
+    result = invoke(["costs", "--json", "--project", str(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    fix = _row(payload, "phase_medians", "fix")
+    assert fix["covered_attempts"] == fix["missing_attempts"] == 1
+    assert fix["runs"] == 2
+    phases = fix["phases"]
+    assert isinstance(phases, list)
+    medians = {item["phase"]: item["median_cost_usd"] for item in phases}
+    assert medians == {"start": 0.1, "exploration": 0.2, "writing": 0.0, "handoff": 0.0}
+    assert payload["total"]["spend_usd"] == 3.0
+    human = invoke(["costs", "--project", str(tmp_path)])
+    assert "observed" in human.stdout and "covered" in human.stdout and "missing" in human.stdout
 
 
 def test_runs_accept_and_reject_record_outcomes_once(

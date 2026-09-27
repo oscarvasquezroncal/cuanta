@@ -54,6 +54,17 @@ def test_spectrum_json_contract(seeded: Path) -> None:
         + 200
     )
     assert totals["cost_usd"] == 0.9
+    anatomy = document["anatomy"]
+    assert anatomy["totals"]["requests"] == totals["requests"]
+    assert anatomy["totals"]["cost_usd"] == pytest.approx(0.9)
+    assert sum(item["totals"]["requests"] for item in anatomy["phases"]) == totals["requests"]
+    assert {item["phase"] for item in anatomy["phases"]} == {
+        "start",
+        "exploration",
+        "writing",
+        "handoff",
+    }
+    assert "raw" not in json.dumps(anatomy)
     assert document["utilization"]["label"] == "heuristic v1"
     assert document["index"] == {
         "index_calls": 0,

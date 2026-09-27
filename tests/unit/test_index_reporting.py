@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.adapters.system.workspace import LocalWorkspace
 from cuanta.application.index_reporting import run_index_metrics
@@ -132,6 +134,9 @@ def test_queries_aggregate_cross_role_exploration_with_unique_events_and_keep_us
     assert result.index.findings_saved == 4
     assert result.index.stale_facts == 2
     assert spectrum.report.totals.total == 105
+    assert result.anatomy == spectrum.report.anatomy
+    assert result.anatomy.totals.total == 310
+    assert result.anatomy.totals.cost_usd == pytest.approx(0.03)
     assert len(spectrum.events) == 2
 
 
