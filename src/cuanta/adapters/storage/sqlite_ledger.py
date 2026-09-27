@@ -60,15 +60,34 @@ def _event(row: sqlite3.Row) -> LedgerEvent:
 
 
 class SqliteLedger:
-    def __init__(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
+        if not read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._lock = threading.Lock()
-        self._connection = sqlite3.connect(
-            path, check_same_thread=False, timeout=30, isolation_level=None
-        )
+        database = f"{path.resolve().as_uri()}?mode=ro" if read_only else path
+        try:
+            self._connection = sqlite3.connect(
+                database, uri=read_only, check_same_thread=False, timeout=30, isolation_level=None
+            )
+        except sqlite3.DatabaseError as error:
+            if read_only:
+                raise ValueError("read-only ledger schema is unavailable") from error
+            raise
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA busy_timeout=30000")
+        if read_only:
+            try:
+                current = self.schema_version()
+            except (sqlite3.DatabaseError, TypeError, ValueError) as error:
+                self._connection.close()
+                raise ValueError("read-only ledger schema is missing or invalid") from error
+            if current != LATEST_VERSION:
+                self._connection.close()
+                raise ValueError(
+                    f"read-only ledger schema {current} requires schema {LATEST_VERSION}"
+                )
+            return
         self._retry(lambda: self._connection.execute("PRAGMA journal_mode=WAL"))
         self._connection.execute("PRAGMA synchronous=NORMAL")
         self._retry(self._migrate)

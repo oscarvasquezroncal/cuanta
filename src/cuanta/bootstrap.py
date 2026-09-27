@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import json
 import os
 import secrets
+import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -167,20 +169,74 @@ class Container:
         return LocalWorkspace(self.project)
 
     def index_service(self, rebuild: bool = False) -> IndexService:
+        from cuanta.adapters.graph.file_graph import graph_path
         from cuanta.adapters.graph.index_ast import AstIndexExtractor
         from cuanta.adapters.graph.index_graph import LocalIndexGraph
         from cuanta.adapters.storage.sqlite_index import SqliteIndex
+        from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
         from cuanta.adapters.system.index_inventory import LocalIndexInventory
+        from cuanta.adapters.system.index_knowledge import LocalIndexKnowledge
         from cuanta.application.code_index import IndexService
 
         index = SqliteIndex(self.project / ".cuanta" / "index.db", rebuild=rebuild)
+        inventory = LocalIndexInventory(self.project, frozenset(self.config.exclusions))
+        ledger = None
+        state = self.state_project()
+        ledger_path = graph_path(state, ".cuanta/ledger.db")
+        history_status = "missing"
+        if ledger_path is not None:
+            safe = all(
+                not os.path.lexists(state / relative) or graph_path(state, relative) is not None
+                for relative in (".cuanta/ledger.db-wal", ".cuanta/ledger.db-shm")
+            )
+            if safe:
+                try:
+                    ledger = SqliteLedger(ledger_path, read_only=True)
+                    history_status = "available"
+                except (OSError, ValueError, sqlite3.Error) as error:
+                    history_status = "unavailable:" + type(error).__name__
+            else:
+                history_status = "unavailable:linked-state"
+        elif os.path.lexists(state / ".cuanta/ledger.db"):
+            history_status = "unavailable:linked-state"
+        index.set_meta({"history_status": history_status})
+
+        def commands() -> tuple[str, ...]:
+            stack = self.detector().run(with_engines=False).stack
+            package = inventory.read("package.json")
+            try:
+                data = json.loads(package or "{}")
+                scripts = data.get("scripts", {}) if isinstance(data, dict) else {}
+            except ValueError:
+                scripts = {}
+            lint = (
+                f"{stack.package_manager or 'npm'} run lint"
+                if isinstance(scripts, dict) and isinstance(scripts.get("lint"), str)
+                else ""
+            )
+            return tuple(
+                dict.fromkeys(
+                    value
+                    for value in (
+                        stack.typecheck_command,
+                        lint,
+                        stack.build_command,
+                        stack.test_command,
+                    )
+                    if value
+                )
+            )
+
         return IndexService(
             index,
-            LocalIndexInventory(self.project, frozenset(self.config.exclusions)),
+            inventory,
             self.clock.now_iso,
             recovered=index.recovered,
             extractor=AstIndexExtractor(),
             graph=LocalIndexGraph(self.project, self.runner),
+            knowledge=LocalIndexKnowledge(self.project, self.state_project(), ledger),
+            verify_commands=commands,
+            close_knowledge=ledger.close if ledger else None,
         )
 
     def refresh_index(self) -> None:
