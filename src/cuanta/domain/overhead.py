@@ -283,6 +283,8 @@ def session_overhead(events: Sequence[LedgerEvent], prompt_chars: int) -> Sessio
         elif event.kind in MCP_KINDS:
             name = _text(values, SERVER_NAME) or "server"
             error = _text(values, SERVER_ERROR)
+            if _text(values, SERVER_STATUS) == "disconnected" and not error and name in servers:
+                continue
             duration = _number(values, DURATION) or event.duration_ms
             servers[name] = ServerConnection(name, _ok(values, error), error, duration)
         else:
