@@ -49,3 +49,5 @@ What does NOT belong here: rules about how to use a flag (rulebook), history of 
 | pytest `--max-worker-restart=0` | `pyproject.toml`, `pytest-xdist` | fail after a crashed worker instead of restarting it | yes |
 | `[tool.coverage.report] fail_under` | `pyproject.toml` | coverage floor on domain + application | no |
 | extra `web` | `pyproject.toml` | installs `textual-serve` for `cuanta ui --web` | no |
+| focus `--snapshot-update` | `scripts/dev/focus.py` | updates intended Textual snapshots only with explicit TUI test paths | no |
+| trial `simple` (TOML) | `scripts/dev/spec.py`, `trial.py` | runs small probes without requiring Forge agents; incompatible with cross-engine mode | no |

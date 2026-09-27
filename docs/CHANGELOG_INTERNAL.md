@@ -17,6 +17,18 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-09-27 — Cross-engine budget reservations and measured estimates
+- Shipped: proportional shares with a five-percent floor per active role, future-role reserves,
+  unused-share carry, complete pipeline timing and calibrated shape/depth history estimates.
+  Existing run metadata retains shape and calibration without a ledger migration. Team states
+  Windows Codex build limitations and routes a cross-engine tester to Claude.
+- Why: T1 exhausted the pipeline before later roles ran and understated total wall time.
+  The raw Claude count still includes its terminal limit result; the UI explains it.
+- Tried and rejected: inaccessible engine-created probe output is kept for recovery; no ACL
+  change or broader sandbox grants are used. A user-owned pre-existing output file made the
+  artifact readable. The Codex probe exceeded its remaining cap and no further probe ran.
+- Rule extracted: none. Sandbox collection errors preserve costs and block application.
+
 ## 2026-09-26 — Real costs you can see
 - Shipped: runs store the estimate shown at launch (low, high, source, samples) and the cap;
   every mandate and cross-engine pipeline gets an outcome (accepted, rejected, pending) through
