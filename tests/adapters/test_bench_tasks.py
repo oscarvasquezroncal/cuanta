@@ -89,6 +89,19 @@ def test_the_full_suite_adds_two_pinned_public_repos() -> None:
         assert len(task.source.sha256) == 64
 
 
+def test_index_suite_has_protected_bug_feature_and_refactor_tasks() -> None:
+    tasks = select(load_tasks(TASKS), "index")
+    assert {task.request.type for task in tasks} >= {"bug", "feature", "refactor"}
+    protected = next(task for task in tasks if task.name == "calc-protected")
+    assert "protected.py" in protected.request.out_of_scope
+    assert protected.files["protected.py"] == "VALUE = 7\n"
+
+
+def test_protected_index_task_is_solvable_without_editing_its_guard(tmp_path: Path) -> None:
+    task = next(task for task in load_tasks(TASKS) if task.name == "calc-protected")
+    _check_solvable(tmp_path, task)
+
+
 def test_parse_task_rejects_broken_documents() -> None:
     assert parse_task("name = ") is None
     assert parse_task('name = "x"\nfixture = "bugfix"\n') is None

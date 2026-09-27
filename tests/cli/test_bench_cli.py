@@ -95,3 +95,36 @@ def test_mini_bench_completes_with_the_fake_engine(tmp_path: Path, env: dict[str
     assert README_END in readme
     assert "| baseline | 1/5 |" in readme
     assert (tmp_path / "docs" / "bench" / "tokens.svg").is_file()
+
+
+def test_bench_rejects_an_unknown_index_mode(tmp_path: Path, env: dict[str, str]) -> None:
+    result = invoke(_args(tmp_path, "--index", "sometimes"), env=env)
+    assert result.exit_code != 0
+    assert "--index" in result.stdout + result.stderr
+
+
+@pytest.mark.timeout(90)
+def test_index_off_bench_uses_no_automatic_index(tmp_path: Path, env: dict[str, str]) -> None:
+    result = invoke(
+        _args(
+            tmp_path,
+            "--task",
+            "calc-add",
+            "--conditions",
+            "cuanta",
+            "--reps",
+            "1",
+            "--index",
+            "off",
+            "--yes",
+        ),
+        env=env,
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    document = json.loads(result.stdout)
+    assert document["index"] == "off"
+    assert len(document["runs"]) == 1
+    row = document["runs"][0]
+    assert row["index"] == "off" and row["index_calls"] == 0
+    assert row["accepted"] is True and row["guard_violations"] == []
+    assert "raw_reads" in row and "exploration_tokens_estimate" in row
