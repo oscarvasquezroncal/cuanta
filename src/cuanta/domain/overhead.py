@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from cuanta.domain.cache import FirstRequestCache, cache_message, cache_payload, first_request_cache
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, msg
-from cuanta.domain.report import CHARS_PER_TOKEN, ContextSplit, context_split
+from cuanta.domain.report import CHARS_PER_TOKEN, ContextSplit, agent_request, context_split
 
 HOOK_KINDS = frozenset({"hook_execution_complete", "hook_execution"})
 PLUGIN_KINDS = frozenset({"plugin_loaded"})
@@ -199,7 +199,7 @@ def startup_of(events: Sequence[LedgerEvent]) -> Startup | None:
     requests = [
         (_request_start(event, stamp), stamp, event)
         for event in events
-        if event.kind == FIRST_REQUEST and (stamp := _stamp(event.ts)) is not None
+        if agent_request(event) and (stamp := _stamp(event.ts)) is not None
     ]
     if not requests:
         return None

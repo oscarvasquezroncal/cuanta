@@ -24,6 +24,7 @@ PREAMBLE = "preamble"
 MIN_SECTIONS = 2
 CHARS_PER_TOKEN = 4
 FIRST_REQUEST_KINDS = frozenset({"api_request"})
+AUXILIARY_SOURCES = frozenset({"generate_session_title"})
 REPORTS_DIR = "docs/investigations"
 RUN_REPORTS_DIR = "docs/runs"
 SLUG_LIMIT = 48
@@ -219,8 +220,14 @@ def docs_path(task_type: str, title: str, day: date) -> str:
     return f"{folder}/{day.isoformat()}-{slug(title)}.md"
 
 
+def agent_request(event: LedgerEvent) -> bool:
+    return event.kind in FIRST_REQUEST_KINDS and not (
+        event.query_source in AUXILIARY_SOURCES or event.agent in AUXILIARY_SOURCES
+    )
+
+
 def first_request_event(events: Sequence[LedgerEvent]) -> LedgerEvent | None:
-    requests = (event for event in events if event.kind in FIRST_REQUEST_KINDS)
+    requests = (event for event in events if agent_request(event))
     return min(requests, key=lambda event: (event.ts, event.id), default=None)
 
 
