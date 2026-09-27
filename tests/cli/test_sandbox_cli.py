@@ -359,3 +359,48 @@ def test_a_run_that_changes_the_project_node_modules_stops_everything(
     applied = invoke(["runs", "apply", run_id, "--yes", "--json", "--project", str(root)], env=env)
     assert applied.exit_code == 1
     assert "npm ci" in json.loads(applied.stdout)["error"]["hint"]
+
+
+def test_accepting_a_sandbox_run_only_marks_it(tmp_path: Path, env: dict[str, str]) -> None:
+    root = _project(tmp_path)
+    payload = _sandbox_fix(root, env)
+    run_id = str(payload["run_id"])
+    accepted = invoke(["runs", "accept", run_id, "--project", str(root)], env=env)
+    assert accepted.exit_code == 0, accepted.stdout
+    assert f"cuanta runs apply {run_id}" in accepted.stdout
+    assert (root / TARGET).read_bytes() == BROKEN.encode()
+    assert _outcome(root, run_id) == ("sandbox", "accepted")
+    applied = invoke(["runs", "apply", run_id, "--yes", "--project", str(root)], env=env)
+    assert applied.exit_code == 0, applied.stdout
+    assert (root / TARGET).read_bytes() == FIXED.encode()
+    shown = invoke(["runs", "show", run_id, "--project", str(root)], env=env).stdout
+    assert "isolated copy" in shown and shown.count("outcome") == 1
+
+
+def test_rejecting_a_kept_sandbox_run_points_at_the_copy(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    root = _project(tmp_path)
+    payload = _sandbox_fix(root, env, "--keep")
+    run_id = str(payload["run_id"])
+    rejected = invoke(
+        ["runs", "reject", run_id, "--reason", "not needed", "--json", "--project", str(root)],
+        env=env,
+    )
+    assert rejected.exit_code == 0, rejected.stdout
+    data = json.loads(rejected.stdout)
+    assert data["kept_copy"] and data["reason"] == "not needed"
+    assert _outcome(root, run_id) == ("sandbox", "rejected")
+
+
+def test_accepting_after_the_project_changed_says_nothing_was_applied(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    root = _project(tmp_path)
+    payload = _sandbox_fix(root, env)
+    run_id = str(payload["run_id"])
+    (root / TARGET).write_bytes(b"def add(left, right):\n    return 0\n")
+    accepted = invoke(["runs", "accept", run_id, "--project", str(root)], env=env)
+    assert accepted.exit_code == 0, accepted.stdout
+    assert "nothing was applied; the project changed since the copy" in accepted.stdout
+    assert TARGET in accepted.stdout

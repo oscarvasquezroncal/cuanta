@@ -303,6 +303,64 @@ def test_ledger(snap_compare: SnapCompare, theme: str, size: tuple[int, int]) ->
     assert snap_compare(app_for(theme), terminal_size=size, run_before=ledger)
 
 
+async def home_costs(pilot: Pilot[None]) -> None:
+    await loaded(pilot)
+    pilot.app.query_one("#costs-card").scroll_visible(animate=False, top=True)
+    await loaded(pilot)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+@pytest.mark.parametrize("size", SIZES, ids=lambda size: f"{size[0]}x{size[1]}")
+def test_home_costs(snap_compare: SnapCompare, theme: str, size: tuple[int, int]) -> None:
+    assert snap_compare(app_for(theme), terminal_size=size, run_before=home_costs)
+
+
+def test_home_costs_in_spanish(snap_compare: SnapCompare) -> None:
+    app = CuantaApp(
+        FakeServices(), "es", "calico-dark", motion=False, environ=MODERN, clock=lambda: 0.0
+    )
+    assert snap_compare(app, terminal_size=(120, 36), run_before=home_costs)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+@pytest.mark.parametrize("size", SIZES, ids=lambda size: f"{size[0]}x{size[1]}")
+def test_ledger_costs(snap_compare: SnapCompare, theme: str, size: tuple[int, int]) -> None:
+    async def costs(pilot: Pilot[None]) -> None:
+        await loaded(pilot)
+        await pilot.press("5")
+        view = pilot.app.query_one(LedgerView)
+        await loaded(pilot)
+        await pilot.click("#ledger-costs-toggle")
+        table = view.query_one("#ledger-costs-table", DataTable)
+        for _ in range(200):
+            if table.row_count:
+                break
+            await pilot.pause(0.02)
+        await loaded(pilot)
+
+    assert snap_compare(app_for(theme), terminal_size=size, run_before=costs)
+
+
+def test_ledger_costs_in_spanish(snap_compare: SnapCompare) -> None:
+    async def costs(pilot: Pilot[None]) -> None:
+        await loaded(pilot)
+        await pilot.press("5")
+        view = pilot.app.query_one(LedgerView)
+        await loaded(pilot)
+        await pilot.click("#ledger-costs-toggle")
+        table = view.query_one("#ledger-costs-table", DataTable)
+        for _ in range(200):
+            if table.row_count:
+                break
+            await pilot.pause(0.02)
+        await loaded(pilot)
+
+    app = CuantaApp(
+        FakeServices(), "es", "calico-dark", motion=False, environ=MODERN, clock=lambda: 0.0
+    )
+    assert snap_compare(app, terminal_size=(120, 36), run_before=costs)
+
+
 async def init_finished(pilot: Pilot[None]) -> None:
     await loaded(pilot)
     await pilot.press("i")

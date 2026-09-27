@@ -51,6 +51,15 @@ def test_exports_preserve_unknown_costs_and_real_zero(cost: float | None) -> Non
         assert row["cost_usd"] == ("n/a" if cost is None else str(cost))
 
 
+def test_exports_keep_unrecorded_estimates_and_caps_unknown() -> None:
+    ledger = MemoryLedger()
+    ledger.add_run(Run("R", "mandate", cost_usd=0.4))
+    ledger.add_run(Run("S", "mandate", estimate_low=0.0, estimate_high=0.5, cap_usd=0.0))
+    rows = {row["id"]: row for row in csv.DictReader(io.StringIO(export(ledger, "csv", "runs")))}
+    assert (rows["R"]["estimate_low"], rows["R"]["cap_usd"]) == ("n/a", "n/a")
+    assert (rows["S"]["estimate_low"], rows["S"]["cap_usd"]) == ("0.0", "0.0")
+
+
 def test_free_reported_usage_is_not_repriced_and_missing_usage_stays_unknown() -> None:
     table = load_prices()
     free = LedgerEvent(model="gpt-5.5", input_tokens=1_000_000, cost_usd=0.0)

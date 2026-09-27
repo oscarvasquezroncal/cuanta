@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -322,10 +323,80 @@ def test_run_outcome_is_recorded_once_with_its_time(ledger: Ledger) -> None:
 
 
 def test_run_outcome_survives_a_later_full_row_update(ledger: Ledger) -> None:
-    ledger.add_run(Run(id="S", kind="mandate", mode="sandbox", status="ok"))
-    ledger.set_run_outcome("S", "rejected", "2026-09-26T10:00:00+00:00")
+    stale = Run(id="S", kind="mandate", mode="sandbox", status="running")
+    ledger.add_run(stale)
+    assert ledger.set_run_outcome("S", "rejected", "2026-09-26T10:00:00+00:00", "too broad")
+    ledger.update_run(replace(stale, status="ok", cost_usd=0.5))
     stored = ledger.get_run("S")
-    assert stored is not None and stored.outcome == "rejected"
+    assert stored is not None
+    assert (stored.status, stored.cost_usd) == ("ok", 0.5)
+    assert (stored.outcome, stored.outcome_reason) == ("rejected", "too broad")
+    assert not ledger.set_run_outcome("S", "accepted", "2026-09-26T11:00:00+00:00")
+
+
+def test_update_run_inserts_a_run_it_has_not_seen(ledger: Ledger) -> None:
+    ledger.update_run(Run(id="N", kind="loop", status="ok"))
+    stored = ledger.get_run("N")
+    assert stored is not None and stored.status == "ok"
+
+
+def test_estimates_caps_and_reasons_round_trip(ledger: Ledger) -> None:
+    run = Run(
+        id="E",
+        kind="mandate",
+        estimate_low=0.4,
+        estimate_high=0.9,
+        estimate_source="history",
+        estimate_samples=5,
+        cap_usd=0.0,
+    )
+    ledger.add_run(run)
+    assert ledger.get_run("E") == run
+    ledger.add_run(Run(id="P", kind="mandate", estimate_source="none"))
+    plain = ledger.get_run("P")
+    assert plain is not None
+    assert (plain.estimate_low, plain.estimate_high, plain.cap_usd) == (None, None, None)
+
+
+def test_runs_since_keeps_runs_started_in_the_window(ledger: Ledger) -> None:
+    ledger.add_run(Run(id="A", kind="mandate", started_at="2026-08-01T00:00:00Z"))
+    ledger.add_run(Run(id="B", kind="mandate", started_at="2026-09-01T00:00:00Z"))
+    ledger.add_run(Run(id="C", kind="cross", started_at="2026-09-02T00:00:00Z"))
+    assert [run.id for run in ledger.runs(since="2026-09-01T00:00:00Z")] == ["C", "B"]
+    assert [run.id for run in ledger.runs(kind="cross", since="2026-08-01T00:00:00Z")] == ["C"]
+
+
+def test_migration_adds_estimate_cap_and_reason_columns_as_unknown(tmp_path: Path) -> None:
+    import sqlite3
+    from contextlib import closing
+
+    from cuanta.adapters.storage.migrations import MIGRATIONS
+
+    path = tmp_path / "v11.db"
+    with closing(sqlite3.connect(path)) as connection, connection:
+        for version, statements in enumerate(MIGRATIONS[:11], start=1):
+            connection.executescript(statements)
+            connection.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
+        connection.execute(
+            "INSERT INTO runs(id, kind, status, cost_usd, outcome) "
+            "VALUES ('R', 'mandate', 'ok', 0.3, 'accepted')"
+        )
+    upgraded = SqliteLedger(path)
+    try:
+        assert upgraded.schema_version() == LATEST_VERSION
+        run = upgraded.get_run("R")
+        assert run is not None
+        assert (run.cost_usd, run.outcome) == (0.3, "accepted")
+        assert (
+            run.estimate_low,
+            run.estimate_high,
+            run.estimate_source,
+            run.estimate_samples,
+            run.cap_usd,
+            run.outcome_reason,
+        ) == (None, None, "", 0, None, "")
+    finally:
+        upgraded.close()
 
 
 def test_migration_adds_mode_and_outcome_columns_with_empty_defaults(tmp_path: Path) -> None:
