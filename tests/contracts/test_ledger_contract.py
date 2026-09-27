@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import replace
@@ -142,6 +143,68 @@ def test_sqlite_uses_wal_and_migrates_idempotently(tmp_path: Path) -> None:
     assert second.schema_version() == LATEST_VERSION
     second.close()
     assert (tmp_path / "l.db-wal").exists() or path.exists()
+
+
+def test_read_only_ledger_reads_current_runs_events_and_snapshots_without_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "ledger.db"
+    run = Run(id="read-only", kind="mandate", status="ok")
+    event = LedgerEvent(run_id=run.id, kind="tool_result", file_path="src/cart.py")
+    snapshot = Snapshot(run.id, "start", "src/cart.py", "original-hash")
+    with closing(SqliteLedger(path)) as writer:
+        writer.add_run(run)
+        writer.add_events([event])
+        writer.add_snapshots([snapshot])
+    before = path.read_bytes()
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
+        schema = connection.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall()
+    with closing(SqliteLedger(path, read_only=True)) as reader:
+        assert reader.schema_version() == LATEST_VERSION
+        assert reader.runs() == (run,)
+        assert reader.get_run(run.id) == run
+        events = reader.events(EventQuery(run_id=run.id))
+        assert len(events) == 1 and replace(events[0], id=0) == event
+        assert reader.snapshots(run.id, "start") == (snapshot,)
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            reader.add_run(Run(id="forbidden", kind="mandate"))
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            reader.add_events([event])
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            reader.add_snapshots([Snapshot(run.id, "start", "new.py", "new")])
+        assert reader.runs() == (run,)
+    assert path.read_bytes() == before
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
+        assert (
+            connection.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall()
+            == schema
+        )
+
+
+def test_read_only_ledger_does_not_create_a_missing_database_or_parent(tmp_path: Path) -> None:
+    path = tmp_path / "missing" / "ledger.db"
+    with pytest.raises(ValueError, match=r"read-only.*schema"):
+        SqliteLedger(path, read_only=True)
+    assert not path.exists()
+    assert not path.parent.exists()
+
+
+@pytest.mark.parametrize("version", [0, LATEST_VERSION - 1, LATEST_VERSION + 1])
+def test_read_only_ledger_rejects_missing_old_or_future_schemas_without_changes(
+    tmp_path: Path, version: int
+) -> None:
+    path = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(path)) as connection:
+        if version:
+            connection.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+            connection.execute("INSERT INTO schema_version VALUES (?)", (version,))
+            connection.commit()
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match=r"read-only.*schema"):
+        SqliteLedger(path, read_only=True)
+    assert path.read_bytes() == before
+    path.unlink()
 
 
 def test_migration_adds_turn_columns_with_zero_defaults(tmp_path: Path) -> None:
