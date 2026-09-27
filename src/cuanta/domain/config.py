@@ -40,6 +40,7 @@ class Config:
     instinct_share_paths: bool = False
     read_discipline: bool = False
     index_tools: bool = False
+    pipeline_index_tools: bool = True
     index_enabled: bool = True
     pack_enabled: bool = True
 
@@ -59,6 +60,7 @@ KEY_MAP: dict[str, str] = {
     "runs.session": "run_session",
     "runs.read_discipline": "read_discipline",
     "runs.index_tools": "index_tools",
+    "runs.pipeline_index_tools": "pipeline_index_tools",
     "runs.index_enabled": "index_enabled",
     "runs.pack_enabled": "pack_enabled",
     "git.workflow": "git_workflow",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -105,12 +105,16 @@ class TrialRecorder:
         payload: Mapping[str, object],
         kept: bool,
         state: Sequence[str] = (),
+        excluded: Collection[str] = (),
     ) -> Trial:
         folder = trial_folder(run_id)
         items: list[TrialChange] = []
         patches = []
         missing: list[str] = []
+        skipped = frozenset(excluded)
         for change in self._changes(copy):
+            if change.path in skipped:
+                continue
             after = self._sandbox.read(copy, change.path) if change.after is not None else None
             before = self._base(change) if change.before is not None else None
             if after is not None:
@@ -350,10 +354,11 @@ class SandboxRunner:
         payload: Mapping[str, object],
         keep: bool,
         progress: ProgressSink,
+        excluded: Collection[str] = (),
     ) -> Trial:
         state = self._state(copy, run_id)
         trial = self._recorder.record(
-            copy, run_id, request, engine, report_text, payload, keep, state
+            copy, run_id, request, engine, report_text, payload, keep, state, excluded
         )
         folder = trial_folder(run_id)
         if trial.changes:
@@ -516,7 +521,17 @@ class SandboxRunner:
                 first = report.steps[0].run_id
                 text = cross_text(report.steps)
                 try:
-                    trial = self._record(copy, first, request, "cross", text, extra, keep, progress)
+                    trial = self._record(
+                        copy,
+                        first,
+                        request,
+                        "cross",
+                        text,
+                        extra,
+                        keep,
+                        progress,
+                        report.verification_outputs,
+                    )
                     if self._after_record is not None:
                         self._after_record(copy, first)
                 except OSError as error:

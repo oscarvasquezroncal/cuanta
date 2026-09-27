@@ -17,6 +17,7 @@ from cuanta.domain.engine import (
 from cuanta.domain.sandbox import STATE_DIR, STATE_ROOT_ENV
 
 WRITABLE_ROOTS = "sandbox_workspace_write.writable_roots="
+INDEX_SERVER = "mcp_servers.cuanta"
 SANDBOX_CONFIG = (
     'approval_policy="never"',
     f"{WRITABLE_ROOTS}[]",
@@ -127,6 +128,21 @@ class CodexEngine(StreamingEngine):
         for setting in SANDBOX_CONFIG:
             chosen = roots if roots and setting.startswith(WRITABLE_ROOTS) else setting
             command.extend(["--config", chosen])
+        if request.index_server:
+            server, *arguments = request.index_server
+            command.extend(
+                [
+                    "--config",
+                    f"{INDEX_SERVER}.command={json.dumps(server, ensure_ascii=False)}",
+                    "--config",
+                    f"{INDEX_SERVER}.args={json.dumps(arguments, ensure_ascii=False)}",
+                    "--config",
+                    f"{INDEX_SERVER}.startup_timeout_sec=30",
+                ]
+            )
+            if state:
+                shared = json.dumps(state, ensure_ascii=False)
+                command.extend(["--config", f"{INDEX_SERVER}.env={{{STATE_ROOT_ENV}={shared}}}"])
         if request.temporary_copy:
             command.append("--skip-git-repo-check")
         if request.model:

@@ -21,7 +21,7 @@ from cuanta.domain.ledger import Run
 from cuanta.domain.messages import Message, msg
 from cuanta.domain.pricing import Price, PriceTable, dollars
 from cuanta.domain.real_costs import Attempt, attempts
-from cuanta.domain.role_budgets import allocate_budget
+from cuanta.domain.role_budgets import allocate_budget, history_weights
 from cuanta.domain.routing import CostRange, Role, cost_range
 
 Estimator = Callable[[RoutePlan | None, str, str], RunEstimate]
@@ -131,6 +131,29 @@ def role_cost(price: Price | None, chosen: DepthProfile, role: Role) -> RoleCost
     return RoleCost(role, context_cost(price, lighter), context_cost(price, chosen))
 
 
+def role_history(
+    plan: RoutePlan, runs: Sequence[Run], task_type: str, depth: str
+) -> dict[Role, list[float]]:
+    samples: dict[Role, list[float]] = {}
+    for route in plan.routes:
+        if route.model is None or route.role is Role.ORCHESTRATOR:
+            continue
+        names = {route.model.resolved, route.model.id} - {""}
+        samples[route.role] = [
+            run.cost_usd
+            for run in runs
+            if run.kind == "cross"
+            and run.scope == route.role.value
+            and run.engine == route.engine
+            and run.model in names
+            and run.task_type == task_type
+            and (run.depth or DEFAULT_DEPTH.value) == (depth or DEFAULT_DEPTH.value)
+            and run.status == "ok"
+            and run.cost_usd is not None
+        ]
+    return samples
+
+
 def estimate(
     plan: RoutePlan,
     runs: Sequence[Run],
@@ -147,16 +170,18 @@ def estimate(
     roles = tuple(role_cost(price, chosen, role) for role, price in priced.items())
     planned = _planned(priced, chosen)
     bounds = calibrated_bounds(similar, planned, runs, chosen.depth.value, shape, shapes)
-    budgets = allocate_budget(
-        {
-            cost.role: cost.high
-            for cost in roles
-            if cost.role is not Role.ORCHESTRATOR
-            and (route := plan.route(cost.role)) is not None
-            and route.model is not None
-        },
-        cap,
+    planned_costs: dict[Role, float | None] = {
+        cost.role: cost.high
+        for cost in roles
+        if cost.role is not Role.ORCHESTRATOR
+        and (route := plan.route(cost.role)) is not None
+        and route.model is not None
+    }
+    history = history_weights(
+        role_history(plan, runs, task_type, chosen.depth.value), planned_costs
     )
+    weights: Mapping[Role, float | None] = history if history is not None else planned_costs
+    budgets = allocate_budget(weights, cap)
     roles = tuple(replace(cost, share=budgets.get(cost.role, 0.0)) for cost in roles)
     displayed = bounds.high if bounds.source == CALIBRATED else planned
     message = (

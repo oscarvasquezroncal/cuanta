@@ -58,7 +58,7 @@ ENGLISH: dict[str, str] = {
         "Stopped because the engine did not report the step cost needed to enforce the budget."
     ),
     "engine.budget_stopped": "Stopped at the spend cap or recorded an over-cap result.",
-    "guarantee.row": "{name}: {status} · {detail}",
+    "guarantee.row": "{name}: {status} ({detail})",
     "guarantee.spend": "Spend cap",
     "guarantee.turns": "Turn limit",
     "guarantee.readonly": "Read-only",
@@ -431,14 +431,72 @@ ENGLISH: dict[str, str] = {
     "cross.budget": "the cross-engine budget is spent",
     "cross.role_budget": "{role} has no remaining reserved budget",
     "cross.share": "{role} budget share: ${cap}",
+    "route.pin_unknown": (
+        "{role} is pinned to {model}, which is not in the model catalog; run cuanta models"
+    ),
+    "route.pin_engine": (
+        "{role} is pinned to {model}, but this launch can only use {engines}; add --cross-engine "
+        "to mix engines"
+    ),
+    "route.pin_build": (
+        "{role} is pinned to {model}, but Codex cannot run builds on this Windows host (CX-09); "
+        "pin a Claude model or leave it unpinned"
+    ),
+    "route.pin_lost": "{role} is pinned to {model}, but the route chose another model",
+    "route.pins_rejected": "role pins cannot be honored",
+    "mix.claude_only": "Claude only",
+    "mix.claude_plans": "Claude plans, Codex writes",
+    "mix.codex_plans": "Codex plans, Claude writes",
+    "team.role": "{role}: {engine} {model}, share ${share}",
+    "team.role_unshared": "{role}: {engine} {model}",
+    "team.context_index": "Context: index tools and the anchored handoff chain",
+    "team.context_text": "Context: a text pack and the anchored handoff chain",
+    "team.warning": "Warning: {warning}",
+    "cross.salvaged": (
+        "{role} stopped at its budget share; cuanta saved a partial handoff and the next role "
+        "continues"
+    ),
+    "cross.partial_budget": (
+        "{role} stopped at its budget share and ${left} left cannot cover the next roles' ${need} "
+        "floors"
+    ),
+    "cross.optional_skipped": "{role} skipped: ${cap} left is below its ${floor} floor",
+    "cross.tester_skipped": (
+        "tester skipped: verification passed and ${cap} left is below its ${floor} floor"
+    ),
+    "cross.guard_role": (
+        "{role} changed protected files ({paths}); the pipeline stopped before the next role"
+    ),
+    "cross.verify": (
+        "verification after {role}: {passed} of {total} commands passed in {seconds}s, $0 model "
+        "spend"
+    ),
+    "cross.repair": "{role} gets one repair turn for the failing checks",
+    "cross.verify_handed": (
+        "verification still fails after the repair; the tester receives the results"
+    ),
+    "cross.unreadable": "Codex created files cuanta cannot read: {paths}",
+    "cross.prepared": (
+        "cuanta created {count} planned new files before the Codex writer so they stay readable"
+    ),
+    "cross.overrun": (
+        "{role} on {engine} spent ${cost} against its ${cap} share; the ${over} overrun comes out "
+        "of the remaining budget"
+    ),
+    "cross.native_cap": "{role} native cap ${cap}, {margin}% below its ${share} share",
+    "cross.verify_commands": "cuanta will run these checks after each writing role: {commands}",
+    "completion.complete": "complete",
+    "completion.complete_skipped": "complete, optional roles skipped",
+    "completion.partial": "partial",
+    "completion.failed": "failed",
     "sandbox.record_failed": (
         "sandbox changes could not be collected ({error}); copy kept, result cannot be applied"
     ),
     "route.build_unavailable": (
-        "Codex builds are unverified on this Windows host; tester stays on Claude"
+        "Codex cannot run builds on this Windows host (CX-09); tester stays on Claude"
     ),
     "guarantee.codex_builds": (
-        "Codex cannot verify npm/npx builds on this Windows host (CX-09 is open)"
+        "Codex cannot run builds on this Windows host; cuanta verifies instead"
     ),
     "cross.cost_unknown": (
         "the next role cannot start because a previous cost is unknown "

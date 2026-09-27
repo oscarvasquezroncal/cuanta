@@ -10,7 +10,7 @@ from cuanta.domain.code_index import IndexedFile, IndexRow, index_path
 from cuanta.domain.index_facts import revalidate_fact
 from cuanta.domain.spectrum import estimated_tokens
 
-_RANGE = re.compile(r"([1-9]\d*):([1-9]\d*)")
+_RANGE = re.compile(r"([1-9]\d*)[:-]([1-9]\d*)")
 _SYMBOL_RELATIONS = frozenset(
     {"function", "class", "method", "variable", "type", "component", "service", "store", "hook"}
 )
@@ -67,11 +67,11 @@ TOOLS: tuple[dict[str, object], ...] = (
     ),
     _descriptor(
         "page",
-        "Read at most 200 numbered lines by inclusive a:b range or one symbol. "
+        "Read at most 200 numbered lines by inclusive a:b (or a-b) range or one symbol. "
         "Long lines are clipped.",
         {
             "path": _STRING,
-            "lines": {"type": "string", "pattern": r"^[1-9]\d*:[1-9]\d*$"},
+            "lines": {"type": "string", "pattern": r"^[1-9]\d*[:-][1-9]\d*$"},
             "symbol": _STRING,
             "level": {"type": "string", "enum": ["L2"]},
         },
@@ -103,7 +103,7 @@ def _string(args: Mapping[str, object], name: str) -> str:
 def _range(value: str) -> tuple[int, int]:
     match = _RANGE.fullmatch(value)
     if match is None:
-        raise ValueError("Line ranges must use inclusive a:b syntax")
+        raise ValueError("Line ranges must use inclusive a:b or a-b syntax")
     start, end = int(match[1]), int(match[2])
     if end < start:
         raise ValueError("Line ranges must be ordered")
