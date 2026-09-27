@@ -66,6 +66,8 @@ What does NOT belong here: rules about how to use a flag (rulebook), history of 
 | `runs.index_enabled` | `domain/config.py`, `bootstrap.py` | controls automatic index refresh, context packs, learning and owned MCP loading; disabling it retains lexical change-plan protection and leaves explicit index commands available | no |
 | `cuanta bench run --index on\|off` | `cli/commands/bench.py`, `application/bench.py`, `domain/bench.py`, `bootstrap.py` | persists index mode for code and investigation tasks; baseline remains off; reports exploration estimates, raw reads, index calls, acceptance and actual protected or out-of-plan edits | no |
 | Map command palette / `g` | `tui/views/map.py`, `application/map.py`, `tui/commands.py` | local ranked search, handling cards, impact, fresh/stale facts, anchor revalidation and reversible Rebuild; indexed count, coverage, update time and semantic off are explicit; existing numeric navigation stays unchanged | no |
+| Result / Spectrum index metrics | `domain/index_metrics.py`, `application/index_reporting.py` | owned Cuanta exploration calls divided by observed indexed and Read/Grep/Glob calls; returned tokens are estimates distinct from API consumption; failed executed attempts count, note/handshake do not; provider mirrors and repeated events are deduplicated; guards/out-of-plan paths use final manifest evidence | no |
+| Automatic Map learning | `application/index_learning.py`, `bootstrap.py` | refresh report/history after final native metadata, sandbox recording and outcome changes; preserve copy notes only with verified source anchors, revalidate against the original source and retain changed facts as stale; reuse the index and readonly ledger history, with no duplicate priors store | no |
 
 `cuanta spectrum --json` adds an `anatomy` key with exclusive start, exploration,
 writing and handoff requests, per-agent totals and a heuristic description. Result
@@ -75,5 +77,13 @@ child roles; existing Spectrum totals and grouping retain their selection scope.
 observed priced requests, independently of the billed attempt totals. Missing events,
 unknown request prices or a shortfall against a known positive turn count exclude an
 attempt from all phase medians; an absent phase is zero only in a covered attempt.
-| Result / Spectrum index metrics | `domain/index_metrics.py`, `application/index_reporting.py` | owned Cuanta exploration calls divided by observed indexed and Read/Grep/Glob calls; returned tokens are estimates distinct from API consumption; failed executed attempts count, note/handshake do not; provider mirrors and repeated events are deduplicated; guards/out-of-plan paths use final manifest evidence | no |
-| Automatic Map learning | `application/index_learning.py`, `bootstrap.py` | refresh report/history after final native metadata, sandbox recording and outcome changes; preserve copy notes only with verified source anchors, revalidate against the original source and retain changed facts as stale; reuse the index and readonly ledger history, with no duplicate priors store | no |
+
+Spectrum and `runs show --json` also expose `read_efficiency`: unique successful source reads,
+cited/edited/useful paths, counts, availability and the exact formula. Investigations use
+cited files among observed reads divided by files read; code work uses edited or cited files
+among observed reads divided by files read. This file utilization v2 counts raw reads and
+`cuanta.page`, excluding failed/pending calls and search/card metadata. Source and saved sandbox
+copy roots normalize to the same logical paths. Missing pipeline reports, including historical
+unknown shapes, retain heuristic v1: useful tool tokens divided by total API tokens. Both
+versions display their formula. Missing read/report observations remain unavailable.
+

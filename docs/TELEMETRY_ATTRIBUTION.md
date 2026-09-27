@@ -54,3 +54,17 @@ price, or fewer observations than a known positive role turn count exclude the a
 This conservative turn check can exclude otherwise valid captures because provider turn
 semantics vary. Coverage is displayed; missing costs never become zero. Billed economic
 attempt totals, outcomes and cost per accepted change remain separate and unchanged.
+
+Read efficiency counts unique successful source files from raw Read, View, NotebookRead and
+Cuanta page calls. Pending, denied and failed observations, searches and handling cards do
+not count as source reads. Repeated calls, line ranges and owned/native mirrors cannot increase
+the file count. Citations reuse the report's file:line parser and deduplicate paths; the parser
+scans the report text, including fenced examples, and does not validate a cited line's truth.
+
+For investigations, the numerator is observed reads cited by the report. For code work it is
+observed reads either edited or cited. Unread citations or edits cannot inflate the ratio above
+one. Missing reports differ from observed empty reports; a zero denominator stays unavailable.
+Source and recorded sandbox roots map absolute paths to relative source paths, including saved
+copies that were removed. External paths and prefix lookalikes are not basename-matched.
+Cross-role read efficiency includes observed child reads while legacy Spectrum token totals
+retain their selection scope. Missing pipeline reports preserve the v1 token heuristic.
