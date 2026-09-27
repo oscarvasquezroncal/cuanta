@@ -21,10 +21,17 @@ from cuanta.application.instinct_view import week_spend
 from cuanta.application.models import model_stats
 from cuanta.application.results import ResultQuery, run_markdown
 from cuanta.domain.costs import CostSource, sum_costs
-from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest, RunResult
+from cuanta.domain.engine import (
+    EngineEvent,
+    EngineOutcome,
+    EngineRequest,
+    PermissionDenial,
+    RunResult,
+)
 from cuanta.domain.ledger import Decision, LedgerEvent, Run
 from cuanta.domain.pricing import estimate_cost
 from cuanta.domain.spectrum import View, grouped, totals_of
+from cuanta.ports.ledger import EventQuery
 from tests.unit.test_cross_engine import REQUEST, Recorder, plan
 from tests.unit.test_launch_cost import SilentEngine
 
@@ -126,6 +133,33 @@ def test_no_usage_is_unknown_and_cap_check_publishes_only_normalized_result() ->
     assert results == [capped.outcome.result]
     assert results[0].text == "done"
     assert results[0].models[0].input_tokens == 1_000_000
+
+
+def test_permission_denials_are_stored_as_failed_tool_events() -> None:
+    ledger = MemoryLedger()
+    denied = RunResult(
+        True,
+        "success",
+        0.01,
+        2,
+        "s",
+        permission_denials=(
+            PermissionDenial("Edit", "t2", "/w/protected.py"),
+            PermissionDenial("Write", "t3", "/w/locked/settings.json"),
+        ),
+    )
+    launch = launcher_for(SilentEngine(0.01, "m", denied, "claude"), ledger).launch(
+        LaunchSpec("mandate", "hi", ".", ()),
+        lambda event: None,
+    )
+    rows = ledger.events(EventQuery(run_id=launch.run.id))
+    denials = [row for row in rows if row.kind == "permission_denied"]
+    assert [(row.source, row.tool_name, row.tool_use_id, row.file_path) for row in denials] == [
+        ("claude_stream", "Edit", "t2", "/w/protected.py"),
+        ("claude_stream", "Write", "t3", "/w/locked/settings.json"),
+    ]
+    assert all(row.success is False and row.cost_usd is None for row in denials)
+    assert launch.run.cost_usd == 0.01
 
 
 def test_unknown_cost_poisons_groups_and_model_and_decision_totals() -> None:

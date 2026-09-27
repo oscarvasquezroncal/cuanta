@@ -8,6 +8,7 @@ from cuanta.domain.engine import (
     AssistantText,
     EngineEvent,
     ModelUsage,
+    PermissionDenial,
     RunResult,
     SessionStarted,
     StepUsage,
@@ -78,6 +79,27 @@ def _denials(value: Any) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
+def _denied_calls(value: Any) -> tuple[PermissionDenial, ...]:
+    if not isinstance(value, list):
+        return ()
+    found: list[PermissionDenial] = []
+    for item in value:
+        if isinstance(item, str):
+            found.append(PermissionDenial(item))
+        elif isinstance(item, dict):
+            name = item.get("tool_name") or item.get("name") or item.get("tool")
+            inputs = item.get("tool_input")
+            target = ""
+            if isinstance(inputs, dict):
+                for key in ("file_path", "notebook_path", "path"):
+                    if isinstance(inputs.get(key), str):
+                        target = inputs[key]
+                        break
+            if isinstance(name, str):
+                found.append(PermissionDenial(name, str(item.get("tool_use_id") or ""), target))
+    return tuple(found)
+
+
 def parse_line(line: str) -> list[EngineEvent]:
     stripped = line.strip()
     if not stripped.startswith("{"):
@@ -135,6 +157,7 @@ def parse_line(line: str) -> list[EngineEvent]:
                 duration_ms=_int(data.get("duration_ms")),
                 denials=_denials(data.get("permission_denials")),
                 terminal_reason=str(data.get("terminal_reason") or ""),
+                permission_denials=_denied_calls(data.get("permission_denials")),
             )
         ]
     return []
