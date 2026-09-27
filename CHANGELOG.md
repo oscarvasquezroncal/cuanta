@@ -7,6 +7,9 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Recorded the indexed E1/T1 replay with frozen requests, observed models, cache,
+  source guards and costs per accepted attempt. The repeated Sonnet audit met its
+  $0.30 target; blocked comparisons and bounded GSAP recovery limits remain explicit.
 - Bench adds two read-only investigation tasks with delivered-answer keyword and real
   file:line checks. Shape, pack and depth options retain actual run settings and numerical
   phase anatomy/read efficiency by condition; baseline uses a single read-only context.
