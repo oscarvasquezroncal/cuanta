@@ -7,6 +7,8 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Changed
+- Native trial specifications normalize matching engine-qualified role model references
+  before routing, so resolved model IDs do not silently fall back to the default policy.
 - Cross-engine pipelines reserve a budget share for each role, carry unused shares forward,
   and show the complete pipeline duration. Estimates use completed runs of the same shape
   and depth, with a historical calibration factor when direct history is unavailable.
