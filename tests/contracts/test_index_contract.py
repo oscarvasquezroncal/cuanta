@@ -55,6 +55,31 @@ def test_changed_hash_invalidates_structure_and_retains_stale_anchors(tmp_path: 
             )
 
 
+def test_structural_replacement_is_atomic_and_scoped(tmp_path: Path) -> None:
+    with closing(SqliteIndex(tmp_path / "index.db")) as index:
+        index.replace_files([_file(), _file("src/b.py")], [])
+        index.put_rows("symbols", [_record("A"), _record("B", "src/b.py")])
+        with pytest.raises(ValueError, match="source path"):
+            index.replace_rows("symbols", "src/a.py", [_record("wrong", "src/b.py")])
+        assert index.rows("symbols", "src/a.py") == (_record("A"),)
+        with pytest.raises(sqlite3.IntegrityError):
+            index.replace_rows("symbols", "src/a.py", [_record("C"), _record("C")])
+        assert index.rows("symbols", "src/a.py") == (_record("A"),)
+        index.replace_rows("symbols", "src\\a.py", [_record("C")])
+        assert index.rows("symbols") == (_record("C"), _record("B", "src/b.py"))
+
+
+def test_replacement_cannot_make_unproven_source_rows_fresh(tmp_path: Path) -> None:
+    with closing(SqliteIndex(tmp_path / "index.db")) as index:
+        index.replace_files([_file()], [])
+        mismatch = replace(_record(), source_hash="previous")
+        index.replace_rows("symbols", "src/a.py", [mismatch])
+        assert index.rows("symbols") == (replace(mismatch, stale=True),)
+        missing = _record("missing", "src/missing.py")
+        index.replace_rows("symbols", "src/missing.py", [missing])
+        assert index.rows("symbols", "src/missing.py") == (replace(missing, stale=True),)
+
+
 def test_unchanged_hash_preserves_structure_and_fresh_anchors(tmp_path: Path) -> None:
     with closing(SqliteIndex(tmp_path / "index.db")) as index:
         index.replace_files([_file()], [])
