@@ -38,6 +38,7 @@ class Config:
     model_tiers: tuple[tuple[str, str], ...] = ()
     routing: tuple[tuple[str, object], ...] = ()
     instinct_share_paths: bool = False
+    read_discipline: bool = False
 
 
 KEY_MAP: dict[str, str] = {
@@ -53,6 +54,7 @@ KEY_MAP: dict[str, str] = {
     "ui.listener": "listener_mode",
     "ui.mandate_layout": "mandate_layout",
     "runs.session": "run_session",
+    "runs.read_discipline": "read_discipline",
     "git.workflow": "git_workflow",
     "ui.onboarded": "onboarded",
     "listener.port": "port",

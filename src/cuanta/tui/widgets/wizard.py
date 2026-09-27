@@ -23,6 +23,7 @@ from cuanta.application.mandate_flow import MandateOptions, MandatePreview
 from cuanta.application.route_apply import RouteOptions
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
+from cuanta.domain.change_plan import ChangePlan, apply_overrides, move_plan, path_matches
 from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile, turn_limit
 from cuanta.domain.drafts import Draft
 from cuanta.domain.guarantees import cap_warning, engine_guarantees, readonly_unavailable
@@ -63,6 +64,8 @@ NARROW_STEPS = 96
 AUTO_MODEL = ""
 NAV_KEYS = ("wizard.next", "wizard.understand", "wizard.launch", "wizard.back")
 NAV_PADDING = 6
+PLAN_ROLES = ("edit", "read", "guard")
+PLAN_DELAY_S = 0.15
 
 
 def new_draft_id() -> str:
@@ -93,6 +96,20 @@ class IntentCard(Static):
     def on_click(self, event: Click) -> None:
         event.stop()
         self.post_message(self.Chosen(self.kind))
+
+
+class PlanChip(Button):
+    def __init__(self, path: str, role: str, index: int, tooltip: str) -> None:
+        super().__init__(
+            path,
+            id=f"plan-{role}-{index}",
+            classes="chip plan-chip",
+            compact=True,
+            tooltip=tooltip,
+            disabled=True,
+        )
+        self.path = path
+        self.role = role
 
 
 class MandateWizard(Vertical):
@@ -139,6 +156,11 @@ class MandateWizard(Vertical):
         self._autosave: Timer | None = None
         self._team_lock = asyncio.Lock()
         self._team_revision = 0
+        self.change_plan: ChangePlan | None = None
+        self._plan_overrides: dict[str, str] = {}
+        self._change_revision = 0
+        self._change_timer: Timer | None = None
+        self._change_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
         t = self._t
@@ -228,6 +250,13 @@ class MandateWizard(Vertical):
         yield Input(placeholder=t("wizard.bug_where_example"), id="wiz-where")
         yield Static(Content.styled(t("wizard.places_title"), "$text-muted"), id="places-title")
         yield FlowRow(id="where-chips", classes="chips")
+        with Vertical(id="change-plan", classes="wiz-section"):
+            yield Static(t("wizard.plan_title"), classes="card-title")
+            yield Static(Content.styled(t("wizard.plan_help"), "$text-muted"))
+            for role in PLAN_ROLES:
+                with Vertical(id=f"plan-{role}-area", classes="wiz-section"):
+                    yield Label(t(f"wizard.plan_{role}"))
+                    yield FlowRow(id=f"plan-{role}-chips", classes="chips")
         yield Label(t("wizard.out_of_scope"))
         yield Input(placeholder=t("mandate.out_of_scope_placeholder"), id="wiz-out")
         yield Static("", id="wiz-out-error", classes="field-error")
@@ -257,6 +286,7 @@ class MandateWizard(Vertical):
     def _team(self) -> ComposeResult:
         t = self._t
         yield Static(t("wizard.team_title"), classes="card-title")
+        yield Static("", id="team-protected")
         yield Label(t("wizard.team_engine"), id="wiz-engine-label")
         yield Select([], allow_blank=True, disabled=True, id="wiz-engine")
         yield Static("", id="wiz-guarantees")
@@ -302,6 +332,8 @@ class MandateWizard(Vertical):
         self.query_one("#team-cards").display = False
         self.query_one("#team-simple-note").display = False
         self.query_one("#wiz-sandbox-note").display = False
+        self.query_one("#change-plan").display = False
+        self.query_one("#team-protected").display = False
         self._size_nav()
         self._show_example()
         self._paint()
@@ -349,6 +381,7 @@ class MandateWizard(Vertical):
         self.layout_name = name if name in LAYOUTS else GUIDED
         self._paint()
         if self.one_page and self.understanding is not None:
+            self.refresh_change_plan()
             self.refresh_team()
 
     @property
@@ -446,6 +479,10 @@ class MandateWizard(Vertical):
             no_cap=self.no_cap,
             intake_scope=understood.intake_scope if understood is not None else "",
             sandbox=self.sandbox,
+            plan_overrides=tuple(
+                (path, "read" if self.kind == INVESTIGATION and role == "edit" else role)
+                for path, role in self._plan_overrides.items()
+            ),
         )
 
     def _paint(self) -> None:
@@ -623,9 +660,120 @@ class MandateWizard(Vertical):
         self.error("")
         return True
 
+    def queue_change_plan(self) -> None:
+        if not self.kind or not (self.one_page or self.step > 0):
+            return
+        self._change_revision += 1
+        if self._change_timer is not None:
+            self._change_timer.stop()
+        self._change_timer = self.set_timer(PLAN_DELAY_S, self.refresh_change_plan)
+
+    def refresh_change_plan(self) -> None:
+        if self._change_timer is not None:
+            self._change_timer.stop()
+            self._change_timer = None
+        self._change_revision += 1
+        if not self.kind:
+            self.change_plan = None
+            self.query_one("#change-plan").display = False
+            self.query_one("#team-protected").display = False
+            return
+        if self.kind == INVESTIGATION:
+            self.query_one("#plan-edit-area").display = False
+        self.load_change_plan(self.request(), self._change_revision)
+
+    @work(thread=True, exclusive=True, group="change-plan", exit_on_error=False)
+    def load_change_plan(self, request: MandateRequest, revision: int) -> None:
+        try:
+            plan = self._services.change_plan(request)
+        except Exception as error:
+            self._call(self.app.notify, str(error), severity="error")
+            return
+        self._call(self.show_change_plan, plan, request, revision)
+
+    async def show_change_plan(
+        self, plan: ChangePlan, request: MandateRequest, revision: int
+    ) -> None:
+        async with self._change_lock:
+            if revision != self._change_revision or request != self.request():
+                return
+            if plan.read_only or request.type == INVESTIGATION:
+                plan = replace(plan, read_only=True)
+                for target in plan.edit:
+                    plan = move_plan(plan, target.path, "read")
+                self._plan_overrides = {
+                    path: "read" if role == "edit" else role
+                    for path, role in self._plan_overrides.items()
+                }
+            plan = apply_overrides(plan, tuple(self._plan_overrides.items()))
+            for target in plan.edit:
+                if any(path_matches(target.path, pattern) for pattern in plan.guard):
+                    plan = move_plan(plan, target.path, "read")
+                    if self._plan_overrides.get(target.path) == "edit":
+                        self._plan_overrides[target.path] = "read"
+            for chip in self.query(PlanChip):
+                chip.disabled = True
+            groups = {
+                "edit": tuple(target.path for target in plan.edit),
+                "read": plan.read,
+                "guard": plan.guard,
+            }
+            for role, paths in groups.items():
+                row = self.query_one(f"#plan-{role}-chips", FlowRow)
+                await row.remove_children()
+                if revision != self._change_revision or request != self.request():
+                    return
+                if paths:
+                    await row.mount_all(
+                        PlanChip(path, role, index, self.plan_tooltip(path, plan))
+                        for index, path in enumerate(paths)
+                    )
+                self.query_one(f"#plan-{role}-area").display = bool(paths)
+            self.change_plan = plan
+            for chip in self.query(PlanChip):
+                chip.disabled = False
+            shown = any(groups.values())
+            self.query_one("#change-plan").display = shown
+            protected = self.query_one("#team-protected", Static)
+            protected.update(self._t("wizard.plan_protected", count=len(plan.guard)))
+            protected.display = shown
+
+    def plan_tooltip(self, path: str, plan: ChangePlan) -> str:
+        pattern = next(
+            (pattern for pattern in plan.guard if pattern != path and path_matches(path, pattern)),
+            "",
+        )
+        if pattern:
+            return self._t("wizard.plan_locked", path=pattern)
+        return self._t("wizard.plan_move")
+
+    def cycle_plan_role(self, path: str, role: str) -> None:
+        plan = self.change_plan
+        if plan is None:
+            return
+        contained = any(pattern != path and path_matches(path, pattern) for pattern in plan.guard)
+        roles = (
+            PLAN_ROLES[1:]
+            if plan.read_only or self.kind == INVESTIGATION or contained
+            else PLAN_ROLES
+        )
+        if role not in roles:
+            return
+        chosen = roles[(roles.index(role) + 1) % len(roles)]
+        self._plan_overrides[path] = chosen
+        self._change_revision += 1
+        self.run_worker(
+            self.show_change_plan(plan, self.request(), self._change_revision),
+            group="change-plan-paint",
+            exclusive=True,
+            exit_on_error=False,
+        )
+
     def go(self, step: int) -> None:
         self.step = max(0, min(step, len(STEPS) - 1))
         self._paint()
+        if self.step > 0:
+            self.refresh_change_plan()
         if STEPS[self.step] == "team":
             self.refresh_team()
 
@@ -700,6 +848,14 @@ class MandateWizard(Vertical):
         self.draft_id = new_draft_id()
         self.understanding = None
         self._team_revision += 1
+        self._change_revision += 1
+        if self._change_timer is not None:
+            self._change_timer.stop()
+            self._change_timer = None
+        self.change_plan = None
+        self._plan_overrides.clear()
+        self.query_one("#change-plan").display = False
+        self.query_one("#team-protected").display = False
         self.plan = None
         self.estimate = None
         self.proposal = None
@@ -737,6 +893,7 @@ class MandateWizard(Vertical):
         self.apply_kind()
         self.error("")
         self._paint()
+        self.refresh_change_plan()
         if self.one_page:
             self.refresh_team()
 
@@ -751,8 +908,13 @@ class MandateWizard(Vertical):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "wiz-budget":
             self._paint_depth()
+        elif event.input.id in {"wiz-where", "wiz-out", "wiz-constraints", "wiz-tests"}:
+            self.queue_change_plan()
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "wiz-deliverable":
+            self.queue_change_plan()
+            return
         if event.select.id != "wiz-engine" or not isinstance(event.value, str):
             return
         if event.value not in self.engines or event.value == self.engine:
@@ -765,6 +927,9 @@ class MandateWizard(Vertical):
             self._team_revision += 1
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id in {"wiz-what", "wiz-why"}:
+            self.queue_change_plan()
+            return
         if event.text_area.id != "wiz-story":
             return
         if self._autosave is not None:
@@ -832,6 +997,7 @@ class MandateWizard(Vertical):
             self._apply(understanding)
 
     def _apply(self, understanding: Understanding) -> None:
+        self._plan_overrides.clear()
         self.understanding = understanding
         confident = not understanding.needs_confirm
         self.kind = understanding.kind.option if confident else ""
@@ -843,6 +1009,7 @@ class MandateWizard(Vertical):
         self._show_places(understanding.places)
         if self.one_page:
             self._paint()
+            self.refresh_change_plan()
             self.refresh_team()
         else:
             self.go(1)
@@ -1066,6 +1233,9 @@ class MandateWizard(Vertical):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button = event.button.id or ""
         event.stop()
+        if isinstance(event.button, PlanChip):
+            self.cycle_plan_role(event.button.path, event.button.role)
+            return
         simple = self._actions().get(button)
         if simple is not None:
             simple()
@@ -1275,6 +1445,7 @@ class MandateWizard(Vertical):
         self.call_after_refresh(card.scroll_visible)
 
     def prefilled(self, request: MandateRequest) -> None:
+        self._plan_overrides.clear()
         self.kind = request.type or self.kind or MandateType.FEATURE.value
         self.suggested_kind = self.kind
         self.understanding = None
@@ -1286,6 +1457,7 @@ class MandateWizard(Vertical):
         self.apply_kind()
         if self.one_page:
             self._paint()
+            self.refresh_change_plan()
             self.refresh_team()
         else:
             self.go(1)

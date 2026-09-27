@@ -35,7 +35,7 @@ PROBE_FLAGS = ("--exclude-dynamic-system-prompt-sections", "--no-session-persist
 
 
 def readonly_request(request: EngineRequest) -> EngineRequest:
-    if not request.read_only:
+    if not request.read_only or request.strict_guard:
         return request
     graph = "Bash(graphify *)" in request.allowed_tools
     pipeline = set(investigation_tools(False, Shape.PIPELINE, graph))
@@ -92,6 +92,8 @@ def build_command(binary: tuple[str, ...], request: EngineRequest) -> list[str]:
         command.extend(["--strict-mcp-config", "--mcp-config", request.mcp_config])
     if request.settings_file:
         command.extend(["--settings", request.settings_file])
+    if request.setting_sources is not None:
+        command.extend(["--setting-sources", ",".join(request.setting_sources)])
     return command
 
 

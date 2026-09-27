@@ -91,6 +91,7 @@ class Trial:
     ignored_changes_count: int = 0
     state_changed: tuple[str, ...] = ()
     state_changed_count: int = 0
+    guard_violations: tuple[str, ...] = ()
 
     @property
     def paths(self) -> tuple[str, ...]:
@@ -110,7 +111,11 @@ class Trial:
 
     @property
     def guard_tripped(self) -> bool:
-        return self.dependencies_changed_count > 0 or self.state_changed_count > 0
+        return (
+            self.dependencies_changed_count > 0
+            or self.state_changed_count > 0
+            or bool(self.guard_violations)
+        )
 
     @property
     def applicable(self) -> bool:
@@ -166,6 +171,7 @@ def trial_payload(trial: Trial) -> dict[str, object]:
         "ignored_changes_count": trial.ignored_changes_count,
         "state_changed": list(trial.state_changed),
         "state_changed_count": trial.state_changed_count,
+        "guard_violations": list(trial.guard_violations),
         "changes": [
             {
                 "path": change.path,
@@ -256,6 +262,7 @@ def parse_trial(data: Mapping[str, object]) -> Trial | None:
         ignored_changes_count=_number(data.get("ignored_changes_count")),
         state_changed=_texts(data, "state_changed"),
         state_changed_count=_number(data.get("state_changed_count")),
+        guard_violations=_texts(data, "guard_violations"),
     )
 
 
@@ -357,6 +364,11 @@ class TrialStore:
         return trial
 
     def _check(self, trial: Trial) -> None:
+        if trial.guard_violations:
+            raise DomainFailure(
+                f"protected paths changed during the run: {_shown(trial.guard_violations)}",
+                "review the plan and run the mandate again",
+            )
         if trial.state_changed_count:
             raise DomainFailure(
                 "cuanta's own files in the project changed during the run: "

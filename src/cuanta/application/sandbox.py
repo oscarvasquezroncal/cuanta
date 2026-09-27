@@ -23,6 +23,7 @@ from cuanta.application.trials import (
     digest,
     trial_payload,
 )
+from cuanta.domain.change_plan import ChangePlan, EditTarget, plan_metrics
 from cuanta.domain.engine import EngineEvent
 from cuanta.domain.handoff import COMMIT_FILE, PATHS_FILE, change_type, commit_subject
 from cuanta.domain.mandate import MandateRequest
@@ -46,6 +47,27 @@ from cuanta.ports.sandbox import ProjectSandbox, SandboxCopy
 from cuanta.ports.workspace import Workspace
 
 SHOWN_IGNORED = 5
+
+
+def recorded_plan(payload: Mapping[str, object]) -> ChangePlan | None:
+    raw = payload.get("change_plan")
+    if not isinstance(raw, dict):
+        return None
+    guards = raw.get("guard")
+    edits = raw.get("edit")
+    return ChangePlan(
+        edit=tuple(
+            EditTarget(item["path"], 1.0)
+            for item in edits
+            if isinstance(item, dict) and isinstance(item.get("path"), str)
+        )
+        if isinstance(edits, tuple | list)
+        else (),
+        guard=tuple(item for item in guards if isinstance(item, str))
+        if isinstance(guards, tuple | list)
+        else (),
+        read_only=raw.get("read_only") is True,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,10 +145,18 @@ class TrialRecorder:
                 )
             )
         paths = tuple(item.path for item in items)
+        plan = recorded_plan(payload)
+        if plan is not None:
+            payload = {
+                **payload,
+                **plan_metrics(plan, paths, engine),
+                "change_plan": payload["change_plan"],
+            }
         proposal = section(parse_sections(report_text), "commit")
         kind = change_type(request.type, paths)
         guard = self._sandbox.dependencies_changed(copy)
         ignored = self._sandbox.ignored_changes(copy)
+        violations = payload.get("guard_violations")
         trial = Trial(
             run_id=run_id,
             task_type=request.type,
@@ -147,6 +177,9 @@ class TrialRecorder:
             ignored_changes_count=len(ignored),
             state_changed=tuple(state[:GUARD_LIMIT]),
             state_changed_count=len(state),
+            guard_violations=tuple(path for path in violations if isinstance(path, str))
+            if isinstance(violations, tuple | list)
+            else (),
         )
         self._write(folder, trial, join_patches(patches), report_text, copy, payload)
         return trial

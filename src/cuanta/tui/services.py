@@ -43,6 +43,7 @@ from cuanta.application.tests_view import TestsSummary, from_report
 from cuanta.domain.assistant import Clarity, Suggestions, content_key
 from cuanta.domain.cache import PrefixWindow
 from cuanta.domain.capsules import Level
+from cuanta.domain.change_plan import ChangePlan
 from cuanta.domain.config import Config
 from cuanta.domain.drafts import Draft
 from cuanta.domain.engine import EngineEvent
@@ -222,6 +223,8 @@ class Services(Protocol):
     def suggestions(self, request: MandateRequest) -> Suggestions: ...
 
     def improve(self, request: MandateRequest, spend: bool) -> Improvement: ...
+
+    def change_plan(self, request: MandateRequest) -> ChangePlan: ...
 
     def team_plan(
         self, request: MandateRequest, options: MandateOptions
@@ -748,6 +751,13 @@ class ContainerServices:
                 cap,
                 (Shape.SINGLE if shape else Shape.PIPELINE).value,
             )
+        finally:
+            container.close()
+
+    def change_plan(self, request: MandateRequest) -> ChangePlan:
+        container = self._container()
+        try:
+            return container.change_plan(request)
         finally:
             container.close()
 

@@ -8,6 +8,7 @@ from cuanta.application.estimate import Estimator
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.agents import AgentDefinition, role_of
 from cuanta.domain.capsules import capsule_id
+from cuanta.domain.change_plan import ChangePlan, guarded, plan_metrics
 from cuanta.domain.costs import CostSource, sum_costs
 from cuanta.domain.depth import DEFAULT_DEPTH, MAX_TURNS
 from cuanta.domain.estimates import RunEstimate
@@ -50,6 +51,15 @@ class CrossReport:
     ok: bool
     spent_usd: float | None
     stopped: Message | None = None
+    change_plan: ChangePlan | None = None
+    changed_files: tuple[str, ...] = ()
+
+
+def cross_metrics(report: CrossReport) -> dict[str, object]:
+    if report.change_plan is None:
+        return {}
+    engine = "claude" if all(step.engine == "claude" for step in report.steps) else "cross"
+    return plan_metrics(report.change_plan, report.changed_files, engine)
 
 
 def request_block(request: MandateRequest) -> str:
@@ -103,8 +113,14 @@ class CrossEnginePipeline:
         depth: str = "",
         allocator: Callable[[RoutePlan, str, str, float], Mapping[Role, float]] | None = None,
         refresh_index: Callable[[], None] | None = None,
+        change_plan: Callable[[MandateRequest], ChangePlan] | None = None,
+        snapshot: Callable[[], Mapping[str, str]] | None = None,
+        save_metrics: Callable[[str, Mapping[str, object]], None] | None = None,
     ) -> None:
         self._refresh_index = refresh_index
+        self._change_plan = change_plan
+        self._snapshot = snapshot
+        self._save_metrics = save_metrics
         self._estimator = estimator
         self._allocator = allocator
         self._depth = depth
@@ -150,6 +166,33 @@ class CrossEnginePipeline:
     def run(self, request: MandateRequest, plan: RoutePlan, progress: ProgressSink) -> CrossReport:
         if self._refresh_index is not None:
             self._refresh_index()
+        protection = self._change_plan(request) if self._change_plan is not None else None
+        before = self._snapshot() if self._snapshot is not None else {}
+        result = self._run(request, plan, progress, protection)
+        after = self._snapshot() if self._snapshot is not None else {}
+        changed = tuple(
+            sorted(
+                path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
+            )
+        )
+        result = replace(
+            result,
+            ok=result.ok
+            and not (protection is not None and any(guarded(path, protection) for path in changed)),
+            change_plan=protection,
+            changed_files=changed,
+        )
+        if result.steps and protection is not None and self._save_metrics is not None:
+            self._save_metrics(result.steps[0].run_id, cross_metrics(result))
+        return result
+
+    def _run(
+        self,
+        request: MandateRequest,
+        plan: RoutePlan,
+        progress: ProgressSink,
+        protection: ChangePlan | None,
+    ) -> CrossReport:
         definitions = self._definitions()
         steps: list[CrossStep] = []
         self.completed = steps
@@ -221,6 +264,9 @@ class CrossEnginePipeline:
                 depth=self._depth,
                 estimate=None if parent else self._estimate(plan, request.type),
                 pipeline_budget_usd=self._budget if not parent else 0.0,
+                change_plan=replace(protection, read_only=True, edit=())
+                if protection is not None and read_only
+                else protection,
             )
             launch = launcher.launch(
                 self._isolated(spec, route.engine), lambda _: None, self._started

@@ -9,6 +9,7 @@ from cuanta.application.instinct import DecisionScope
 from cuanta.application.mandate import Composed, MandateReport, MandateService, allowed_tools
 from cuanta.application.route_apply import Applied, MandateRouting, RouteOptions
 from cuanta.domain.agents import role_of
+from cuanta.domain.change_plan import ChangePlan, apply_overrides
 from cuanta.domain.depth import (
     DEFAULT_DEPTH,
     MAX_TURNS,
@@ -70,6 +71,7 @@ class MandateOptions:
     sandbox: bool = False
     keep_copy: bool = False
     estimate: RunEstimate | None = None
+    plan_overrides: tuple[tuple[str, str], ...] = ()
 
 
 def isolated(spec: LaunchSpec, sandbox: SandboxLaunch | None, claude: bool) -> LaunchSpec:
@@ -173,8 +175,10 @@ class MandateFlow:
         estimator: Estimator | None = None,
         shape_estimator: ShapeEstimator | None = None,
         refresh_index: Callable[[], None] | None = None,
+        change_plan: Callable[[MandateRequest], ChangePlan] | None = None,
     ) -> None:
         self._refresh_index = refresh_index
+        self._change_plan = change_plan
         self._shape_estimator = shape_estimator
         self._sandbox = sandbox
         self._estimator = estimator
@@ -256,6 +260,9 @@ class MandateFlow:
         )
         if applied is not None and single:
             applied = replace(applied, agents=None, agents_file="")
+        protection = self._protection(request, options.plan_overrides)
+        if claude and applied is not None and protection is not None and self._routing is not None:
+            applied = self._routing.protect(applied, protection)
         routed = applied.orchestrator or applied.single if applied is not None else ""
         depth = self._depth(options.depth, request.type)
         cap = resolve_budget(options, request.type, self._default_budget)
@@ -296,6 +303,7 @@ class MandateFlow:
             temporary_copy=options.temporary_copy,
             estimate=guess,
             shape=(Shape.SINGLE if options.simple or single else Shape.PIPELINE).value,
+            change_plan=protection,
         )
         sandbox = self._launch(options)
         base = isolated(base, sandbox, claude)
@@ -325,6 +333,13 @@ class MandateFlow:
                 self._service.link_decisions(options.intake_scope, run_id)
         spec = replace(base, prompt=composed.prompt, scope=composed.hint.option)
         return Prepared(composed, engine_name, launcher, spec, applied)
+
+    def _protection(
+        self, request: MandateRequest, overrides: tuple[tuple[str, str], ...]
+    ) -> ChangePlan | None:
+        if self._change_plan is None:
+            return None
+        return apply_overrides(self._change_plan(request), overrides)
 
     def _estimate(
         self,

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
+from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules, strict_tools
 from cuanta.domain.graph_policy import GRAPH_REFERENCE, graphless_prompt
 from cuanta.domain.routing import Role
 from cuanta.domain.stable import stable_json
@@ -166,3 +167,34 @@ def build_agents(
         agents[definition.name] = spec
         roles[definition.name] = role
     return AgentsPlan(agents, roles)
+
+
+def guarded_agents(agents: AgentsPlan, plan: ChangePlan) -> AgentsPlan:
+    if not plan.guard and not plan.read_only:
+        return agents
+    protected: dict[str, dict[str, object]] = {}
+    for name, original in agents.agents.items():
+        readonly = plan.read_only or agents.roles.get(name) is Role.ANALYST
+        effective = replace(plan, read_only=readonly)
+        allowed = strict_tools(effective)
+        declared = original.get("tools")
+        tools = (
+            [tool for tool in declared if isinstance(tool, str) and tool in allowed]
+            if isinstance(declared, list)
+            else list(allowed)
+        )
+        existing = original.get("disallowedTools")
+        denied = (
+            tuple(tool for tool in existing if isinstance(tool, str))
+            if isinstance(existing, list)
+            else ()
+        )
+        spec = {
+            key: value
+            for key, value in original.items()
+            if key not in {"skills", "hooks", "mcpServers", "permissionMode"}
+        }
+        spec["tools"] = tools
+        spec["disallowedTools"] = list(dict.fromkeys((*denied, *deny_rules(effective), *EXECUTION)))
+        protected[name] = spec
+    return AgentsPlan(protected, agents.roles)
