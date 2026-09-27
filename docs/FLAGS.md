@@ -66,5 +66,14 @@ What does NOT belong here: rules about how to use a flag (rulebook), history of 
 | `runs.index_enabled` | `domain/config.py`, `bootstrap.py` | controls automatic index refresh, context packs, learning and owned MCP loading; disabling it retains lexical change-plan protection and leaves explicit index commands available | no |
 | `cuanta bench run --index on\|off` | `cli/commands/bench.py`, `application/bench.py`, `domain/bench.py`, `bootstrap.py` | persists index mode for code and investigation tasks; baseline remains off; reports exploration estimates, raw reads, index calls, acceptance and actual protected or out-of-plan edits | no |
 | Map command palette / `g` | `tui/views/map.py`, `application/map.py`, `tui/commands.py` | local ranked search, handling cards, impact, fresh/stale facts, anchor revalidation and reversible Rebuild; indexed count, coverage, update time and semantic off are explicit; existing numeric navigation stays unchanged | no |
+
+`cuanta spectrum --json` adds an `anatomy` key with exclusive start, exploration,
+writing and handoff requests, per-agent totals and a heuristic description. Result
+Consumption and Spectrum show the same phases. Cross-engine anatomy includes observed
+child roles; existing Spectrum totals and grouping retain their selection scope.
+`cuanta costs --json` adds `phase_medians` by task type and coverage. These summarize
+observed priced requests, independently of the billed attempt totals. Missing events,
+unknown request prices or a shortfall against a known positive turn count exclude an
+attempt from all phase medians; an absent phase is zero only in a covered attempt.
 | Result / Spectrum index metrics | `domain/index_metrics.py`, `application/index_reporting.py` | owned Cuanta exploration calls divided by observed indexed and Read/Grep/Glob calls; returned tokens are estimates distinct from API consumption; failed executed attempts count, note/handshake do not; provider mirrors and repeated events are deduplicated; guards/out-of-plan paths use final manifest evidence | no |
 | Automatic Map learning | `application/index_learning.py`, `bootstrap.py` | refresh report/history after final native metadata, sandbox recording and outcome changes; preserve copy notes only with verified source anchors, revalidate against the original source and retain changed facts as stale; reuse the index and readonly ledger history, with no duplicate priors store | no |
