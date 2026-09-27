@@ -76,14 +76,23 @@ def collect(manifest: Path) -> int:
     return result
 
 
-def execute(manifest: Path) -> int:
+def execute(manifest: Path, reports: Sequence[str] = (), standalone: bool = False) -> int:
     import pytest
 
     expected = nodeids(json.loads(manifest.read_text(encoding="utf-8")))
     selection = Selection(expected)
+    coverage_options = ["--cov-fail-under=0"] if standalone else ["--cov-append"]
     result = int(
         pytest.main(
-            [*SELECTION, "--cov", "--cov-append", "--cov-report=term", "--", *expected],
+            [
+                *SELECTION,
+                "--cov",
+                *coverage_options,
+                "--cov-report=term",
+                *reports,
+                "--",
+                *expected,
+            ],
             plugins=[selection],
         )
     )
@@ -92,20 +101,20 @@ def execute(manifest: Path) -> int:
     return result
 
 
-def child(mode: str, manifest: Path) -> int:
+def child(mode: str, manifest: Path, reports: Sequence[str] = ()) -> int:
     return subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), mode, str(manifest)], check=False
+        [sys.executable, str(Path(__file__).resolve()), mode, str(manifest), *reports], check=False
     ).returncode
 
 
-def run() -> int:
+def run(reports: Sequence[str] = ()) -> int:
     with tempfile.TemporaryDirectory(prefix="cuanta-perf-") as directory:
         manifest = Path(directory) / "nodeids.json"
         result = child("--collect", manifest)
         if result != 0:
             return result
         nodeids(json.loads(manifest.read_text(encoding="utf-8")))
-        return child("--run", manifest)
+        return child("--run", manifest, reports)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -113,13 +122,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--collect", type=Path)
     modes.add_argument("--run", type=Path)
+    parser.add_argument("--junitxml", type=Path)
+    parser.add_argument("--coverage-json", type=Path)
+    parser.add_argument("--standalone", action="store_true")
     options = parser.parse_args(argv)
+    reports: list[str] = []
+    child_reports: list[str] = []
+    if options.standalone:
+        child_reports.append("--standalone")
+    if options.junitxml is not None:
+        reports.append(f"--junitxml={options.junitxml}")
+        child_reports.extend(["--junitxml", str(options.junitxml)])
+    if options.coverage_json is not None:
+        reports.append(f"--cov-report=json:{options.coverage_json}")
+        child_reports.extend(["--coverage-json", str(options.coverage_json)])
     try:
         if options.collect is not None:
             return collect(options.collect)
         if options.run is not None:
-            return execute(options.run)
-        return run()
+            return execute(options.run, reports, options.standalone)
+        return run(child_reports)
     except (OSError, ValueError, GateError) as error:
         print(f"Performance gate failed: {error}", file=sys.stderr)
         return 1
