@@ -46,7 +46,7 @@ from cuanta.domain.mandate import (
 )
 from cuanta.domain.messages import msg
 from cuanta.domain.routing import ENGINE_ORDER, Mix
-from cuanta.domain.team import RoleCard
+from cuanta.domain.team import MixAdvice, RoleCard, advice_message
 from cuanta.tui.cache_text import prefix_content
 from cuanta.tui.fmt import money
 from cuanta.tui.i18n import Catalog
@@ -151,6 +151,7 @@ class MandateWizard(Vertical):
         self.no_cap = False
         self.sandbox = False
         self.mix = ""
+        self.advice = ""
         self.understanding: Understanding | None = None
         self.plan: RoutePlan | None = None
         self.estimate: Estimate | None = None
@@ -539,6 +540,8 @@ class MandateWizard(Vertical):
         for mix in Mix:
             self.query_one(f"#mix-{mix.value}", Button).set_class(mix.value == self.mix, "-current")
         note = t("wizard.mix_cross") if self.mix else t("wizard.mix_native")
+        if self.advice:
+            note = f"{note}\n{self.advice}"
         self.query_one("#wiz-mix-note", Static).update(Content.styled(note, "$text-muted"))
         self.query_one("#forge-gate").display = self.gated
         mode = Content.styled(t("wizard.simple_mode"), "$warning") if self.simple else ""
@@ -1151,6 +1154,7 @@ class MandateWizard(Vertical):
             plan, estimate = self._services.team_plan(request, options)
             cards = self._services.team_cards(plan, estimate, options)
             verify = self._services.change_plan(request).verify if options.mix else ()
+            advice = self._services.team_advice(request.type)
             view = self._services.models_view(False)
         except Exception as error:
             self._call(self.app.notify, str(error), severity="error")
@@ -1159,6 +1163,7 @@ class MandateWizard(Vertical):
         for entry in view.entries:
             models[entry.engine] = (*models.get(entry.engine, ()), entry.id)
         self._call(self.show_verify, verify)
+        self._call(self.show_advice, advice, request.type)
         self._call(self.show_team, plan, estimate, cards, models, options.engine, revision)
 
     async def show_team(
@@ -1175,6 +1180,13 @@ class MandateWizard(Vertical):
                 return
             with suppress(NoMatches):
                 await self._show_team(plan, estimate, details, models, engine, revision)
+
+    def show_advice(self, advice: MixAdvice | None, task_type: str) -> None:
+        self.advice = (
+            self._t.message(advice_message(advice, task_type)) if advice is not None else ""
+        )
+        with suppress(NoMatches):
+            self._paint()
 
     def show_verify(self, commands: tuple[str, ...]) -> None:
         with suppress(NoMatches):

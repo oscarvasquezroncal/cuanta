@@ -62,7 +62,13 @@ from cuanta.domain.models import ModelEntry
 from cuanta.domain.progress import ProgressEvent
 from cuanta.domain.real_costs import CostReport
 from cuanta.domain.routing import RoutingPolicy, parse_mix
-from cuanta.domain.team import RoleCard, team_cards
+from cuanta.domain.team import (
+    MixAdvice,
+    RoleCard,
+    mix_attempts,
+    recommend_mix,
+    team_cards,
+)
 from cuanta.domain.telemetry import WiringPlan, WiringReport
 from cuanta.domain.terminal import TerminalReport
 
@@ -266,6 +272,8 @@ class Services(Protocol):
     def team_cards(
         self, plan: RoutePlan, estimate: Estimate, options: MandateOptions
     ) -> tuple[RoleCard, ...]: ...
+
+    def team_advice(self, task_type: str) -> MixAdvice | None: ...
 
     def understand(self, story: str) -> Understanding: ...
 
@@ -888,6 +896,13 @@ class ContainerServices:
                 return engine == "claude" and config.index_enabled and config.index_tools
 
             return team_cards(plan.routes, {}, 0.0, native)
+        finally:
+            container.close()
+
+    def team_advice(self, task_type: str) -> MixAdvice | None:
+        container = self._container()
+        try:
+            return recommend_mix(mix_attempts(container.shared_ledger().runs()), task_type)
         finally:
             container.close()
 

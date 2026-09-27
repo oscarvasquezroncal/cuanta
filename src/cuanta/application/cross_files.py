@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from cuanta.domain.change_plan import ChangePlan
@@ -7,6 +8,7 @@ from cuanta.ports.workspace import Workspace
 
 MARKERS = frozenset("*?[")
 MEANT_EMPTY = frozenset({"__init__.py", ".gitkeep", ".keep", "py.typed"})
+ROOT_FILE = re.compile(r"[\w-]+(?:\.[\w-]+)*\.[A-Za-z0-9]{1,5}")
 
 
 class CodexFileGuard:
@@ -18,7 +20,12 @@ class CodexFileGuard:
         created: list[str] = []
         for target in plan.edit if plan is not None else ():
             path = target.path
-            if MARKERS & set(path) or path.endswith("/") or self._workspace.exists(path):
+            if (
+                MARKERS & set(path)
+                or ("/" not in path.strip("/") and ROOT_FILE.fullmatch(path) is None)
+                or path.endswith("/")
+                or self._workspace.exists(path)
+            ):
                 continue
             try:
                 self._workspace.write_text(path, "")
