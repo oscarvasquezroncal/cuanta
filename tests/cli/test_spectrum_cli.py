@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
+from cuanta.adapters.system.workspace import LocalWorkspace
+from cuanta.application.run_reports import RunReports
 from tests.fakes import FakeRunner
 from tests.ledger_fixture import RUN, fill
 from tests.support import assert_golden, invoke
@@ -29,6 +31,29 @@ def test_spectrum_plain_golden(seeded: Path) -> None:
     result = invoke(["spectrum", "--plain", "--project", str(seeded)], env={"COLUMNS": "120"})
     assert result.exit_code == 0, result.stdout + result.stderr
     assert_golden("spectrum_plain.txt", result.stdout)
+
+
+def test_spectrum_and_run_json_expose_cited_read_efficiency_and_formula(seeded: Path) -> None:
+    reports = RunReports(LocalWorkspace(seeded))
+    reports.save_meta(RUN, {"shape": "single"})
+    reports.save_report(RUN, "src/app.py:12 and src/app.py:24")
+    result = invoke(["spectrum", RUN, "--json", "--project", str(seeded)])
+    assert result.exit_code == 0, result.stderr
+    document = json.loads(result.stdout)
+    efficiency = document["read_efficiency"]
+    assert efficiency["read_count"] == efficiency["useful_count"] == 1
+    assert efficiency["value"] == 1
+    assert efficiency["read_files"] == efficiency["cited_files"] == ["src/app.py"]
+    assert efficiency["formula"] == "(edited or cited) files read / files read"
+    assert document["utilization"]["label"] == "file utilization v2"
+    assert document["utilization"]["formula"] == efficiency["formula"]
+    plain = invoke(["spectrum", RUN, "--plain", "--project", str(seeded)])
+    assert plain.exit_code == 0, plain.stderr
+    assert "utilization formula" in plain.stdout
+    assert "files read / files read" in plain.stdout
+    show = invoke(["runs", "show", RUN, "--json", "--project", str(seeded)])
+    assert show.exit_code == 0, show.stderr
+    assert json.loads(show.stdout)["read_efficiency"] == efficiency
 
 
 def test_spectrum_json_contract(seeded: Path) -> None:
