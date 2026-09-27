@@ -29,6 +29,12 @@ class Run:
     mode: str = ""
     outcome: str = ""
     outcome_at: str = ""
+    estimate_low: float | None = None
+    estimate_high: float | None = None
+    estimate_source: str = ""
+    estimate_samples: int = 0
+    cap_usd: float | None = None
+    outcome_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)

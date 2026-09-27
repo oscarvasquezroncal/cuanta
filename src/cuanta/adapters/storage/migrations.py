@@ -298,6 +298,15 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE runs ADD COLUMN outcome TEXT NOT NULL DEFAULT '';
     ALTER TABLE runs ADD COLUMN outcome_at TEXT NOT NULL DEFAULT ''
     """,
+    """
+    ALTER TABLE runs ADD COLUMN estimate_low REAL;
+    ALTER TABLE runs ADD COLUMN estimate_high REAL;
+    ALTER TABLE runs ADD COLUMN estimate_source TEXT NOT NULL DEFAULT '';
+    ALTER TABLE runs ADD COLUMN estimate_samples INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE runs ADD COLUMN cap_usd REAL;
+    ALTER TABLE runs ADD COLUMN outcome_reason TEXT NOT NULL DEFAULT '';
+    CREATE INDEX idx_runs_started ON runs(started_at)
+    """,
 )
 
 LATEST_VERSION = len(MIGRATIONS)

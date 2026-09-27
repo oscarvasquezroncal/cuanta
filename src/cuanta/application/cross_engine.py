@@ -4,11 +4,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
 from cuanta.application.engine_run import EngineLauncher, LaunchSpec
+from cuanta.application.estimate import Estimator
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.agents import AgentDefinition, role_of
 from cuanta.domain.capsules import capsule_id
 from cuanta.domain.costs import CostSource, sum_costs
 from cuanta.domain.depth import DEFAULT_DEPTH, MAX_TURNS
+from cuanta.domain.estimates import RunEstimate
 from cuanta.domain.guarantees import readonly_unavailable
 from cuanta.domain.mandate import (
     INLINE_EVIDENCE_LIMIT,
@@ -95,7 +97,11 @@ class CrossEnginePipeline:
         max_turns: int = 0,
         sandbox: SandboxLaunch | None = None,
         checkpoint: Callable[[], Message | None] | None = None,
+        estimator: Estimator | None = None,
+        depth: str = "",
     ) -> None:
+        self._estimator = estimator
+        self._depth = depth
         self._sandbox = sandbox
         self._checkpoint = checkpoint
         self.completed: list[CrossStep] = []
@@ -106,6 +112,11 @@ class CrossEnginePipeline:
         self._cwd = cwd
         self._budget = budget_usd
         self._max_turns = max_turns if max_turns > 0 else MAX_TURNS[DEFAULT_DEPTH]
+
+    def _estimate(self, plan: RoutePlan, task_type: str) -> RunEstimate | None:
+        if self._estimator is None:
+            return None
+        return self._estimator(plan, task_type, self._depth)
 
     def _started(self, run_id: str) -> None:
         self.current = run_id
@@ -174,6 +185,9 @@ class CrossEnginePipeline:
                 scope=role.value,
                 parent_id=parent,
                 read_only=read_only,
+                task_type=request.type,
+                depth=self._depth,
+                estimate=None if parent else self._estimate(plan, request.type),
             )
             launch = launcher.launch(
                 self._isolated(spec, route.engine), lambda _: None, self._started

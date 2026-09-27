@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Block, Document, Table
     from cuanta.domain.handoff import Handoff, Workflow
+    from cuanta.domain.ledger import Run
     from cuanta.domain.shells import Shell
 
 runs_app = typer.Typer(
@@ -73,6 +74,23 @@ def discard_command(
     execute(ctx, lambda session: _discard(session, run_id))
 
 
+@runs_app.command("accept", help="Mark a run as accepted: its change or report was useful.")
+def accept_command(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id or a unique prefix.")],
+) -> None:
+    execute(ctx, lambda session: _decide(session, run_id, True, ""))
+
+
+@runs_app.command("reject", help="Mark a run as rejected; an isolated-copy run is discarded.")
+def reject_command(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Argument(help="Run id or a unique prefix.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why, kept with the run.")] = "",
+) -> None:
+    execute(ctx, lambda session: _decide(session, run_id, False, reason))
+
+
 @runs_app.command("branch", help="Suggested branch or commit and the git commands to run.")
 def branch_command(
     ctx: typer.Context,
@@ -106,29 +124,36 @@ def _list(session: Session, limit: int) -> "Document":
     container = Container.for_project(session.project)
     runs = container.runs_query().run(limit)
     stored = container.stored_reports()
+    rows = tuple(
+        (
+            run.id,
+            run.kind,
+            run.engine or "-",
+            run.status,
+            _outcome(run),
+            usd(run.cost_usd, run.cost_source),
+            run.started_at[5:16].replace("T", " ") or "-",
+            "yes" if run.id in stored else "-",
+        )
+        for run in runs
+    )
+
+    def fitted(index: int, header: str) -> int:
+        return max(len(header), *(len(row[index]) for row in rows)) if rows else 0
+
     table = Table(
         "runs",
         (
-            Column("id"),
-            Column("kind"),
+            Column("id", min_width=fitted(0, "id")),
+            Column("kind", min_width=fitted(1, "kind")),
             Column("engine"),
-            Column("status"),
+            Column("status", min_width=fitted(3, "status")),
+            Column("outcome", min_width=fitted(4, "outcome")),
             Column("cost", numeric=True),
             Column("started"),
             Column("report"),
         ),
-        tuple(
-            (
-                run.id,
-                run.kind,
-                run.engine or "-",
-                run.status,
-                usd(run.cost_usd, run.cost_source),
-                run.started_at[:16].replace("T", " ") or "-",
-                "yes" if run.id in stored else "-",
-            )
-            for run in runs
-        ),
+        rows,
     )
     blocks: list[Block] = [table]
     if not runs:
@@ -142,6 +167,7 @@ def _list(session: Session, limit: int) -> "Document":
                 "kind": run.kind,
                 "engine": run.engine,
                 "status": run.status,
+                "outcome": _outcome_value(run),
                 "cost_usd": run.cost_usd,
                 "cost_source": run.cost_source,
                 "started_at": run.started_at,
@@ -151,6 +177,46 @@ def _list(session: Session, limit: int) -> "Document":
         ]
     }
     return Document(blocks=tuple(blocks), payload=payload)
+
+
+def _outcome(run: "Run") -> str:
+    from cuanta.domain.outcomes import is_attempt
+
+    if not is_attempt(run):
+        return "-"
+    return run.outcome or "pending"
+
+
+def _outcome_value(run: "Run") -> str | None:
+    from cuanta.domain.outcomes import is_attempt
+
+    if run.outcome:
+        return run.outcome
+    return "pending" if is_attempt(run) else None
+
+
+def _money(value: float | None) -> str:
+    from cuanta.cli.fmt import usd
+
+    return usd(value)
+
+
+def estimate_text(run: "Run") -> str:
+    if not run.estimate_source:
+        return "not recorded"
+    if run.estimate_low is None:
+        return "none shown"
+    low, high = _money(run.estimate_low), _money(run.estimate_high)
+    span = low if run.estimate_high in (None, run.estimate_low) else f"{low}–{high}"
+    if run.estimate_source == "history":
+        return f"{span} · from history (n={run.estimate_samples})"
+    return f"{span} · {run.estimate_source}"
+
+
+def error_text(error: float | None) -> str:
+    if error is None:
+        return "n/a"
+    return "in range" if error == 0 else f"{error:+.0%}"
 
 
 def _load(container: "Container", run_id: str) -> "ResultView":
@@ -192,6 +258,18 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "model": run.model,
         "cost_usd": run.cost_usd,
         "cost_source": run.cost_source,
+        "actual_usd": view.actual_usd,
+        "estimate": {
+            "source": run.estimate_source or None,
+            "low_usd": run.estimate_low,
+            "high_usd": run.estimate_high,
+            "samples": run.estimate_samples,
+            "error": view.estimate_error,
+        },
+        "cap_usd": run.cap_usd,
+        "outcome": _outcome_value(run),
+        "outcome_at": run.outcome_at or None,
+        "outcome_reason": run.outcome_reason or None,
         "duration_s": view.duration_s,
         "changed_files": list(view.changed_files),
         "report": view.text,
@@ -228,6 +306,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         ("engine", f"{run.engine} · {run.model or 'default model'}"),
         ("duration", duration),
         ("cost", usd(run.cost_usd, run.cost_source)),
+        *_decision_rows(view),
         *turn_rows,
         ("files changed", str(len(view.changed_files))),
         *_trial_rows(view.trial),
@@ -244,6 +323,29 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
     if view.report_path:
         blocks.append(Hint(f"report: {view.report_path} · cuanta runs open {run.id}"))
     return Document(blocks=tuple(blocks), payload=payload)
+
+
+def _decision_rows(view: "ResultView") -> tuple[tuple[str, str], ...]:
+    from cuanta.cli.fmt import usd
+    from cuanta.domain.outcomes import is_attempt
+
+    run = view.run
+    if not is_attempt(run):
+        return ()
+    rows: list[tuple[str, str]] = []
+    if run.kind == "cross" and not run.parent_id and view.actual_usd != run.cost_usd:
+        source = "estimated" if view.actual_estimated else ""
+        rows.append(("pipeline cost", usd(view.actual_usd, source)))
+    rows.append(("estimate", estimate_text(run)))
+    if run.estimate_low is not None:
+        rows.append(("estimate error", error_text(view.estimate_error)))
+    if run.cap_usd is not None:
+        rows.append(("cap", "none" if run.cap_usd <= 0 else usd(run.cap_usd)))
+    outcome = run.outcome or "pending"
+    when = f" · {run.outcome_at[:16].replace('T', ' ')}" if run.outcome_at else ""
+    why = f" · {run.outcome_reason}" if run.outcome_reason else ""
+    rows.append(("outcome", f"{outcome}{when}{why}"))
+    return tuple(rows)
 
 
 COMMAND_LABELS = (
@@ -401,6 +503,51 @@ def _apply(session: Session, run_id: str) -> "Document":
     )
 
 
+def _decide(session: Session, run_id: str, accept: bool, reason: str) -> "Document":
+    from pathlib import Path
+
+    from cuanta.bootstrap import Container
+    from cuanta.cli.document import Document, Hint, Line
+    from cuanta.domain.progress import Status
+
+    container = Container.for_project(session.project)
+    try:
+        ledger = container.shared_ledger()
+        resolved = container.resolve_run(run_id)
+        outcomes = container.run_outcomes(ledger)
+        change = outcomes.accept(resolved) if accept else outcomes.reject(resolved, reason)
+        summary = container.trial_store(ledger).summary(change.run_id)
+    finally:
+        container.close()
+    blocks: list[Block] = [Line(f"run {change.run_id} {change.outcome}", Status.OK)]
+    if change.run_id != resolved:
+        blocks.append(Hint(f"{resolved} is a role of the cross-engine run {change.run_id}"))
+    trial = summary.trial if summary is not None else None
+    if accept and summary is not None and trial is not None and trial.applicable:
+        if summary.applied_at:
+            blocks.append(Hint("the change was already applied to the project"))
+        elif summary.can_apply:
+            blocks.append(
+                Hint(f"the change is not in the project yet: cuanta runs apply {change.run_id}")
+            )
+        else:
+            moved = ", ".join(summary.drift[:5]) or "files changed since the copy"
+            blocks.append(Hint(f"nothing was applied; the project changed since the copy: {moved}"))
+    kept = trial.copy_root if not accept and trial is not None and trial.kept else ""
+    if kept and Path(kept).exists():
+        blocks.append(Hint(f"the isolated copy is still at {kept}; delete it when done"))
+    return Document(
+        blocks=tuple(blocks),
+        payload={
+            "run_id": change.run_id,
+            "outcome": change.outcome,
+            "outcome_at": change.at,
+            "reason": change.reason or None,
+            "kept_copy": kept or None,
+        },
+    )
+
+
 def _discard(session: Session, run_id: str) -> "Document":
     from pathlib import Path
 
@@ -410,8 +557,9 @@ def _discard(session: Session, run_id: str) -> "Document":
 
     container = Container.for_project(session.project)
     try:
-        resolved = container.resolve_run(run_id)
-        trial = container.trial_store(container.shared_ledger()).discard(resolved)
+        ledger = container.shared_ledger()
+        resolved = container.run_outcomes(ledger).pending(container.resolve_run(run_id)).id
+        trial = container.trial_store(ledger).discard(resolved)
     finally:
         container.close()
     blocks: list[Block] = [
@@ -466,7 +614,7 @@ def _trial_rows(summary: "TrialSummary | None") -> tuple[tuple[str, str], ...]:
     )
     rows = [
         ("isolated copy", f"{len(trial.changes)} files, +{trial.added} −{trial.removed}"),
-        ("outcome", state),
+        ("apply state", state),
     ]
     if summary.drift:
         rows.append(("changed since the copy", ", ".join(summary.drift[:5])))
@@ -474,8 +622,9 @@ def _trial_rows(summary: "TrialSummary | None") -> tuple[tuple[str, str], ...]:
 
 
 def _no_handoff(summary: "TrialSummary | None") -> "Block":
-    from cuanta.application.trials import NPM_HINT, REJECTED, STATE_HINT
+    from cuanta.application.trials import NPM_HINT, STATE_HINT
     from cuanta.cli.document import Hint, Line
+    from cuanta.domain.outcomes import REJECTED
     from cuanta.domain.progress import Status
 
     if summary is None:

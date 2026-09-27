@@ -4,6 +4,7 @@ import asyncio
 import secrets
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import replace
 
 from textual import work
 from textual.app import ComposeResult
@@ -683,7 +684,10 @@ class MandateWizard(Vertical):
             )
             return
         story = self.story or self.request().what
-        self.post_message(self.Launch(self.request(), self.options()))
+        options = self.options()
+        pinned = bool(options.route.role_models)
+        shown = self.estimate.bounds if self.estimate is not None and not pinned else None
+        self.post_message(self.Launch(self.request(), replace(options, estimate=shown)))
         self.remember_launch(self.draft_id, story)
         self.reset(story)
 

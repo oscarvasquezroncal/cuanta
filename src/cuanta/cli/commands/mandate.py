@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from cuanta.application.sandbox import SandboxResult
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Block, Document
+    from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.mandate import MandateRequest
 
 
@@ -397,6 +398,8 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
         warning = cap_warning(route.engine, args.cross_budget)
         if warning is not None:
             session.presenter.publish(Note(Status.WARN, english(warning)))
+    guess = container.run_estimate(plan, request.type, options.depth)
+    session.presenter.publish(Note(Status.INFO, estimate_line(guess)))
     max_turns = resolve_max_turns(
         options, profile(parse_depth(options.depth), request.type), container.config.max_turns
     )
@@ -410,12 +413,15 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
             args.cross_budget,
             max_turns,
             args.keep,
+            options.depth,
         )
         if isolated.cross is None:
             raise RuntimeError("sandbox cross-engine run ended without a report")
         report = isolated.cross
     else:
-        pipeline = container.cross_engine(container.shared_ledger(), args.cross_budget, max_turns)
+        pipeline = container.cross_engine(
+            container.shared_ledger(), args.cross_budget, max_turns, depth=options.depth
+        )
         report = pipeline.run(request, plan, session.presenter)
     rows = tuple(
         (
@@ -507,6 +513,20 @@ def publish_team(session: Session, prepared: "Prepared") -> None:
     warning = cap_warning(prepared.engine_name, prepared.spec.max_budget_usd)
     if warning is not None:
         session.presenter.publish(Note(Status.WARN, english(warning)))
+    if prepared.spec.estimate is not None:
+        session.presenter.publish(Note(Status.INFO, estimate_line(prepared.spec.estimate)))
+
+
+def estimate_line(guess: "RunEstimate") -> str:
+    from cuanta.cli.fmt import usd
+
+    if guess.low is None:
+        return "estimate: none (no similar runs and no priced plan yet)"
+    single = guess.high in (None, guess.low)
+    span = usd(guess.low) if single else f"{usd(guess.low)}–{usd(guess.high)}"
+    if guess.source == "history":
+        return f"estimate: {span} from history (n={guess.samples})"
+    return f"estimate: {span} from the model plan"
 
 
 def audit_rows(report: "MandateReport") -> tuple[tuple[str, str], ...]:

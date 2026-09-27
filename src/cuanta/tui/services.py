@@ -55,6 +55,7 @@ from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import english, msg
 from cuanta.domain.models import ModelEntry
 from cuanta.domain.progress import ProgressEvent
+from cuanta.domain.real_costs import CostReport
 from cuanta.domain.routing import RoutingPolicy
 from cuanta.domain.telemetry import WiringPlan, WiringReport
 from cuanta.domain.terminal import TerminalReport
@@ -137,6 +138,12 @@ class Services(Protocol):
     def apply_trial(self, run_id: str) -> int: ...
 
     def discard_trial(self, run_id: str) -> None: ...
+
+    def accept_run(self, run_id: str) -> None: ...
+
+    def reject_run(self, run_id: str) -> None: ...
+
+    def real_costs(self) -> CostReport: ...
 
     def save_result(self, run_id: str) -> str: ...
 
@@ -492,6 +499,27 @@ class ContainerServices:
         container = self._container()
         try:
             return container.runs_query().run()
+        finally:
+            container.close()
+
+    def accept_run(self, run_id: str) -> None:
+        container = self._container()
+        try:
+            container.run_outcomes(container.shared_ledger()).accept(run_id)
+        finally:
+            container.close()
+
+    def reject_run(self, run_id: str) -> None:
+        container = self._container()
+        try:
+            container.run_outcomes(container.shared_ledger()).reject(run_id)
+        finally:
+            container.close()
+
+    def real_costs(self) -> CostReport:
+        container = self._container()
+        try:
+            return container.costs_query().report()
         finally:
             container.close()
 

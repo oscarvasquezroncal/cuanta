@@ -20,6 +20,7 @@ from cuanta.domain.handoff import (
     gitdir_from_file,
     handoff,
 )
+from cuanta.domain.outcomes import ACCEPTED, CROSS_KIND, REJECTED
 from cuanta.domain.sandbox import (
     SANDBOX_MODE,
     ChangeKind,
@@ -40,8 +41,6 @@ REPORT_FILE = "report.md"
 APPLIED_FILE = "applied.json"
 FILES_DIR = "files"
 BASE_DIR = "base"
-ACCEPTED = "accepted"
-REJECTED = "rejected"
 GUARD_LIMIT = 20
 SHOWN_PATHS = 5
 NPM_HINT = "run npm ci in the project to restore node_modules, then run the mandate again"
@@ -344,9 +343,16 @@ class TrialStore:
                 "the project was restored; check that nothing else is writing to it",
             )
         now = self._clock_iso()
+        if not self._ledger.set_run_outcome(run_id, ACCEPTED, now):
+            current = self._ledger.get_run(run_id)
+            if current is not None and current.outcome == REJECTED:
+                self._restore(originals, trial)
+                raise DomainFailure(
+                    f"run {run_id} was discarded while it was being applied",
+                    "the project was restored",
+                )
         marker = json.dumps({"applied_at": now, "files": list(trial.paths)}, indent=2)
         self._storage.write_text(f"{trial_folder(run_id)}/{APPLIED_FILE}", marker)
-        self._ledger.set_run_outcome(run_id, ACCEPTED, now)
         self._ledger.set_routing_accepted(run_id, True)
         return trial
 
@@ -413,9 +419,14 @@ class TrialStore:
                 else:
                     self._storage.write_bytes(path, data, modes.get(path))
 
-    def discard(self, run_id: str) -> Trial | None:
+    def discard(self, run_id: str, reason: str = "") -> Trial | None:
         trial = self.load(run_id)
         run = self._ledger.get_run(run_id)
+        if run is not None and run.kind == CROSS_KIND and run.parent_id:
+            raise DomainFailure(
+                f"run {run_id} is a role of the cross-engine run {run.parent_id}",
+                f"discard the pipeline: cuanta runs discard {run.parent_id}",
+            )
         if trial is None and (run is None or run.mode != SANDBOX_MODE):
             self._require(run_id)
         if self.applied_at(run_id):
@@ -424,7 +435,8 @@ class TrialStore:
             )
         if run is not None and run.outcome:
             raise DomainFailure(f"run {run_id} is already {run.outcome}", "nothing to do")
-        self._ledger.set_run_outcome(run_id, REJECTED, self._clock_iso())
+        if not self._ledger.set_run_outcome(run_id, REJECTED, self._clock_iso(), reason):
+            raise DomainFailure(f"run {run_id} was decided meanwhile", "check cuanta runs show")
         self._ledger.set_routing_accepted(run_id, False)
         return trial
 

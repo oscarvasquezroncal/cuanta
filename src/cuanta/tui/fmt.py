@@ -15,6 +15,12 @@ GLYPHS = {
 }
 
 
+CENT = 0.01
+SUB_CENT = "<$0.01"
+BOUND = "≥"
+ESTIMATED_MARK = "*"
+
+
 def compact(value: float) -> str:
     for size, unit in UNITS:
         if abs(value) >= size:
@@ -32,6 +38,15 @@ def money(value: float | None, unknown: str = "–") -> str:
     if value is None:
         return unknown
     return f"${value:,.2f}"
+
+
+def cost_money(
+    value: float | None, unknown: str, bound: bool = False, estimated: bool = False
+) -> str:
+    if value is None:
+        return unknown
+    shown = money(value) if not 0 < value < CENT else f"${value:.4f}" if bound else SUB_CENT
+    return f"{BOUND if bound else ''}{shown}{ESTIMATED_MARK if estimated else ''}"
 
 
 def run_money(run: Run, catalog: Catalog) -> str:

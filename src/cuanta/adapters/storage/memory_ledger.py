@@ -40,16 +40,28 @@ class MemoryLedger:
         self._runs[run.id] = run
 
     def update_run(self, run: Run) -> None:
+        stored = self._runs.get(run.id)
+        if stored is not None:
+            run = replace(
+                run,
+                outcome=stored.outcome,
+                outcome_at=stored.outcome_at,
+                outcome_reason=stored.outcome_reason,
+            )
         self._runs[run.id] = run
 
     def get_run(self, run_id: str) -> Run | None:
         return self._runs.get(run_id)
 
-    def runs(self, kind: str = "", hu_ref: str = "", limit: int = 0) -> tuple[Run, ...]:
+    def runs(
+        self, kind: str = "", hu_ref: str = "", limit: int = 0, since: str = ""
+    ) -> tuple[Run, ...]:
         selected = [
             run
             for run in sorted(self._runs.values(), key=lambda run: run.id, reverse=True)
-            if (not kind or run.kind == kind) and (not hu_ref or run.hu_ref == hu_ref)
+            if (not kind or run.kind == kind)
+            and (not hu_ref or run.hu_ref == hu_ref)
+            and (not since or run.started_at >= since)
         ]
         return tuple(selected[:limit] if limit else selected)
 
@@ -163,11 +175,11 @@ class MemoryLedger:
             for item in self._routing
         ]
 
-    def set_run_outcome(self, run_id: str, outcome: str, at: str) -> bool:
+    def set_run_outcome(self, run_id: str, outcome: str, at: str, reason: str = "") -> bool:
         run = self._runs.get(run_id)
         if run is None or run.outcome:
             return False
-        self._runs[run_id] = replace(run, outcome=outcome, outcome_at=at)
+        self._runs[run_id] = replace(run, outcome=outcome, outcome_at=at, outcome_reason=reason)
         return True
 
     def add_route_audits(self, audits: Sequence[RouteAudit]) -> None:
