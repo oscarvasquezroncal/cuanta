@@ -17,6 +17,12 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-09-27 — Compiled change plans and protected paths
+- Shipped: local change-plan compiler and `plan --for`, confidence and indexed regression commands, bilingual exclusions, movable Confirm chips and Team counts, consistent override composition, strict Claude tool/settings/agent policies, actual edit/guard telemetry and refusal to apply protected trial edits. Snapshots cover styles, documents, hidden project paths and file modes; sandbox manifests remain authoritative.
+- Why: preserve explicit exclusions through launch and detect real edits independently of model claims.
+- Tried and rejected: unrestricted execution in guarded runs, inherited agent hooks/skills/MCP overrides, source-only change scans, and activation of unproved hook contracts. Read discipline is opt-in pending the installed CLI probe; native Windows has no verified Claude OS sandbox and managed policy may suppress hooks.
+- Rule extracted: none.
+
 ## 2026-09-27 — Local handling cards and search
 - Shipped: bounded file cards with current knowledge and source rules, BM25 identifier/path
   search with graph/history reasons, and find/card/impact/facts commands. Jev reranking is
