@@ -12,6 +12,7 @@ from cuanta.domain.cache_probe import (
     Warmth,
     decide,
     probe_prompt,
+    unknown_reason,
 )
 from cuanta.domain.costs import sum_costs
 from cuanta.domain.engine import EngineEvent, SessionStarted, StepUsage
@@ -161,7 +162,7 @@ class CacheTtlProbe:
                 )
                 state = result.warmth[-1] if result.warmth else Warmth.UNKNOWN
                 key = f"cache_probe.{state.value}"
-                reason = "no first-request usage" if not reading.has_usage else "run failed"
+                reason = unknown_reason(seed, reading)
                 progress.publish(
                     note(
                         Status.OK if state is Warmth.WARM else Status.WARN,

@@ -142,18 +142,31 @@ def declared_ttl(seed: CacheReading) -> int | None:
     return None
 
 
+def unknown_reason(seed: CacheReading, reading: CacheReading) -> str:
+    if not reading.has_usage:
+        return "no first-request usage"
+    if not reading.ok:
+        return "run failed"
+    if reading.engine_version != seed.engine_version:
+        return "engine version changed"
+    if reading.api_key_source != seed.api_key_source:
+        return "auth changed"
+    if reading.local_date != seed.local_date:
+        return "cold after the local date changed"
+    return "no reference reading"
+
+
 def classify(seed: CacheReading, reference: CacheReading, reading: CacheReading) -> Warmth:
     if not reading.ok or not reading.has_usage:
         return Warmth.UNKNOWN
-    if reading.engine_version != seed.engine_version or reading.local_date != seed.local_date:
+    if reading.engine_version != seed.engine_version:
         return Warmth.UNKNOWN
     if reading.api_key_source != seed.api_key_source:
         return Warmth.UNKNOWN
-    if reference.cache_read == 0:
-        return Warmth.COLD
-    return (
-        Warmth.WARM if reading.cache_read >= READ_COVERAGE * reference.cache_read else Warmth.COLD
-    )
+    same_day = reading.local_date == seed.local_date
+    if reference.cache_read > 0 and reading.cache_read >= READ_COVERAGE * reference.cache_read:
+        return Warmth.WARM
+    return Warmth.COLD if same_day else Warmth.UNKNOWN
 
 
 def decide(

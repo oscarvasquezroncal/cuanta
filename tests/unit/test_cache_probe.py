@@ -17,6 +17,7 @@ from cuanta.domain.cache_probe import (
     decide,
     parse_gaps,
     plan_ceiling,
+    unknown_reason,
     worst_run_cost,
 )
 from cuanta.domain.engine import EngineRequest, ModelUsage, SessionStarted, StepUsage
@@ -113,6 +114,30 @@ def test_failed_or_changed_readings_are_unknown() -> None:
         ]
         is Warmth.UNKNOWN
     )
+
+
+def test_a_warm_reading_after_local_midnight_still_counts_but_a_cold_one_does_not() -> None:
+    seed = reading(0, 0, 0, 8369, write_1h=8369)
+    first = reading(1, 60, 7133, 1235)
+    ten = reading(2, 600, 7133, 1235)
+    thirty = reading(3, 1800, 7133, 1235)
+    next_day = replace(reading(4, 3480, 7133, 1237), local_date="2026-09-26")
+    assert verdict(seed, first, ten, thirty, next_day) == (
+        Verdict.LOWER_BOUND,
+        3480,
+        (Warmth.WARM, Warmth.WARM, Warmth.WARM, Warmth.WARM),
+    )
+    cold_next_day = replace(reading(4, 3660, 0, 8369), local_date="2026-09-26")
+    assert verdict(seed, first, cold_next_day)[2] == (Warmth.WARM, Warmth.UNKNOWN)
+    assert unknown_reason(seed, cold_next_day) == "cold after the local date changed"
+
+
+def test_unknown_readings_name_their_reason() -> None:
+    seed = reading(0, 0, 0, 8456, write_1h=8456)
+    assert unknown_reason(seed, replace(seed, has_usage=False)) == "no first-request usage"
+    assert unknown_reason(seed, replace(seed, ok=False)) == "run failed"
+    assert unknown_reason(seed, replace(seed, engine_version="2.2.0")) == "engine version changed"
+    assert unknown_reason(seed, replace(seed, api_key_source="ANTHROPIC_API_KEY")) == "auth changed"
 
 
 def test_parse_gaps_requires_an_early_reference() -> None:
