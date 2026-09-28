@@ -1315,12 +1315,27 @@ class MandateWizard(Vertical):
         self.estimate = estimate
         self.query_one("#team-simple-note").display = False
         cards.display = True
+        self.query_one("#wiz-estimate", Static).update(self._estimate_content(estimate))
+        self._paint_summary()
+
+    def _estimate_content(self, estimate: Estimate) -> Content:
+        t = self._t
         text = t.message(estimate.message)
         if estimate.over:
             text = f"{text}  {t('wizard.over_cap', cap=money(estimate.cap))}"
         style = "$warning" if estimate.over else "$text-muted"
-        self.query_one("#wiz-estimate", Static).update(Content.styled(text, style))
-        self._paint_summary()
+        content = Content.styled(text, style)
+        forecast = estimate.forecast
+        if forecast is None and estimate.forecast_error is not None:
+            failure = t.message(estimate.forecast_error)
+            return Content.assemble(content, (f"\n{failure}", "$warning"))
+        if forecast is None:
+            return content
+        tone = "$warning" if forecast.warning else "$text-muted"
+        messages = [t.message(message) for message in forecast.messages]
+        if forecast.envelope.p50_usd is not None:
+            return Content.styled("\n".join(messages), tone)
+        return Content.assemble(content, *((f"\n{line}", tone) for line in messages))
 
     def show_simple_team(self) -> None:
         cards = self.query_one("#team-cards", Vertical)

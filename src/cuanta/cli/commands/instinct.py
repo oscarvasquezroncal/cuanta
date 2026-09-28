@@ -31,6 +31,13 @@ def probe_command(ctx: typer.Context) -> None:
     execute(ctx, _probe)
 
 
+@instinct_app.command(
+    "calibration", help="Forecast error and P90 coverage per provider and task type."
+)
+def calibration_command(ctx: typer.Context) -> None:
+    execute(ctx, _calibration)
+
+
 def _show(session: Session) -> "Document":
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Column, Document, KeyValues, Table
@@ -219,4 +226,60 @@ def _probe(session: Session) -> "Document":
             for row in rows
         ],
     }
+    return Document(blocks=(table,), payload=payload)
+
+
+CALIBRATION_COLUMNS = (
+    "provider",
+    "type",
+    "runs",
+    "unknown",
+    "P50 error",
+    "P50 error %",
+    "P90 coverage",
+    "P90 error %",
+)
+
+
+def _calibration(session: Session) -> "Document":
+    from cuanta.application.instinct_view import calibration, calibration_cells
+    from cuanta.bootstrap import Container
+    from cuanta.cli.document import Column, Document, Line, Table
+    from cuanta.domain.progress import Status
+
+    container = Container.for_project(session.project)
+    try:
+        rows = (
+            calibration(container.ledger())
+            if (container.cuanta_dir() / "ledger.db").is_file()
+            else ()
+        )
+    finally:
+        container.close()
+    payload = {
+        "groups": [
+            {
+                "provider": row.provider,
+                "task_type": row.task_type,
+                "samples": row.samples,
+                "unknown": row.unknown,
+                "mae_usd": row.mae_usd,
+                "mape": row.mape,
+                "p90_coverage": row.p90_coverage,
+                "p90_error": row.p90_error,
+            }
+            for row in rows
+        ]
+    }
+    if not rows:
+        empty = Line("no forecasts yet: each launched mandate records one", Status.INFO)
+        return Document(blocks=(empty,), payload=payload)
+    columns = tuple(
+        Column(name, numeric=index > 1) for index, name in enumerate(CALIBRATION_COLUMNS)
+    )
+    table = Table(
+        "forecast calibration",
+        columns,
+        tuple(calibration_cells(row, "n/a") for row in rows),
+    )
     return Document(blocks=(table,), payload=payload)

@@ -22,7 +22,7 @@ from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import english, msg
 from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.progress import ProgressEvent
-from cuanta.domain.role_budgets import allocate_budget
+from cuanta.domain.role_budgets import RepairBudget, allocate_budget
 from cuanta.domain.routing import ROLES, Role, RoleRoute, RoutingPolicy
 
 REQUEST = MandateRequest(type="bug", what="fix add", why="add(2, 3) == -1", out_of_scope="tests")
@@ -323,7 +323,7 @@ def test_unused_role_share_rolls_forward_without_borrowing_future_shares(tmp_pat
         FileCapsuleStore(tmp_path),
         str(tmp_path),
         1.0,
-        allocator=lambda *args: shares,
+        allocator=lambda *args: RepairBudget(shares, 0.0, False),
     )
     report = subject.run(REQUEST, plan(), Recorder())
     assert report.ok

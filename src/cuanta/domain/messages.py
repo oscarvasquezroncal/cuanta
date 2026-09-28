@@ -272,6 +272,13 @@ ENGLISH: dict[str, str] = {
     "question.rename_risk": "How risky is renaming a public function used in {files} files (0-10)?",
     "question.route_tier": "Which model tier should the {role} use for this mandate?",
     "question.route_risk": "How risky is this change for the rest of the codebase (0-2)?",
+    "question.envelope_risk": (
+        "How much costlier than planned is this change likely to be? 1 means as planned."
+    ),
+    "question.envelope_exploration": (
+        "How much more reading than planned will this change need? 1 means as planned."
+    ),
+    "question.envelope_tier": "Which model tier fits the {role} role for this change?",
     "question.triage": "Why does signature {signature} fail?",
     "option.trivial": "trivial",
     "option.normal": "normal",
@@ -404,6 +411,7 @@ ENGLISH: dict[str, str] = {
     "sentence.risk": "Risk",
     "sentence.triage": "Failure cause",
     "sentence.network": "Network failure",
+    "sentence.exploration": "Exploration",
     "sentence.tier": "{role} tier",
     "sentence.other": "{question}",
     "role.orchestrator": "Orchestrator",
@@ -482,6 +490,10 @@ ENGLISH: dict[str, str] = {
         "spend"
     ),
     "cross.repair": "{role} gets one repair turn for the failing checks",
+    "cross.repair_reserve": "fix budget: ${cap} is held for one repair turn",
+    "cross.repair_reserve_docs": (
+        "fix budget: ${cap} is held for one repair turn, funded from the docs share (docs is off)"
+    ),
     "cross.verify_handed": (
         "verification still fails after the repair; the tester receives the results"
     ),
@@ -571,6 +583,29 @@ ENGLISH: dict[str, str] = {
     "estimate.plan": "Estimate from the plan: ~{cost}",
     "estimate.calibrated": "Estimate from the plan: ~{cost} · factor {factor} from {count} runs",
     "estimate.none": "No prices yet to estimate this plan.",
+    "envelope.suggest.depth": "Use {depth} depth: P90 {p90}",
+    "envelope.suggest.tier": "Run the {role} on {model}: P90 {p90}",
+    "envelope.suggest.where": "Narrow WHERE to about {files} files: P90 {p90}",
+    "envelope.suggest.scout": "Use the scout and senior shape: P90 {p90}",
+    "envelope.line": "Forecast {p50} (P90 {p90}), margin {margin}, {cache}",
+    "envelope.line_uncapped": "Forecast {p50} (P90 {p90}), no cap, {cache}",
+    "envelope.line_unknown": "Forecast n/a: a role has no price, {cache}",
+    "envelope.cache_warm": "warm cache ({share})",
+    "envelope.cache_cold": "cold cache",
+    "envelope.cache_unknown": "cache unknown",
+    "envelope.tight": "Tight: the P90 is within 15% of the {cap} cap or over it.",
+    "envelope.infeasible": "Infeasible: the P50 {p50} is over the {cap} cap.",
+    "envelope.try": "Try: {suggestion}",
+    "envelope.jev": (
+        "Jev adjusted the forecast: risk ×{risk}, exploration ×{exploration}, weight {weight}"
+    ),
+    "envelope.jev_refused": "Jev was not asked: the call would cost {cost}, over the {cap} cap.",
+    "envelope.jev_unpriced": "Jev was not asked: its call cannot be priced.",
+    "envelope.jev_consent": "Jev was not asked: run cuanta instinct use jev to give consent.",
+    "envelope.jev_unavailable": "Jev was not asked: {reason}",
+    "envelope.jev_failed": "Jev did not answer, the plain forecast is kept: {error}",
+    "envelope.jev_tier": "Jev suggests the {tier} tier for the {role}",
+    "envelope.failed": "Forecast unavailable, the launch goes ahead without one: {error}",
     "route.policy_role": "{role} on {tier} because your policy uses {tier} for {purpose}",
     "route.instinct_scope": "Instinct picked {tier} for a {scope} request",
     "route.instinct_reach": (
@@ -585,6 +620,9 @@ ENGLISH: dict[str, str] = {
     "tier.standard": "standard",
     "tier.premium": "premium",
     "tier.frontier": "frontier",
+    "depth.quick": "quick",
+    "depth.normal": "normal",
+    "depth.deep": "deep",
     "scope.trivial": "trivial",
     "scope.normal": "normal",
     "scope.complex": "complex",

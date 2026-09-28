@@ -4,10 +4,12 @@ from collections.abc import Sequence
 from dataclasses import replace
 
 from cuanta.adapters.storage.migrations import LATEST_VERSION
+from cuanta.domain.calibration import ForecastActual, forecast_actuals, forecast_matches
 from cuanta.domain.ledger import (
     Baseline,
     Capsule,
     Decision,
+    Forecast,
     LedgerEvent,
     RouteAudit,
     RoutingDecision,
@@ -32,6 +34,7 @@ class MemoryLedger:
         self._audits: dict[tuple[str, str], RouteAudit] = {}
         self._snapshots: dict[tuple[str, str, str], Snapshot] = {}
         self._baselines: list[Baseline] = []
+        self._forecasts: dict[str, Forecast] = {}
 
     def schema_version(self) -> int:
         return LATEST_VERSION
@@ -244,6 +247,23 @@ class MemoryLedger:
 
     def baselines(self, run_id: str = "") -> tuple[Baseline, ...]:
         return tuple(item for item in self._baselines if not run_id or item.run_id == run_id)
+
+    def add_forecast(self, forecast: Forecast) -> None:
+        self._forecasts[forecast.run_id] = forecast
+
+    def forecasts(
+        self, provider: str = "", task_type: str = "", limit: int = 0
+    ) -> tuple[ForecastActual, ...]:
+        selected = sorted(
+            (
+                item
+                for item in self._forecasts.values()
+                if forecast_matches(item, provider, task_type)
+            ),
+            key=lambda item: (item.created_at, item.run_id),
+            reverse=True,
+        )
+        return forecast_actuals(selected[:limit] if limit else selected, self._runs.values())
 
     def close(self) -> None:
         return None

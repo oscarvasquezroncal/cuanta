@@ -8,6 +8,7 @@ from cuanta.cli.runtime import Session, execute
 
 if TYPE_CHECKING:
     from cuanta.application.cross_engine import CrossReport
+    from cuanta.application.forecast import PlannedForecast
     from cuanta.application.mandate import MandateReport, MandateService
     from cuanta.application.mandate_flow import MandateFlow, MandateOptions, Prepared
     from cuanta.application.routing import RoutePlan
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from cuanta.cli.document import Block, Document
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.mandate import MandateRequest
+    from cuanta.domain.messages import Message
     from cuanta.domain.routing import Provider
 
 TEAM_BUDGET_USD = 1.0
@@ -332,6 +334,7 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
             composed = prepared.composed
             shown = display_command(composed.command, composed.prompt)
             team = tuple(Line(line, Status.INFO) for line in team_lines(prepared))
+            forecast = tuple(forecast_blocks(prepared.forecast, prepared.forecast_error))
             copy_note = (
                 (Line("isolated copy: not created in a dry run", Status.INFO),)
                 if args.sandbox
@@ -341,6 +344,7 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
                 blocks=(
                     Verbatim(composed.prompt),
                     *team,
+                    *forecast,
                     *copy_note,
                     Line(f"command: {shown}", Status.INFO),
                 ),
@@ -354,6 +358,7 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
                     "team": team_lines(prepared),
                     "agents_file": prepared.spec.agents_file or None,
                     "model": prepared.spec.model or None,
+                    "envelope": forecast_payload(prepared.forecast),
                 },
             )
         if per_role:
@@ -494,26 +499,57 @@ def per_role_lines(container: "Container", plan: "RoutePlan", provider: "Provide
     return lines
 
 
+def team_turns(container: "Container", options: "MandateOptions", task_type: str) -> int:
+    from cuanta.application.mandate_flow import resolve_max_turns
+    from cuanta.domain.depth import parse_depth, profile
+
+    chosen = profile(parse_depth(options.depth), task_type)
+    return resolve_max_turns(options, chosen, container.config.max_turns)
+
+
 def preview_per_role(
     container: "Container", args: MandateArgs, request: "MandateRequest"
 ) -> "Document":
+    from cuanta.application.forecast import forecast_failure
     from cuanta.cli.document import Document, Line
     from cuanta.cli.fmt import usd
+    from cuanta.domain.envelope import PIPELINE_SHAPE
+    from cuanta.domain.errors import CuantaError
     from cuanta.domain.messages import english, msg
     from cuanta.domain.progress import Status
-    from cuanta.domain.routing import Role
+    from cuanta.domain.routing import Provider, Role
 
     options, plan, provider, budget = _team_plan(container, args, request)
     lines = per_role_lines(container, plan, provider)
     lines.append(f"spend cap {usd(budget)}" if budget > 0 else "spend cap: none")
     lines.append(estimate_line(container.run_estimate(plan, request.type, options.depth)))
-    verify = container.change_plan(request).verify
+    protection = container.change_plan(request)
+    verify = protection.verify
     if verify:
         lines.append(english(msg("cross.verify_commands", commands=", ".join(verify))))
     if args.sandbox:
         lines.append("isolated copy: not created in a dry run")
+    turns = team_turns(container, options, request.type) if provider is Provider.CLAUDE else 0
+    planned: PlannedForecast | None = None
+    failure: Message | None = None
+    try:
+        planned = container.team_forecast(
+            request.type,
+            plan,
+            provider,
+            options.depth,
+            PIPELINE_SHAPE,
+            budget,
+            protection,
+            max_turns=turns,
+        )
+    except (CuantaError, ValueError) as error:
+        failure = forecast_failure(error)
     return Document(
-        blocks=tuple(Line(line, Status.INFO) for line in lines),
+        blocks=(
+            *(Line(line, Status.INFO) for line in lines),
+            *forecast_blocks(planned, failure),
+        ),
         payload={
             "dry_run": True,
             "sandbox": args.sandbox,
@@ -532,6 +568,7 @@ def preview_per_role(
                 if route.role is not Role.ORCHESTRATOR
             ],
             "verify": list(verify),
+            "envelope": forecast_payload(planned),
         },
     )
 
@@ -539,9 +576,7 @@ def preview_per_role(
 def run_cross_engine(
     session: Session, container: "Container", args: MandateArgs, request: "MandateRequest"
 ) -> "Document":
-    from cuanta.application.mandate_flow import resolve_max_turns
     from cuanta.cli.document import Document, Line
-    from cuanta.domain.depth import parse_depth, profile
     from cuanta.domain.messages import english
     from cuanta.domain.progress import Note, Status
     from cuanta.domain.routing import Provider
@@ -553,9 +588,7 @@ def run_cross_engine(
     publish_cross_team(session, container, request, plan, options.depth, budget)
     guess = container.run_estimate(plan, request.type, options.depth)
     session.presenter.publish(Note(Status.INFO, estimate_line(guess)))
-    max_turns = resolve_max_turns(
-        options, profile(parse_depth(options.depth), request.type), container.config.max_turns
-    )
+    max_turns = team_turns(container, options, request.type)
     isolated: SandboxResult | None = None
     if args.sandbox:
         isolated = container.run_sandboxed_cross(
@@ -605,7 +638,8 @@ def publish_cross_team(
         team_cards,
     )
 
-    shares = container.role_budget(plan, request.type, depth, budget)
+    verify = container.change_plan(request).verify
+    shares = container.role_budget(plan, request.type, depth, budget, bool(verify)).shares
     for card in team_cards(
         plan.routes,
         shares,
@@ -625,7 +659,6 @@ def publish_cross_team(
     advice = recommend_provider(attempts, request.type)
     if advice is not None:
         session.presenter.publish(Note(Status.INFO, english(advice_message(advice, request.type))))
-    verify = container.change_plan(request).verify
     if verify:
         commands = ", ".join(verify)
         session.presenter.publish(
@@ -801,6 +834,25 @@ def publish_team(session: Session, prepared: "Prepared") -> None:
         session.presenter.publish(Note(Status.WARN, english(warning)))
     if prepared.spec.estimate is not None:
         session.presenter.publish(Note(Status.INFO, estimate_line(prepared.spec.estimate)))
+
+
+def forecast_blocks(
+    planned: "PlannedForecast | None", failure: "Message | None" = None
+) -> "list[Block]":
+    from cuanta.cli.document import Line
+    from cuanta.domain.messages import english
+    from cuanta.domain.progress import Status
+
+    if planned is None:
+        return [Line(english(failure), Status.WARN)] if failure is not None else []
+    status = Status.WARN if planned.warning else Status.INFO
+    return [Line(english(message), status) for message in planned.messages]
+
+
+def forecast_payload(planned: "PlannedForecast | None") -> dict[str, object] | None:
+    from cuanta.application.forecast import envelope_json
+
+    return envelope_json(planned) if planned is not None else None
 
 
 def estimate_line(guess: "RunEstimate") -> str:

@@ -7,12 +7,15 @@ from typing import Protocol
 
 from cuanta.application.engine_run import EngineLauncher, Launch, LaunchSpec
 from cuanta.application.estimate import Estimator
+from cuanta.application.forecast import Forecaster, forecast_failure, publish_forecast
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.agents import AgentDefinition, role_of
 from cuanta.domain.capsules import capsule_id
 from cuanta.domain.change_plan import ChangePlan, guarded, plan_metrics
 from cuanta.domain.costs import CostSource, sum_costs
 from cuanta.domain.depth import DEFAULT_DEPTH, MAX_TURNS
+from cuanta.domain.envelope import PIPELINE_SHAPE, is_fix
+from cuanta.domain.errors import CuantaError
 from cuanta.domain.estimates import RunEstimate
 from cuanta.domain.guarantees import readonly_unavailable
 from cuanta.domain.mandate import (
@@ -27,9 +30,10 @@ from cuanta.domain.progress import Status, finished, note, started
 from cuanta.domain.role_budgets import (
     DEFAULT_MARGIN,
     OPTIONAL_ROLES,
-    allocate_budget,
+    RepairBudget,
     floor_fraction,
     floors_usd,
+    role_split,
     soft_cap,
 )
 from cuanta.domain.role_handoff import (
@@ -46,7 +50,7 @@ from cuanta.domain.role_handoff import (
     render_chain,
     schema_instruction,
 )
-from cuanta.domain.routing import Role
+from cuanta.domain.routing import Provider, Role, parse_provider
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, docs_only
 from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.engine import Engine
@@ -339,6 +343,7 @@ class _Pass:
     spent: float | None = 0.0
     parent: str = ""
     last_round: VerificationRound | None = None
+    repair_usd: float = 0.0
 
     def report(
         self, state: CompletionState, stopped: Message | None = None, guard_role: str = ""
@@ -381,7 +386,7 @@ class CrossEnginePipeline:
         checkpoint: Callable[[], Message | None] | None = None,
         estimator: Estimator | None = None,
         depth: str = "",
-        allocator: Callable[[RoutePlan, str, str, float], Mapping[Role, float]] | None = None,
+        allocator: Callable[[RoutePlan, str, str, float, bool], RepairBudget] | None = None,
         refresh_index: Callable[[], None] | None = None,
         change_plan: Callable[[MandateRequest], ChangePlan] | None = None,
         snapshot: Callable[[], Mapping[str, str]] | None = None,
@@ -396,7 +401,11 @@ class CrossEnginePipeline:
         index_tools: Callable[[str], bool] | None = None,
         new_files: NewFileGuard | None = None,
         build_blocked: frozenset[str] = frozenset(),
+        forecaster: Forecaster | None = None,
+        new_run_id: Callable[[], str] | None = None,
     ) -> None:
+        self._forecaster = forecaster
+        self._new_run_id = new_run_id
         self._build_blocked = build_blocked
         self._learn_run = learn_run
         self._refresh_index = refresh_index
@@ -554,11 +563,16 @@ class CrossEnginePipeline:
             for role in CROSS_ORDER
             if (route := plan.route(role)) is not None and route.model is not None
         )
-        shares = (
-            self._allocator(plan, request.type, self._depth, self._budget)
+        verify = protection.verify if protection is not None else ()
+        repairable = bool(verify) and self._verifier is not None
+        split = (
+            self._allocator(plan, request.type, self._depth, self._budget, repairable)
             if self._allocator is not None
-            else allocate_budget(dict.fromkeys(routed), self._budget)
+            else role_split(
+                dict.fromkeys(routed), self._budget, is_fix(request.type) and repairable
+            )
         )
+        reserve = split.repair_usd if repairable else 0.0
         state = _Pass(
             request,
             plan,
@@ -566,11 +580,15 @@ class CrossEnginePipeline:
             protection,
             baseline,
             routed,
-            shares,
+            split.shares,
             self._margin() if self._margin is not None else DEFAULT_MARGIN,
-            protection.verify if protection is not None else (),
+            verify,
             handoff_budget(self._depth),
+            repair_usd=reserve,
         )
+        if reserve > 0:
+            key = "cross.repair_reserve_docs" if split.from_docs else "cross.repair_reserve"
+            progress.publish(note(Status.INFO, msg(key, cap=f"{reserve:.4f}")))
         self.completed = state.steps
         definitions = self._definitions()
         for role in CROSS_ORDER:
@@ -607,18 +625,21 @@ class CrossEnginePipeline:
             return state.report(CompletionState.FAILED, msg("cross.cost_unknown"))
         remaining = self._budget - state.spent if state.spent is not None else 0.0
         future = state.routed[state.routed.index(role) + 1 :]
-        reserved = sum(state.shares.get(later, 0.0) for later in future)
+        later_shares = sum(state.shares.get(later, 0.0) for later in future)
+        reserved = later_shares + self._held(state)
         role_cap = max(0.0, remaining - reserved) if self._budget > 0 else 0.0
         optional = role in OPTIONAL_ROLES or (
             role is Role.TESTER and state.last_round is not None and state.last_round.passed
         )
         floor = self._budget * floor_fraction(role)
+        wanted = max(state.shares.get(role, 0.0), floor)
         if self._budget > 0 and not optional and role_cap + BUDGET_EPSILON < floor:
             required = floors_usd(
                 (later for later in future if later not in OPTIONAL_ROLES), self._budget
             )
-            wanted = max(state.shares.get(role, 0.0), floor)
             role_cap = max(role_cap, min(wanted, remaining - required), 0.0)
+        if self._budget > 0 and optional and role_cap + BUDGET_EPSILON < floor:
+            role_cap = max(role_cap, min(wanted, remaining - later_shares))
         if self._budget > 0 and optional and role_cap + BUDGET_EPSILON < floor:
             key = "cross.tester_skipped" if role is Role.TESTER else "cross.optional_skipped"
             reason = msg(key, role=role.value, cap=f"{role_cap:.4f}", floor=f"{floor:.4f}")
@@ -651,6 +672,17 @@ class CrossEnginePipeline:
             state, role, route.engine, model, definition_for(role, definitions), role_cap
         )
         return _Turn(role, route.engine, model, launcher, spec, role_cap, read_only, future)
+
+    def _held(self, state: _Pass) -> float:
+        repairable = bool(state.verify) and self._verifier is not None
+        return state.repair_usd if repairable else 0.0
+
+    def _repair_funds(self, state: _Pass, turn: _Turn, left_share: float) -> float:
+        if state.repair_usd <= 0 or state.spent is None:
+            return left_share
+        future = sum(state.shares.get(later, 0.0) for later in turn.future)
+        room = self._budget - state.spent - future
+        return max(left_share, min(max(0.0, left_share) + state.repair_usd, room))
 
     def _spec(
         self,
@@ -724,6 +756,29 @@ class CrossEnginePipeline:
             index_tools=indexed,
         )
 
+    def _root_forecast(self, state: _Pass, turn: _Turn) -> _Turn:
+        provider = parse_provider(turn.engine)
+        if state.parent or provider is None or self._forecaster is None or self._new_run_id is None:
+            return turn
+        run_id = self._new_run_id()
+        try:
+            planned = self._forecaster.plan(
+                state.request.type,
+                state.plan,
+                provider,
+                self._depth,
+                PIPELINE_SHAPE,
+                self._budget,
+                state.protection,
+                max_turns=self._max_turns if provider is Provider.CLAUDE else 0,
+            )
+            stored = self._forecaster.record(run_id, planned, state.request)
+        except (CuantaError, ValueError) as error:
+            state.progress.publish(note(Status.WARN, forecast_failure(error)))
+        else:
+            publish_forecast(state.progress, stored)
+        return replace(turn, spec=replace(turn.spec, run_id=run_id))
+
     def _perform(self, state: _Pass, turn: _Turn) -> CrossReport | None:
         role = turn.role
         chain = self._refresh(merge_chain(state.handoffs))
@@ -733,6 +788,7 @@ class CrossEnginePipeline:
             created = self._new_files.prepare(turn.spec.change_plan)
             if created:
                 state.progress.publish(note(Status.INFO, msg("cross.prepared", count=len(created))))
+        turn = self._root_forecast(state, turn)
         launch = self._launch(turn, turn.spec)
         self._record_cap(launch.run.id, turn.spec.max_budget_usd, turn.role_cap)
         state.parent = state.parent or launch.run.id
@@ -802,7 +858,7 @@ class CrossEnginePipeline:
         if stop is not None:
             return stop
         if role in WRITING_ROLES and changed and not docs_only(changed):
-            handoff, stop = self._check(state, turn, handoff, ok, cost)
+            handoff, stop = self._check(state, turn, handoff, ok or carried, cost)
             if stop is not None:
                 return stop
         state.handoffs.append(handoff)
@@ -974,9 +1030,12 @@ class CrossEnginePipeline:
         stop = self._guarded(state, handoff) or self._halt(state, handoff)
         if stop is not None:
             return handoff, stop
-        left_share = turn.role_cap - (cost or 0.0)
+        if found.passed:
+            state.repair_usd = 0.0
+        left_share = self._repair_funds(state, turn, turn.role_cap - (cost or 0.0))
         if found.passed or not ok or left_share <= REPAIR_MINIMUM_USD:
             return handoff, None
+        state.repair_usd = 0.0
         state.progress.publish(note(Status.WARN, msg("cross.repair", role=turn.role.value)))
         repair = replace(
             turn.spec,

@@ -307,6 +307,25 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE runs ADD COLUMN outcome_reason TEXT NOT NULL DEFAULT '';
     CREATE INDEX idx_runs_started ON runs(started_at)
     """,
+    """
+    CREATE TABLE IF NOT EXISTS forecasts (
+        run_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL DEFAULT '',
+        provider TEXT NOT NULL DEFAULT '',
+        task_type TEXT NOT NULL DEFAULT '',
+        depth TEXT NOT NULL DEFAULT '',
+        shape TEXT NOT NULL DEFAULT '',
+        p50_usd REAL NOT NULL,
+        p90_usd REAL NOT NULL,
+        cap_usd REAL,
+        verdict TEXT NOT NULL DEFAULT '',
+        buckets TEXT NOT NULL DEFAULT '{}',
+        per_role TEXT NOT NULL DEFAULT '[]',
+        features TEXT NOT NULL DEFAULT '{}',
+        source TEXT NOT NULL DEFAULT 'envelope'
+    );
+    CREATE INDEX IF NOT EXISTS idx_forecasts_group ON forecasts(provider, task_type)
+    """,
 )
 
 LATEST_VERSION = len(MIGRATIONS)

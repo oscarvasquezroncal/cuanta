@@ -5,9 +5,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
+from cuanta.domain.costs import median
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, msg
-from cuanta.domain.report import first_request_event
+from cuanta.domain.pricing import base_model
+from cuanta.domain.report import agent_request, first_request_event
 from cuanta.domain.spectrum import usage_events
 
 CACHE_ENGINE = "claude"
@@ -112,3 +114,69 @@ def prefix_window(events: Sequence[LedgerEvent], ttl_s: int, now: datetime) -> P
     until = last + timedelta(seconds=ttl_s)
     moment = now if now.tzinfo else now.replace(tzinfo=UTC)
     return PrefixWindow(PrefixState.WARM if moment < until else PrefixState.COLD, until)
+
+
+@dataclass(frozen=True, slots=True)
+class Warmth:
+    state: PrefixState
+    share: float = 0.0
+
+
+UNKNOWN_WARMTH = Warmth(PrefixState.UNKNOWN)
+
+
+@dataclass(frozen=True, slots=True)
+class CacheClock:
+    ttl_s: int
+    now: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ModelStart:
+    model: str
+    first_at: datetime
+    last_at: datetime
+    cache: FirstRequestCache
+
+
+def model_starts(events: Sequence[LedgerEvent]) -> tuple[ModelStart, ...]:
+    grouped: dict[str, list[tuple[datetime, int, LedgerEvent]]] = {}
+    for event in events:
+        moment = _moment(event.ts)
+        if moment is None or not event.model or not agent_request(event):
+            continue
+        grouped.setdefault(base_model(event.model), []).append((moment, event.id, event))
+    starts: list[ModelStart] = []
+    for model, requests in grouped.items():
+        first_at, _, first = min(requests, key=lambda item: (item[0], item[1]))
+        cache = FirstRequestCache(
+            first.input_tokens, first.cache_read_tokens, first.cache_write_tokens
+        )
+        if cache.read > 0 or cache.written > 0:
+            last_at = max(item[0] for item in requests)
+            starts.append(ModelStart(model, first_at, last_at, cache))
+    return tuple(starts)
+
+
+def model_warmth(starts: Sequence[ModelStart], ttl_s: int, now: datetime) -> dict[str, Warmth]:
+    if ttl_s <= 0:
+        return {}
+    window = timedelta(seconds=ttl_s)
+    moment = now if now.tzinfo else now.replace(tzinfo=UTC)
+    latest: dict[str, datetime] = {}
+    shares: dict[str, list[float]] = {}
+    for start in sorted(starts, key=lambda item: item.first_at):
+        previous = latest.get(start.model)
+        if previous is not None and start.first_at < previous + window:
+            shares.setdefault(start.model, []).append(start.cache.share)
+        latest[start.model] = start.last_at if previous is None else max(previous, start.last_at)
+    pooled = median([share for values in shares.values() for share in values])
+    found: dict[str, Warmth] = {}
+    for model, last in latest.items():
+        if moment >= last + window:
+            found[model] = Warmth(PrefixState.COLD)
+            continue
+        share = median(shares.get(model, []))
+        chosen = share if share is not None else pooled
+        found[model] = Warmth(PrefixState.WARM, chosen if chosen is not None else 0.0)
+    return found

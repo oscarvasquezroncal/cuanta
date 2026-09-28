@@ -16,6 +16,7 @@ from cuanta.application.cat_capsule import CapsuleView
 from cuanta.application.cross_engine import CROSS_ORDER
 from cuanta.application.doctor import CheckResult, DoctorReport, result
 from cuanta.application.estimate import Estimate, estimate
+from cuanta.application.forecast import PlannedForecast
 from cuanta.application.home import HomeSnapshot, next_step
 from cuanta.application.init_project import (
     STAGES,
@@ -52,11 +53,13 @@ from cuanta.domain.assistant import (
     heuristic_clarity,
     heuristic_gaps,
 )
-from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
+from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixState, PrefixWindow
+from cuanta.domain.calibration import Calibration
 from cuanta.domain.capsules import Level
 from cuanta.domain.change_plan import ChangePlan
 from cuanta.domain.code_index import HandlingCard, IndexRow, IndexStatus, SearchHit
 from cuanta.domain.config import Config
+from cuanta.domain.depth import Depth, profile
 from cuanta.domain.detection import (
     Detection,
     DocsState,
@@ -77,6 +80,7 @@ from cuanta.domain.engine import (
     StepUsage,
     ToolCall,
 )
+from cuanta.domain.envelope import EnvelopeInputs, RoleInput, RoleModel, envelope
 from cuanta.domain.fixes import Fix
 from cuanta.domain.forge_verify import Finding
 from cuanta.domain.handoff import Handoff, Workflow
@@ -87,6 +91,7 @@ from cuanta.domain.mandate import MandateRequest, parse_shape, single_context
 from cuanta.domain.messages import Message, msg, option_message
 from cuanta.domain.models import ModelEntry, Tier, TierSource
 from cuanta.domain.new_files import original_of, side_by_side
+from cuanta.domain.pricing import Price
 from cuanta.domain.progress import (
     Note,
     ProgressEvent,
@@ -100,6 +105,8 @@ from cuanta.domain.progress import (
 from cuanta.domain.real_costs import CostReport, cost_report
 from cuanta.domain.report import ContextSplit, file_refs, next_request, parse_sections
 from cuanta.domain.routing import (
+    Provider,
+    Role,
     RoleRoute,
     RoutingPolicy,
     default_requests,
@@ -230,6 +237,32 @@ GPT_6 = tuple(
     )
 )
 TEAM_CATALOG = (*CATALOG, *GPT_6)
+SONNET_PRICE = Price(3.0, 15.0, 3.75, 0.3)
+OPUS_PRICE = Price(5.0, 25.0, 6.25, 0.5)
+
+
+def sample_forecast(cap: float = 5.0, prefix: PrefixState = PrefixState.WARM) -> PlannedForecast:
+    inputs = EnvelopeInputs(
+        task_type="feature",
+        depth=profile(Depth.NORMAL, "feature"),
+        shape="pipeline",
+        provider=Provider.CLAUDE,
+        roles=(
+            RoleInput(Role.ANALYST, RoleModel("claude-sonnet-5", SONNET_PRICE)),
+            RoleInput(
+                Role.SENIOR,
+                RoleModel("claude-opus-5-5", OPUS_PRICE),
+                cheaper=RoleModel("claude-sonnet-5", SONNET_PRICE),
+            ),
+        ),
+        cap_usd=cap,
+        edit_tokens=(2_000,),
+        read_tokens=(1_000,) * 4,
+        warmth=0.78,
+    )
+    return PlannedForecast(inputs, envelope(inputs), prefix)
+
+
 ROLE_STATS = (
     RoleStats("bug", "senior", "premium", 6, 5, 3.1, 6),
     RoleStats("bug", "tester", "standard", 4, 4, 0.8, 4),
@@ -942,6 +975,11 @@ class FakeServices:
         self.listener_running = False
         return True
 
+    calibration: tuple[Calibration, ...] = ()
+
+    def instinct_calibration(self) -> tuple[Calibration, ...]:
+        return self.calibration
+
     def instinct_overview(self) -> tuple[tuple[BackendStatus, ...], tuple[Decision, ...]]:
         statuses = tuple(
             BackendStatus(
@@ -1070,6 +1108,9 @@ class FakeServices:
             0.0004, "claude:haiku", proposal, changes(request, proposal), 0.0005, True
         )
 
+    forecast: PlannedForecast | None = None
+    forecast_error: Message | None = None
+
     def team_plan(
         self, request: MandateRequest, options: MandateOptions
     ) -> tuple[RoutePlan, Estimate]:
@@ -1077,7 +1118,8 @@ class FakeServices:
         routes = self.routes(request, options)
         plan = RoutePlan(self.team_policy(options), None, None, (), routes, "heuristic")
         cap = resolve_budget(options, request.type, 0.0)
-        return plan, estimate(plan, self.similar, load_prices(), request.type, options.depth, cap)
+        found = estimate(plan, self.similar, load_prices(), request.type, options.depth, cap)
+        return plan, replace(found, forecast=self.forecast, forecast_error=self.forecast_error)
 
     def team_policy(self, options: MandateOptions) -> RoutingPolicy:
         return RoutingPolicy(

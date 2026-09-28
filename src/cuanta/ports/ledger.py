@@ -4,10 +4,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from cuanta.domain.calibration import ForecastActual
 from cuanta.domain.ledger import (
     Baseline,
     Capsule,
     Decision,
+    Forecast,
     LedgerEvent,
     RouteAudit,
     RoutingDecision,
@@ -101,5 +103,11 @@ class Ledger(Protocol):
     def add_baselines(self, baselines: Sequence[Baseline]) -> None: ...
 
     def baselines(self, run_id: str = "") -> tuple[Baseline, ...]: ...
+
+    def add_forecast(self, forecast: Forecast) -> None: ...
+
+    def forecasts(
+        self, provider: str = "", task_type: str = "", limit: int = 0
+    ) -> tuple[ForecastActual, ...]: ...
 
     def close(self) -> None: ...

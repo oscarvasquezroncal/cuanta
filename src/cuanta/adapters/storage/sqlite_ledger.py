@@ -11,10 +11,12 @@ from typing import Any
 
 from cuanta.adapters.storage.migrations import LATEST_VERSION, MIGRATIONS
 from cuanta.adapters.storage.readonly_snapshot import closed_snapshot_uri
+from cuanta.domain.calibration import ForecastActual, forecast_actuals, forecast_matches
 from cuanta.domain.ledger import (
     Baseline,
     Capsule,
     Decision,
+    Forecast,
     LedgerEvent,
     RouteAudit,
     RoutingDecision,
@@ -37,6 +39,7 @@ DECISION_COLUMNS = tuple(item.name for item in fields(Decision) if item.name != 
 BASELINE_COLUMNS = tuple(item.name for item in fields(Baseline))
 AUDIT_COLUMNS = tuple(item.name for item in fields(RouteAudit))
 ROUTING_COLUMNS = tuple(item.name for item in fields(RoutingDecision) if item.name != "id")
+FORECAST_COLUMNS = tuple(item.name for item in fields(Forecast))
 
 
 def _placeholders(columns: Sequence[str]) -> str:
@@ -460,6 +463,33 @@ class SqliteLedger:
         parameters = (run_id,) if run_id else ()
         rows = self._query(f"SELECT * FROM baselines {where} ORDER BY id", parameters)
         return tuple(Baseline(**{name: row[name] for name in BASELINE_COLUMNS}) for row in rows)
+
+    def add_forecast(self, forecast: Forecast) -> None:
+        self._execute(
+            f"INSERT OR REPLACE INTO forecasts ({', '.join(FORECAST_COLUMNS)}) "
+            f"VALUES ({_placeholders(FORECAST_COLUMNS)})",
+            astuple(forecast),
+        )
+
+    def forecasts(
+        self, provider: str = "", task_type: str = "", limit: int = 0
+    ) -> tuple[ForecastActual, ...]:
+        where = "WHERE provider = ?" if provider else ""
+        parameters = (provider,) if provider else ()
+        rows = self._query(
+            f"SELECT * FROM forecasts {where} ORDER BY created_at DESC, run_id DESC", parameters
+        )
+        found = [Forecast(**{name: row[name] for name in FORECAST_COLUMNS}) for row in rows]
+        selected = [item for item in found if forecast_matches(item, provider, task_type)]
+        chosen = selected[:limit] if limit else selected
+        runs = self._query(
+            f"SELECT * FROM runs WHERE id IN (SELECT run_id FROM forecasts {where}) "
+            f"OR parent_id IN (SELECT run_id FROM forecasts {where})",
+            parameters * 2,
+        )
+        return forecast_actuals(
+            chosen, [Run(**{name: row[name] for name in RUN_COLUMNS}) for row in runs]
+        )
 
     def close(self) -> None:
         with self._lock:

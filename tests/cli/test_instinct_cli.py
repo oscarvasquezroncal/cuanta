@@ -8,6 +8,7 @@ import pytest
 from cuanta.adapters.instinct.jev import KEY_ENV
 from cuanta.adapters.system import config_files
 from cuanta.bootstrap import Container
+from cuanta.domain.ledger import Forecast, Run
 from tests.fakes import FakeRunner
 from tests.support import invoke
 
@@ -80,3 +81,52 @@ def test_show_warns_for_key_url_mismatch(
     config_files.set_value(tmp_path / ".cuanta" / "config.toml", "instinct.backend", "jev")
     shown = json.loads(invoke(["instinct", "show", "--json", "--project", str(tmp_path)]).stdout)
     assert warning in shown["warning"]
+
+
+def test_instinct_calibration_reports_error_and_coverage_per_provider_and_type(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    empty = invoke(["instinct", "calibration", "--json", "--project", str(tmp_path)])
+    assert empty.exit_code == 0, empty.stdout
+    assert json.loads(empty.stdout) == {"groups": []}
+    assert not (tmp_path / ".cuanta" / "ledger.db").exists()
+    container = Container.for_project(tmp_path)
+    ledger = container.ledger()
+    try:
+        for run_id, task_type, p50, actual in (
+            ("R1", "bug", 0.4, 0.5),
+            ("R2", "fix", 0.5, 0.5),
+            ("R3", "feature", 1.0, None),
+        ):
+            ledger.add_forecast(
+                Forecast(
+                    run_id,
+                    "2026-09-28T10:00:00Z",
+                    "claude",
+                    task_type,
+                    "normal",
+                    "pipeline",
+                    p50,
+                    p50 * 1.6,
+                    2.0,
+                    "comfortable",
+                )
+            )
+            ledger.add_run(Run(run_id, "mandate", "claude", status="ok", cost_usd=actual))
+    finally:
+        container.close()
+    result = invoke(["instinct", "calibration", "--json", "--project", str(tmp_path)])
+    groups = json.loads(result.stdout)["groups"]
+    assert [(row["task_type"], row["samples"], row["unknown"]) for row in groups] == [
+        ("feature", 0, 1),
+        ("fix", 2, 0),
+    ]
+    fix = groups[1]
+    assert fix["mae_usd"] == pytest.approx(0.05)
+    assert fix["mape"] == pytest.approx(0.1)
+    assert fix["p90_coverage"] == 1.0
+    assert groups[0]["mae_usd"] is None
+    plain = invoke(["instinct", "calibration", "--plain", "--project", str(tmp_path)])
+    assert "forecast calibration" in plain.stdout
+    assert "n/a" in plain.stdout
+    assert "$0.0500" in plain.stdout

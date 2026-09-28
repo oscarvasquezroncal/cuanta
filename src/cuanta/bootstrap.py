@@ -90,6 +90,7 @@ if TYPE_CHECKING:
     from cuanta.application.engine_run import EngineLauncher, LaunchSpec
     from cuanta.application.estimate import Estimate
     from cuanta.application.file_costs import FileCostsQuery
+    from cuanta.application.forecast import Forecaster, JevEnvelope, PlannedForecast, PlanSizes
     from cuanta.application.gateway import RunGateway
     from cuanta.application.home import HomeQuery
     from cuanta.application.index_read import IndexRead
@@ -128,7 +129,9 @@ if TYPE_CHECKING:
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.pack import ContextPack
-    from cuanta.domain.routing import CostRange, Role, RoutingPolicy
+    from cuanta.domain.pricing import PriceTable
+    from cuanta.domain.role_budgets import RepairBudget
+    from cuanta.domain.routing import CostRange, Provider, RoutingPolicy
     from cuanta.domain.sandbox import SandboxLaunch
     from cuanta.domain.shells import Shell
     from cuanta.domain.terminal import TerminalReport
@@ -1087,24 +1090,112 @@ class Container:
         )
 
     def team_estimate(
-        self, plan: RoutePlan, task_type: str, depth: str, cap: float, shape: str = "pipeline"
+        self,
+        plan: RoutePlan,
+        task_type: str,
+        depth: str,
+        cap: float,
+        shape: str = "pipeline",
+        repair: bool = True,
     ) -> Estimate:
         from cuanta.adapters.system.prices import load_prices
         from cuanta.application.estimate import estimate
 
         runs = self.shared_ledger().runs()
         return estimate(
-            plan, runs, load_prices(), task_type, depth, cap, shape, self.estimate_shapes(runs)
+            plan,
+            runs,
+            load_prices(),
+            task_type,
+            depth,
+            cap,
+            shape,
+            self.estimate_shapes(runs),
+            repair,
+        )
+
+    def plan_sizes(self, plan: ChangePlan) -> PlanSizes:
+        from cuanta.application.forecast import plan_sizes
+
+        try:
+            return self._indexed_sizes(plan)
+        except (OSError, ValueError, sqlite3.DatabaseError):
+            return plan_sizes(plan, ())
+
+    def _indexed_sizes(self, plan: ChangePlan) -> PlanSizes:
+        from cuanta.adapters.storage.sqlite_index import SqliteIndex
+        from cuanta.adapters.system.index_inventory import LocalIndexInventory
+        from cuanta.application.forecast import plan_sizes
+
+        if not self.config.index_enabled:
+            inventory = LocalIndexInventory(self.project, frozenset(self.config.exclusions))
+            return plan_sizes(plan, inventory.candidates())
+        path = self.project / ".cuanta" / "index.db"
+        if not path.is_file():
+            return plan_sizes(plan, ())
+        index = SqliteIndex(path, read_only=True)
+        try:
+            return plan_sizes(plan, index.files())
+        finally:
+            index.close()
+
+    def envelope_advisor(self, ledger: Ledger, prices: PriceTable) -> JevEnvelope | None:
+        if not self.config.instinct_envelope:
+            return None
+        from cuanta.adapters.instinct.jev import MODEL, JevInstinct
+        from cuanta.application.forecast import JevEnvelope
+
+        backend = JevInstinct()
+        return JevEnvelope(
+            backend,
+            ledger,
+            self.clock.now_iso,
+            prices.lookup(MODEL),
+            backend.name in self.config.remote_consent,
+            lambda request: self.blast_radius(f"{request.what} {request.where}"),
+        )
+
+    def forecaster(self, ledger: Ledger) -> Forecaster:
+        from cuanta.adapters.system.prices import load_prices
+        from cuanta.application.forecast import Forecaster
+
+        prices = load_prices()
+        return Forecaster(
+            ledger,
+            prices,
+            lambda: self.model_service().view().entries,
+            self.plan_sizes,
+            self.prefix_query().clock,
+            self.clock.now_iso,
+            self.envelope_advisor(ledger, prices),
+            self.estimate_shapes,
+        )
+
+    def team_forecast(
+        self,
+        task_type: str,
+        plan: RoutePlan,
+        provider: Provider,
+        depth: str,
+        shape: str,
+        cap: float,
+        change_plan: ChangePlan | None,
+        native: bool = False,
+        model: str = "",
+        max_turns: int = 0,
+    ) -> PlannedForecast:
+        return self.forecaster(self.shared_ledger()).plan(
+            task_type, plan, provider, depth, shape, cap, change_plan, native, model, max_turns
         )
 
     def role_budget(
-        self, plan: RoutePlan, task_type: str, depth: str, cap: float
-    ) -> Mapping[Role, float]:
-        return {
-            cost.role: cost.share
-            for cost in self.team_estimate(plan, task_type, depth, cap).roles
-            if cost.share > 0
-        }
+        self, plan: RoutePlan, task_type: str, depth: str, cap: float, repair: bool = True
+    ) -> RepairBudget:
+        from cuanta.domain.role_budgets import RepairBudget
+
+        found = self.team_estimate(plan, task_type, depth, cap, repair=repair)
+        shares = {cost.role: cost.share for cost in found.roles if cost.share > 0}
+        return RepairBudget(shares, found.repair_usd, found.repair_from_docs)
 
     def improve_request(self, request: MandateRequest, spend: bool) -> Improvement:
         from cuanta.application.assistant import (
@@ -1207,6 +1298,8 @@ class Container:
             index_tools=self.pipeline_index_tools,
             new_files=self.codex_file_guard() if os.name == "nt" else None,
             build_blocked=self.build_blocked(),
+            forecaster=self.forecaster(ledger),
+            new_run_id=self.new_run_id,
         )
 
     def verifier(self) -> Verifier:
@@ -1592,6 +1685,7 @@ class Container:
             ),
             learn_run=self.learn_run if sandbox is None else None,
             pipeline_index_tools=self.config.index_enabled and self.config.pipeline_index_tools,
+            forecaster=self.forecaster(ledger),
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:

@@ -19,6 +19,7 @@ from cuanta.application.cross_engine import (
 )
 from cuanta.application.doctor import DoctorReport
 from cuanta.application.estimate import Estimate
+from cuanta.application.forecast import forecast_failure
 from cuanta.application.home import HomeSnapshot
 from cuanta.application.init_project import InitOptions, InitReport
 from cuanta.application.instinct_view import (
@@ -26,6 +27,7 @@ from cuanta.application.instinct_view import (
     BackendStatus,
     JevCard,
     ProbeRow,
+    calibration,
     preview_state,
     probe,
 )
@@ -37,6 +39,7 @@ from cuanta.application.mandate_flow import (
     MandateOptions,
     MandatePreview,
     MandateSetup,
+    launch_turns,
     per_role_run,
     preview_of,
     resolve_budget,
@@ -50,13 +53,14 @@ from cuanta.application.spectrum import ALL_SESSIONS, Selection, SpectrumResult
 from cuanta.application.tests_view import TestsSummary, from_report
 from cuanta.domain.assistant import Clarity, Suggestions, content_key
 from cuanta.domain.cache import PrefixWindow
+from cuanta.domain.calibration import Calibration
 from cuanta.domain.capsules import Level
-from cuanta.domain.change_plan import ChangePlan
+from cuanta.domain.change_plan import ChangePlan, apply_overrides
 from cuanta.domain.code_index import SearchHit
 from cuanta.domain.config import Config
 from cuanta.domain.drafts import Draft
 from cuanta.domain.engine import EngineEvent
-from cuanta.domain.errors import DomainFailure, NotAvailable
+from cuanta.domain.errors import CuantaError, DomainFailure, NotAvailable
 from cuanta.domain.fixes import Fix, FixAction
 from cuanta.domain.handoff import Handoff, parse_workflow
 from cuanta.domain.instinct import Choice
@@ -67,7 +71,7 @@ from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.models import ModelEntry
 from cuanta.domain.progress import ProgressEvent
 from cuanta.domain.real_costs import CostReport
-from cuanta.domain.routing import RoutingPolicy
+from cuanta.domain.routing import RoutingPolicy, parse_provider
 from cuanta.domain.team import (
     ProviderAdvice,
     RoleCard,
@@ -278,6 +282,8 @@ class Services(Protocol):
 
     def probe_instinct(self) -> list[ProbeRow]: ...
 
+    def instinct_calibration(self) -> tuple[Calibration, ...]: ...
+
     def settings(self) -> Config: ...
 
     def models_view(self, refresh: bool) -> CatalogView: ...
@@ -362,6 +368,7 @@ class ContainerServices:
         self._stop_requested = False
         self._stop_lock = threading.Lock()
         self._clarity: dict[str, Clarity] = {}
+        self._plan_cache: tuple[MandateRequest, ChangePlan] | None = None
 
     @property
     def project(self) -> Path:
@@ -829,6 +836,15 @@ class ContainerServices:
         finally:
             container.close()
 
+    def instinct_calibration(self) -> tuple[Calibration, ...]:
+        container = self._container()
+        try:
+            if not (container.cuanta_dir() / "ledger.db").is_file():
+                return ()
+            return calibration(container.ledger())
+        finally:
+            container.close()
+
     def settings(self) -> Config:
         return self._container().config
 
@@ -919,15 +935,46 @@ class ContainerServices:
             shape = options.simple or single_context(
                 request.type, options.simple, parse_shape(options.shape)
             )
-            return plan, container.team_estimate(
-                plan,
-                request.type,
-                options.depth,
-                cap,
-                (Shape.SINGLE if shape else Shape.PIPELINE).value,
+            shaped = (Shape.SINGLE if shape else Shape.PIPELINE).value
+            engine = options.engine or container.config.engine
+            provider = parse_provider(engine)
+            if provider is None or options.simple:
+                return plan, container.team_estimate(plan, request.type, options.depth, cap, shaped)
+            protection = apply_overrides(
+                self._compiled_plan(container, request), options.plan_overrides
             )
+            estimate = container.team_estimate(
+                plan, request.type, options.depth, cap, shaped, bool(protection.verify)
+            )
+            per_role = per_role_run(options, request.type, container.config.engine)
+            try:
+                forecast = container.team_forecast(
+                    request.type,
+                    plan,
+                    provider,
+                    options.depth,
+                    shaped,
+                    cap,
+                    protection,
+                    native=shaped == Shape.PIPELINE.value and not per_role,
+                    model="" if per_role else options.model,
+                    max_turns=0
+                    if per_role
+                    else launch_turns(options, request.type, engine, container.config.max_turns),
+                )
+            except (CuantaError, ValueError) as error:
+                return plan, replace(estimate, forecast_error=forecast_failure(error))
+            return plan, replace(estimate, forecast=forecast)
         finally:
             container.close()
+
+    def _compiled_plan(self, container: Container, request: MandateRequest) -> ChangePlan:
+        cached = self._plan_cache
+        if cached is not None and cached[0] == request:
+            return cached[1]
+        plan = container.change_plan(request)
+        self._plan_cache = (request, plan)
+        return plan
 
     def team_cards(
         self, plan: RoutePlan, estimate: Estimate, options: MandateOptions, task_type: str
@@ -964,7 +1011,9 @@ class ContainerServices:
     def change_plan(self, request: MandateRequest) -> ChangePlan:
         container = self._container()
         try:
-            return container.change_plan(request)
+            plan = container.change_plan(request)
+            self._plan_cache = (request, plan)
+            return plan
         finally:
             container.close()
 
