@@ -6,6 +6,44 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
+Teams by provider: a mandate's team runs on Claude or GPT (Codex), with a current model per role.
+
+### Added
+- Default models per provider and tier in `model_tiers.toml`: Claude `haiku`, `sonnet`, `opus`;
+  GPT `gpt-6-luna`, `gpt-6-sol`, `gpt-6-sol`. Frontier and older generations are never defaults and
+  stay available by pinning.
+- A GPT team (`mandate --engine codex` on a pipeline mandate) runs one launch per role with anchored
+  handoffs, cuanta's checks between writing roles, shared budgets, salvage and guards. Its dry run
+  lists each role's model.
+- The app's Team step offers "Claude team" and "GPT team". Cards list each role's model with its price
+  per million tokens, the model menu lists only the provider's models with prices, and the preview
+  lists each role's model. `docs/TEAMS.md` explains how each team runs.
+
+### Changed
+- `--role-model role=model` pins a model within the team's provider; a pin to the other provider is
+  refused before launch with the reason. `--cross-engine` now runs each role as its own launch on the
+  same provider.
+- The tester asks for the standard tier instead of premium.
+- On Windows, a GPT team's tester stays on Codex and is told not to run node, npm or npx commands
+  (builds or tests); cuanta runs the checks itself between roles.
+- Team recommends a provider, not a preset, from measured cost per accepted change. Codex pipeline
+  mandates that ran as one session are left out of the count.
+- From the command line, a GPT team is capped by `--max-budget-usd`, else the `--depth` cap, else the
+  `budget.usd` setting, else the normal depth's cap, as in the app; `--cross-budget-usd` sets the cap
+  and `--max-budget-usd` bounds it. A Claude team run with `--cross-engine` keeps its $1.00 default.
+  The dry run shows the cap.
+- `cuanta costs` groups a run of one launch per role under its provider; only runs whose roles used
+  more than one engine stay under cross-engine.
+
+### Fixed
+- Stop, in the app's pipeline screen, stops a team run of one launch per role: the running role ends
+  and no later role starts. A stop during cuanta's checks between roles ends the running check and
+  starts no other.
+
+### Removed
+- Mixed teams: `mandate --mix` and its presets `claude-only`, `claude-plans-codex-writes` and
+  `codex-plans-claude-writes`, the app's mix chips, and `docs/MIXED_TEAMS.md`.
+
 ## [0.4.0] - 2026-09-27
 
 Mixed teams that finish: per-role engines and pins, anchored handoffs, verification between roles and budgets that end with a named state.
