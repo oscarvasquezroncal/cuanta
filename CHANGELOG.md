@@ -6,7 +6,37 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-27
+
+Mixed teams that finish: per-role engines and pins, anchored handoffs, verification between roles and budgets that end with a named state.
+
+### Added
+- Mixed teams: `mandate --cross-engine --mix claude-only|claude-plans-codex-writes|codex-plans-claude-writes`
+  runs each role separately on Claude or Codex. Role pins `role=engine:model` are honored in native and
+  cross runs or refused before launch with the reason. The app's Team step offers the same presets and
+  shows each role's engine, model, share, guarantees, context delivery and warnings; `docs/MIXED_TEAMS.md`
+  explains how to choose.
+- Roles pass a structured, accumulating handoff: a summary, decisions, facts anchored as `path:start-end`
+  with line hashes, the plan's edit/read/verify sets, open questions and a status. Anchors are checked
+  against the working copy and stale ones are marked; the chain is compacted to the depth's budget and
+  full texts stay in capsules.
+- cuanta runs the project's type check, lint and build between roles, in the working copy and outside any
+  engine sandbox, with a timeout that stops the whole process tree. A failing writer gets one repair turn;
+  results appear as their own phase with $0 model spend. Only commands from cuanta's change plan run.
+- Team recommends a preset for a task type from measured cost per accepted change.
+- Claude's print-mode permission denials are stored as `permission_denied` events with tool and path.
+
 ### Changed
+- Cross-engine budgets finish: role floors, shares from role history once there are three samples, Claude
+  native caps a learned margin below the share, salvage handoffs after a budget stop, optional docs and
+  verified-tester skips, Codex overruns charged to the remainder, and a blocked role stops the pipeline.
+  Runs end complete, complete with optional roles skipped, partial (with the cause) or failed, shown in
+  the result, `runs show` and `cuanta costs`.
+- The working copy is checked after every role; a protected change stops the pipeline before the next role
+  and names the role. Verification outputs stay out of recorded sandbox patches.
+- Pipeline roles get the owned index server by default (`runs.pipeline_index_tools`): Codex through a
+  per-launch `mcp_servers` entry, Claude through the generated profile. Role prompts lead with the anchored
+  chain and how to open a range. The `page` tool accepts `a-b` ranges.
 - Recorded the indexed E1/T1 replay with frozen requests, observed models, cache,
   source guards and costs per accepted attempt. The repeated Sonnet audit met its
   $0.30 target; blocked comparisons and bounded GSAP recovery limits remain explicit.
@@ -58,6 +88,11 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   Maintenance.
 - `SECURITY.md` directs vulnerability reports to GitHub private vulnerability reporting
   instead of a public issue requesting a private channel.
+
+### Fixed
+- Read-discipline hooks now run on Windows: hook commands use a POSIX interpreter path, because Claude Code
+  runs them through Git Bash.
+- Pins written as `engine:resolved-name` (for example `claude:claude-sonnet-5`) were ignored.
 
 ### Removed
 - cuanta no longer accepts contributions: `CONTRIBUTING.md` and the bug report, feature
