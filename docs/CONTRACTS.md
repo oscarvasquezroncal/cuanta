@@ -93,6 +93,18 @@ other binding versions.
 | RT-02 | `commit-msg` can edit the commit message, and `core.hooksPath` selects the hook directory | Git for Windows 2.41.0 | verified | 2026-09-25 | [Git hook contract](https://git-scm.com/docs/githooks#_commit_msg) and local hook tests are recorded in `docs/GROUND_TRUTH.md`. |
 | RT-03 | `--dist=loadgroup` honors `xdist_group` and `--maxprocesses` bounds local workers | pytest-xdist 3.8.0 | verified | 2026-09-25 | [pytest-xdist distribution reference](https://pytest-xdist.readthedocs.io/en/stable/distribution.html), repository test configuration, and fixed-port test grouping are recorded in `docs/GROUND_TRUTH.md`. |
 
+## Open after the mixed-teams plan (2026-09-27)
+
+Every row touched since X1 (CC-05, CC-08, CC-10, CC-11, CC-17, CX-09, CX-10, GR-03, IDX-01, MCP-01, MCP-02 and MCP-03) has a final status, evidence and a date. These rows stay open, and why:
+
+- CC-12 (`--input-format stream-json`), CC-16 (`--add-dir`), CC-20 (`--no-session-persistence`): cuanta does not rely on them yet; no runtime probe was needed.
+- CC-15 (cache TTL by auth mode): the subscription lifetime is only bracketed between 360 s and 3,660 s; the exact value and API-key lifetimes need further probes and an API-key account.
+- CC-18 (subagent model environment overrides): covered by fakes only; a runtime probe needs an environment with those variables set.
+- CX-03 (Codex OTel export) and CX-04 (Codex price rows for every billing tier): fixture-backed; Codex costs remain token-price estimates.
+- OC-01 (OpenCode step costs): OpenCode is outside live work in this plan. OC-02 (OpenCode write denial) and GR-02 (installed graphify skill version) stay broken; both are user-environment or engine limits.
+- RT-01 (attribution settings): the repository's commit hook enforces the rule independently.
+- CX-09 is final as broken on this host: Codex cannot run the project's build inside its Windows sandbox, and cuanta verifies builds itself.
+
 ## Updating this registry
 
 - Before relying on a new external flag, setting, stream field, protocol revision or price, check the installed version and update the relevant row with its date and evidence.
