@@ -127,7 +127,10 @@ def test_bench_screen_shows_the_latest_results_read_only() -> None:
 def test_bench_screen_without_results_points_to_the_cli() -> None:
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
         app.action_bench()
-        await wait_for(pilot, lambda: isinstance(app.screen, BenchScreen))
+        await wait_for(
+            pilot,
+            lambda: isinstance(app.screen, BenchScreen) and bool(app.screen.query("#bench-meta")),
+        )
         screen = app.screen
         assert isinstance(screen, BenchScreen)
         assert "No bench results" in render(screen.query_one("#bench-meta", Static))
