@@ -7,9 +7,11 @@ import pytest
 
 from cuanta.adapters.engines.codex import CodexEngine
 from cuanta.application.mandate_flow import MandateOptions, resolve_budget
+from cuanta.application.routing import RoutePlan
 from cuanta.bootstrap import Container
 from cuanta.cli.commands.mandate import TEAM_BUDGET_USD
 from cuanta.domain.depth import DEFAULT_DEPTH, profile
+from cuanta.domain.role_budgets import RepairBudget
 from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner, FakeStream
 from tests.support import invoke
@@ -392,6 +394,28 @@ def test_a_gpt_team_launch_spends_within_the_max_budget(
     assert "GPT team · one launch per role" in output
     assert "experimental" not in output
     assert [call for call in fake_runner.calls if call[:2] == ("codex", "exec")]
+
+
+def test_a_gpt_fix_without_checks_shows_and_runs_its_team_without_a_repair_reserve(
+    tmp_path: Path, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repairs: list[bool] = []
+    original = Container.role_budget
+
+    def recording(
+        self: Container, plan: RoutePlan, task_type: str, depth: str, cap: float, repair: bool
+    ) -> RepairBudget:
+        repairs.append(repair)
+        return original(self, plan, task_type, depth, cap, repair)
+
+    monkeypatch.setattr(Container, "role_budget", recording)
+    codex_ready(fake_runner)
+    result = invoke(
+        cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--max-budget-usd", "0.3")
+    )
+    assert result.exit_code == 0, result.stdout
+    assert repairs == [False, False]
+    assert "held for one repair turn" not in " ".join(result.stdout.split())
 
 
 def test_a_prompted_investigation_stays_one_codex_session(

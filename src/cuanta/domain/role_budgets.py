@@ -20,6 +20,14 @@ MIN_MARGIN = 0.05
 MAX_MARGIN = 0.25
 MARGIN_SAFETY = 1.25
 MIN_SAMPLES = 3
+REPAIR_FRACTION = 0.15
+
+
+@dataclass(frozen=True, slots=True)
+class RepairBudget:
+    shares: Mapping[Role, float]
+    repair_usd: float
+    from_docs: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,3 +103,40 @@ def soft_cap(share: float, margin: float) -> float:
 
 def floors_usd(roles: Iterable[Role], cap: float) -> float:
     return sum(cap * floor_fraction(role) for role in roles)
+
+
+def _whole_cap_floors(
+    roles: Iterable[Role], floors: Mapping[Role, float] | None, scale: float
+) -> dict[Role, float]:
+    chosen = floors if floors is not None else ROLE_FLOORS
+    return {role: chosen.get(role, ROLE_FLOOR) * scale for role in roles}
+
+
+def repair_budget(
+    costs: Mapping[Role, float | None],
+    cap: float,
+    docs: bool,
+    floors: Mapping[Role, float] | None = None,
+) -> RepairBudget:
+    if not math.isfinite(cap):
+        raise ValueError("Role budget must be finite")
+    if cap <= 0 or not costs:
+        return RepairBudget({}, 0.0, False)
+    if docs:
+        reserve = cap * REPAIR_FRACTION
+        scaled = _whole_cap_floors(costs, floors, 1.0 / (1.0 - REPAIR_FRACTION))
+        return RepairBudget(allocate_budget(costs, cap - reserve, scaled), reserve, False)
+    funded = allocate_budget({**costs, Role.DOCS: costs.get(Role.DOCS)}, cap, floors)
+    reserve = funded.pop(Role.DOCS, 0.0)
+    return RepairBudget(funded, reserve, True)
+
+
+def role_split(
+    costs: Mapping[Role, float | None],
+    cap: float,
+    fix: bool,
+    floors: Mapping[Role, float] | None = None,
+) -> RepairBudget:
+    if fix:
+        return repair_budget(costs, cap, Role.DOCS in costs, floors)
+    return RepairBudget(allocate_budget(costs, cap, floors), 0.0, False)

@@ -9,10 +9,12 @@ from cuanta.application.instinct import (
     probe_questions,
     redact_context,
 )
+from cuanta.domain.calibration import Calibration, calibration_rows
 from cuanta.domain.costs import sum_costs
 from cuanta.domain.instinct import Primitive
 from cuanta.domain.ledger import Decision
 from cuanta.domain.messages import Message, keyed, msg, option_message, question_message
+from cuanta.ports.ledger import Ledger
 
 BACKENDS = ("heuristic", "jev", "llm")
 PROBE_RUN = "probe"
@@ -74,7 +76,10 @@ SENTENCE_SUBJECTS = {
     "question.triage": "sentence.triage",
     "question.network": "sentence.network",
     "question.rename_risk": "sentence.risk",
+    "question.envelope_risk": "sentence.risk",
+    "question.envelope_exploration": "sentence.exploration",
 }
+TIER_QUESTIONS = frozenset({"question.route_tier", "question.envelope_tier"})
 WEEK_DAYS = 7
 
 
@@ -92,7 +97,7 @@ class JevCard:
 
 def sentence(decision: Decision) -> Message:
     parsed = question_message(decision.question)
-    if parsed is not None and parsed.key == "question.route_tier":
+    if parsed is not None and parsed.key in TIER_QUESTIONS:
         role = parsed.values(lambda message: message.key).get("role", "")
         subject = msg("sentence.tier", role=keyed("role", role))
     elif parsed is not None and parsed.key in SENTENCE_SUBJECTS:
@@ -107,6 +112,31 @@ def sentence(decision: Decision) -> Message:
         subject=subject,
         answer=answer,
         confidence=f"{decision.confidence:.0%}",
+    )
+
+
+def calibration(ledger: Ledger) -> tuple[Calibration, ...]:
+    return calibration_rows(ledger.forecasts())
+
+
+def percent(value: float | None, missing: str) -> str:
+    return missing if value is None else f"{value:.0%}"
+
+
+def usd(value: float | None, missing: str) -> str:
+    return missing if value is None else f"${value:.4f}"
+
+
+def calibration_cells(row: Calibration, missing: str) -> tuple[str, ...]:
+    return (
+        row.provider or missing,
+        row.task_type or missing,
+        str(row.samples),
+        str(row.unknown),
+        usd(row.mae_usd, missing),
+        percent(row.mape, missing),
+        percent(row.p90_coverage, missing),
+        percent(row.p90_error, missing),
     )
 
 

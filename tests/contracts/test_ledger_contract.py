@@ -15,6 +15,7 @@ from cuanta.domain.ledger import (
     Baseline,
     Capsule,
     Decision,
+    Forecast,
     LedgerEvent,
     Run,
     SignatureRecord,
@@ -492,3 +493,82 @@ def test_project_level_test_runs_leave_out_runs_made_in_an_isolated_copy(ledger:
     assert [record.id for record in ledger.test_runs(limit=1)] == ["T2"]
     assert [record.id for record in ledger.test_runs(project_only=True)] == ["T1", "T3"]
     assert [record.id for record in ledger.test_runs(run_id="S")] == ["T2"]
+
+
+def _forecast(
+    run_id: str, created_at: str, provider: str = "claude", task_type: str = "feature"
+) -> Forecast:
+    return Forecast(
+        run_id,
+        created_at,
+        provider,
+        task_type,
+        "normal",
+        "pipeline",
+        0.5,
+        0.8,
+        1.5,
+        "comfortable",
+        '{"start":1}',
+        '[{"role":"senior"}]',
+        '{"edit_files":2}',
+    )
+
+
+def test_forecasts_round_trip_with_their_actuals(ledger: Ledger) -> None:
+    ledger.add_run(Run(id="A", kind="mandate", status="ok", cost_usd=0.4))
+    ledger.add_run(Run(id="B", kind="cross", status="ok", cost_usd=0.1))
+    ledger.add_run(Run(id="B1", kind="cross", status="ok", cost_usd=0.2, parent_id="B"))
+    ledger.add_run(Run(id="C", kind="mandate", cost_usd=0.1))
+    ledger.add_forecast(_forecast("A", "2026-09-28T01:00:00Z"))
+    ledger.add_forecast(_forecast("B", "2026-09-28T02:00:00Z", task_type="bug"))
+    ledger.add_forecast(_forecast("C", "2026-09-28T03:00:00Z", provider="codex"))
+    ledger.add_forecast(_forecast("D", "2026-09-28T04:00:00Z"))
+    found = ledger.forecasts()
+    assert [item.forecast.run_id for item in found] == ["D", "C", "B", "A"]
+    assert found[-1].forecast == _forecast("A", "2026-09-28T01:00:00Z")
+    actuals = {item.forecast.run_id: item.actual_usd for item in found}
+    assert (actuals["A"], actuals["C"], actuals["D"]) == (0.4, None, None)
+    assert actuals["B"] == pytest.approx(0.3)
+    assert [item.forecast.run_id for item in ledger.forecasts(provider="claude")] == [
+        "D",
+        "B",
+        "A",
+    ]
+    assert [item.forecast.run_id for item in ledger.forecasts(task_type="fix")] == ["B"]
+    assert [item.forecast.run_id for item in ledger.forecasts("claude", limit=2)] == ["D", "B"]
+    ledger.add_forecast(replace(_forecast("A", "2026-09-28T01:00:00Z"), p50_usd=0.6))
+    (again,) = ledger.forecasts("claude", "feature", limit=2)[1:]
+    assert (again.forecast.run_id, again.forecast.p50_usd) == ("A", 0.6)
+
+
+def test_migration_adds_the_forecasts_table_idempotently(tmp_path: Path) -> None:
+    from cuanta.adapters.storage.migrations import MIGRATIONS
+
+    path = tmp_path / "v12.db"
+    with closing(sqlite3.connect(path)) as connection, connection:
+        for version, statements in enumerate(MIGRATIONS[:12], start=1):
+            connection.executescript(statements)
+            connection.execute("INSERT INTO schema_version(version) VALUES (?)", (version,))
+        connection.execute(
+            "INSERT INTO runs(id, kind, status, cost_usd) VALUES ('R', 'mandate', 'ok', 0.3)"
+        )
+    upgraded = SqliteLedger(path)
+    try:
+        assert upgraded.schema_version() == LATEST_VERSION
+        assert upgraded.forecasts() == ()
+        upgraded.add_forecast(_forecast("R", "2026-09-28T00:00:00Z"))
+    finally:
+        upgraded.close()
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.executescript(MIGRATIONS[12])
+    reopened = SqliteLedger(path)
+    try:
+        assert reopened.schema_version() == LATEST_VERSION
+        (item,) = reopened.forecasts()
+        assert (item.forecast, item.actual_usd) == (_forecast("R", "2026-09-28T00:00:00Z"), 0.3)
+        run = reopened.get_run("R")
+        assert run is not None
+        assert (run.status, run.cost_usd) == ("ok", 0.3)
+    finally:
+        reopened.close()

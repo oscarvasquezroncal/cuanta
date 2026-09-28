@@ -12,7 +12,9 @@ from cuanta.application.assistant import sent_payload
 from cuanta.application.intake import Understanding
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixState, PrefixWindow
 from cuanta.domain.change_plan import ChangePlan
-from cuanta.domain.routing import Provider
+from cuanta.domain.envelope import RoleInput, RoleModel, envelope
+from cuanta.domain.messages import msg
+from cuanta.domain.routing import Provider, Role
 from cuanta.domain.team import ProviderAdvice
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.cache_text import clock_time
@@ -20,7 +22,7 @@ from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.screens.pipeline import PipelineScreen
 from cuanta.tui.views.mandate import MandateView
 from cuanta.tui.widgets.wizard import IntentCard, MandateWizard
-from tests.tui.fakes import TEAM_CATALOG, FakeServices
+from tests.tui.fakes import TEAM_CATALOG, FakeServices, sample_forecast
 from tests.tui.test_app import drive, make_app, settle
 from tests.tui.test_t5_screens import render, wait_for
 
@@ -70,6 +72,70 @@ def test_team_shows_the_measured_prefix_window() -> None:
         wizard.query_one("#wiz-engine", Select).value = "opencode"
         await wait_for(pilot, lambda: "opencode" in services.prefix_engines)
         assert "last observed prefix: unknown" in render(prefix)
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+@pytest.mark.parametrize("tight", [False, True], ids=["comfortable", "tight"])
+def test_team_shows_the_forecast_line_and_a_tight_verdict_with_its_first_suggestion(
+    tight: bool,
+) -> None:
+    base = sample_forecast()
+    p90 = base.envelope.p90_usd or 0.0
+    forecast = sample_forecast(cap=p90 * 0.95) if tight else base
+    services = FakeServices(forecast=forecast)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        estimate = wizard.query_one("#wiz-estimate", Static)
+        await wait_for(pilot, lambda: "Forecast $" in render(estimate))
+        shown = render(estimate)
+        assert "Based on 1 similar run" not in shown
+        assert "warm cache (78%)" in shown
+        assert ("Tight: the P90 is within 15% of the" in shown) is tight
+        assert ("Try: " in shown) is tight
+        if tight:
+            assert f"{forecast.envelope.suggestions[0].p90_usd:.2f}" in shown
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_an_unpriced_forecast_keeps_the_history_estimate_above_it() -> None:
+    base = sample_forecast()
+    inputs = replace(
+        base.inputs, roles=(RoleInput(Role.SENIOR, RoleModel("unlisted-model", None)),)
+    )
+    services = FakeServices(forecast=replace(base, inputs=inputs, envelope=envelope(inputs)))
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        estimate = wizard.query_one("#wiz-estimate", Static)
+        await wait_for(pilot, lambda: "Forecast n/a" in render(estimate))
+        assert "Based on 1 similar run: $0.55" in render(estimate)
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_a_failed_forecast_is_a_warning_under_the_history_estimate() -> None:
+    failure = msg("envelope.failed", error="the code index is being written")
+    services = FakeServices(forecast_error=failure)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        estimate = wizard.query_one("#wiz-estimate", Static)
+        await wait_for(pilot, lambda: "Forecast unavailable" in render(estimate))
+        shown = " ".join(render(estimate).split())
+        assert "Based on 1 similar run: $0.55" in shown
+        assert "the code index is being written" in shown
 
     drive(make_app(services), scenario, size=(120, 50))
 

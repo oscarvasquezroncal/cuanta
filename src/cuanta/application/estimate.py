@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from math import isfinite
 
+from cuanta.application.forecast import PlannedForecast
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.costs import median
 from cuanta.domain.depth import (
@@ -16,12 +17,13 @@ from cuanta.domain.depth import (
     plan_cost,
     profile,
 )
+from cuanta.domain.envelope import is_fix
 from cuanta.domain.estimates import CALIBRATED, RunEstimate, estimate_bounds
 from cuanta.domain.ledger import Run
 from cuanta.domain.messages import Message, msg
 from cuanta.domain.pricing import Price, PriceTable, dollars
 from cuanta.domain.real_costs import Attempt, attempts
-from cuanta.domain.role_budgets import allocate_budget, history_weights
+from cuanta.domain.role_budgets import history_weights, role_split
 from cuanta.domain.routing import CostRange, Role, cost_range
 
 Estimator = Callable[[RoutePlan | None, str, str], RunEstimate]
@@ -46,6 +48,10 @@ class Estimate:
     roles: tuple[RoleCost, ...]
     depth: str
     bounds: RunEstimate = field(default_factory=RunEstimate)
+    forecast: PlannedForecast | None = None
+    repair_usd: float = 0.0
+    repair_from_docs: bool = False
+    forecast_error: Message | None = None
 
 
 def _shape(item: Attempt, shapes: Mapping[str, str] | None) -> str:
@@ -163,6 +169,7 @@ def estimate(
     cap: float,
     shape: str = "",
     shapes: Mapping[str, str] | None = None,
+    repair: bool = True,
 ) -> Estimate:
     chosen = profile(parse_depth(depth), task_type)
     similar = cost_range(similar_costs(runs, task_type, chosen.depth.value, shape, shapes))
@@ -181,8 +188,8 @@ def estimate(
         role_history(plan, runs, task_type, chosen.depth.value), planned_costs
     )
     weights: Mapping[Role, float | None] = history if history is not None else planned_costs
-    budgets = allocate_budget(weights, cap)
-    roles = tuple(replace(cost, share=budgets.get(cost.role, 0.0)) for cost in roles)
+    split = role_split(weights, cap, is_fix(task_type) and repair)
+    roles = tuple(replace(cost, share=split.shares.get(cost.role, 0.0)) for cost in roles)
     displayed = bounds.high if bounds.source == CALIBRATED else planned
     message = (
         msg(
@@ -203,6 +210,8 @@ def estimate(
         roles=roles,
         depth=chosen.depth.value,
         bounds=bounds,
+        repair_usd=split.repair_usd,
+        repair_from_docs=split.from_docs,
     )
 
 

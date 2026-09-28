@@ -14,6 +14,7 @@ from cuanta.adapters.storage.capsule_store import FileCapsuleStore
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.adapters.system.clock import FixedClock
 from cuanta.application.cross_engine import (
+    CROSS_ORDER,
     CompletionState,
     CrossEnginePipeline,
     CrossReport,
@@ -29,11 +30,19 @@ from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.progress import ProgressEvent
+from cuanta.domain.role_budgets import (
+    REPAIR_FRACTION,
+    RepairBudget,
+    allocate_budget,
+    floor_fraction,
+    role_split,
+)
 from cuanta.domain.role_handoff import VerifyResult
 from cuanta.domain.routing import ROLES, Role, RoleRoute, RoutingPolicy
 from tests.fakes import FakeRunner, FakeStream
 
 REQUEST = MandateRequest(type="feature", what="add canonical", why="seo", out_of_scope="secrets")
+FIX = MandateRequest(type="bug", what="fix canonical", why="seo", out_of_scope="secrets")
 
 
 @dataclass
@@ -42,6 +51,7 @@ class Act:
     cost: float = 0.1
     writes: Mapping[str, str] = field(default_factory=dict)
     subtype: str = "success"
+    whole_cap: bool = False
 
 
 class Recorder:
@@ -95,7 +105,8 @@ class Actor:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         ok = act.subtype == "success"
-        result = RunResult(ok, act.subtype, act.cost, 1, "s", (), act.text)
+        cost = request.max_budget_usd if act.whole_cap else act.cost
+        result = RunResult(ok, act.subtype, cost, 1, "s", (), act.text)
         on_event(result)
         return EngineOutcome(0 if ok else 1, result, 0)
 
@@ -149,9 +160,14 @@ class Harness:
     actors: dict[str, Actor] = field(default_factory=dict)
     ledger: MemoryLedger = field(default_factory=MemoryLedger)
     saved: dict[str, Mapping[str, object]] = field(default_factory=dict)
+    reserve: float = 0.0
+    repairs: list[bool] = field(default_factory=list)
 
-    def allocate(self, plan: RoutePlan, kind: str, depth: str, cap: float) -> Mapping[Role, float]:
-        return self.shares or {}
+    def allocate(
+        self, plan: RoutePlan, kind: str, depth: str, cap: float, repair: bool
+    ) -> RepairBudget:
+        self.repairs.append(repair)
+        return RepairBudget(self.shares or {}, self.reserve, False)
 
     def verifier(
         self, commands: Sequence[str], stopped: Callable[[], bool]
@@ -200,9 +216,11 @@ class Harness:
             checkpoint=self.checkpoint,
         )
 
-    def run(self, engines: Mapping[Role, str] = MIX) -> tuple[CrossReport, Recorder]:
+    def run(
+        self, engines: Mapping[Role, str] = MIX, request: MandateRequest = REQUEST
+    ) -> tuple[CrossReport, Recorder]:
         recorder = Recorder()
-        return self.build().run(REQUEST, routes(engines), recorder), recorder
+        return self.build().run(request, routes(engines), recorder), recorder
 
     def prompts(self) -> list[str]:
         found = [request for actor in self.actors.values() for request in actor.requests]
@@ -339,6 +357,217 @@ def test_a_failed_check_gets_one_repair_then_passes(tmp_path: Path) -> None:
     assert "senior gets one repair turn" in " ".join(recorder.texts())
     assert report.state is CompletionState.COMPLETE
     assert report.spent_usd == pytest.approx(0.45)
+
+
+def test_a_fix_without_docs_funds_its_repair_turn_from_the_docs_share(tmp_path: Path) -> None:
+    seed(tmp_path)
+    failing = (VerifyResult("npm run build", 1, 2.0, ("src/layout.ts:1 Type error",)),)
+    team = {Role.ANALYST: "claude", Role.SENIOR: "codex", Role.TESTER: "claude"}
+    as_if_docs = allocate_budget(dict.fromkeys((*team, Role.DOCS)), 1.0)
+    senior_cap = 1.0 - 0.1 - as_if_docs[Role.TESTER] - as_if_docs[Role.DOCS]
+    script = {
+        "senior": [
+            Act(cost=senior_cap, writes={"src/layout.ts": "broken\n"}),
+            Act(cost=0.05, writes={"src/layout.ts": "fixed\n"}),
+        ]
+    }
+    harness = Harness(tmp_path, script, budget=1.0, verify_results=[failing])
+    report, recorder = harness.run(team, FIX)
+    assert [(step.role, step.repair) for step in report.steps] == [
+        (Role.ANALYST, False),
+        (Role.SENIOR, False),
+        (Role.SENIOR, True),
+        (Role.TESTER, False),
+    ]
+    assert report.steps[0].budget_usd == pytest.approx(as_if_docs[Role.ANALYST])
+    assert report.steps[1].budget_usd == pytest.approx(senior_cap)
+    assert report.steps[2].budget_usd == pytest.approx(as_if_docs[Role.DOCS])
+    text = " ".join(recorder.texts())
+    assert f"${as_if_docs[Role.DOCS]:.4f} is held for one repair turn, funded from the docs" in text
+    assert report.state is CompletionState.COMPLETE
+
+
+def test_a_fix_with_docs_holds_a_fixed_share_of_the_cap_for_its_repair(tmp_path: Path) -> None:
+    seed(tmp_path)
+    failing = (VerifyResult("npm run build", 1, 2.0, ("src/layout.ts:1 Type error",)),)
+    reserve = 1.0 * REPAIR_FRACTION
+    shares = role_split(dict.fromkeys(MIX), 1.0, True).shares
+    senior_cap = 1.0 - 0.1 - shares[Role.TESTER] - shares[Role.DOCS] - reserve
+    script = {
+        "senior": [
+            Act(cost=senior_cap, writes={"src/layout.ts": "broken\n"}),
+            Act(cost=0.05, writes={"src/layout.ts": "fixed\n"}),
+        ]
+    }
+    harness = Harness(tmp_path, script, budget=1.0, verify_results=[failing])
+    report, recorder = harness.run(MIX, FIX)
+    assert report.steps[0].budget_usd == pytest.approx(shares[Role.ANALYST])
+    repair = [step for step in report.steps if step.repair]
+    assert [step.budget_usd for step in repair] == pytest.approx([reserve])
+    assert f"${reserve:.4f} is held for one repair turn" in " ".join(recorder.texts())
+    assert [step.role for step in report.steps if not step.repair] == list(CROSS_ORDER)
+
+
+def test_a_fix_without_checks_holds_no_repair_reserve_and_splits_like_a_feature(
+    tmp_path: Path,
+) -> None:
+    seed(tmp_path)
+    team = {Role.ANALYST: "claude", Role.SENIOR: "codex", Role.TESTER: "claude"}
+    feature = allocate_budget(dict.fromkeys(team), 1.0)
+    script = {"analyst": [Act(cost=0.2)]}
+    harness = Harness(tmp_path, script, budget=1.0, plan=ChangePlan())
+    report, recorder = harness.run(team, FIX)
+    assert [step.budget_usd for step in report.steps[:2]] == pytest.approx(
+        [feature[Role.ANALYST], 1.0 - 0.2 - feature[Role.TESTER]]
+    )
+    assert not report.verifications
+    assert "held for one repair turn" not in " ".join(recorder.texts())
+    pinned_root = tmp_path / "pinned"
+    seed(pinned_root)
+    shares = {Role.ANALYST: 0.26, Role.SENIOR: 0.34, Role.TESTER: 0.22}
+    pinned = Harness(
+        pinned_root,
+        {"analyst": [Act(cost=0.2)]},
+        budget=1.0,
+        shares=shares,
+        reserve=0.18,
+        plan=ChangePlan(),
+    )
+    held, notes = pinned.run(team, FIX)
+    assert pinned.repairs == [False]
+    assert held.steps[0].budget_usd == pytest.approx(1.0 - 0.34 - 0.22)
+    assert "held for one repair turn" not in " ".join(notes.texts())
+
+
+def test_passing_checks_release_the_repair_reserve_for_the_tester(tmp_path: Path) -> None:
+    seed(tmp_path)
+    split = role_split(dict.fromkeys(MIX), 1.0, True)
+    analyst, senior = split.shares[Role.ANALYST], split.shares[Role.SENIOR]
+    script = {
+        "analyst": [Act(cost=analyst)],
+        "senior": [Act(cost=senior + 0.12, writes={"src/layout.ts": "fixed\n"})],
+    }
+    harness = Harness(tmp_path, script, budget=1.0)
+    report, recorder = harness.run(MIX, FIX)
+    assert [(item.role, item.passed) for item in report.verifications] == [(Role.SENIOR, True)]
+    assert [step.role for step in report.steps] == list(CROSS_ORDER)
+    assert not report.skipped
+    left = 1.0 - analyst - senior - 0.12
+    assert report.steps[1].overrun_usd == pytest.approx(0.12)
+    assert report.steps[2].budget_usd == pytest.approx(left - split.shares[Role.DOCS])
+    assert "tester skipped" not in " ".join(recorder.texts())
+    assert report.state is CompletionState.COMPLETE
+
+
+def test_the_repair_reserve_gives_way_before_an_optional_role_is_skipped(tmp_path: Path) -> None:
+    seed(tmp_path)
+    split = role_split(dict.fromkeys(MIX), 1.0, True)
+    analyst, senior, tester = (split.shares[role] for role in CROSS_ORDER[:3])
+    script = {
+        "analyst": [Act(cost=analyst)],
+        "senior": [Act(cost=senior + 0.2)],
+        "tester": [Act(cost=tester)],
+    }
+    harness = Harness(tmp_path, script, budget=1.0)
+    report, recorder = harness.run(MIX, FIX)
+    assert split.repair_usd > 0 and not report.verifications
+    assert [step.role for step in report.steps] == list(CROSS_ORDER)
+    assert not report.skipped
+    left = 1.0 - analyst - (senior + 0.2) - tester
+    assert left < split.repair_usd
+    assert report.steps[3].budget_usd == pytest.approx(left)
+    assert "docs skipped" not in " ".join(recorder.texts())
+
+
+def test_a_feature_keeps_the_writer_left_over_as_its_only_repair_money(tmp_path: Path) -> None:
+    seed(tmp_path)
+    failing = (VerifyResult("npm run build", 1, 2.0, ("src/layout.ts:1 Type error",)),)
+    team = {Role.ANALYST: "claude", Role.SENIOR: "codex", Role.TESTER: "claude"}
+    shares = allocate_budget(dict.fromkeys(team), 1.0)
+    senior_cap = 1.0 - 0.1 - shares[Role.TESTER]
+    script = {"senior": [Act(cost=senior_cap, writes={"src/layout.ts": "broken\n"})]}
+    harness = Harness(tmp_path, script, budget=1.0, verify_results=[failing, failing])
+    report, recorder = harness.run(team)
+    assert not any(step.repair for step in report.steps)
+    assert "held for one repair turn" not in " ".join(recorder.texts())
+
+
+@pytest.mark.parametrize(("engine", "repaired"), [("codex", True), ("claude", False)])
+def test_only_a_writer_carried_past_its_share_gets_the_held_repair_turn(
+    tmp_path: Path, engine: str, repaired: bool
+) -> None:
+    seed(tmp_path)
+    failing = (VerifyResult("npm run build", 1, 2.0, ("src/layout.ts:1 Type error",)),)
+    split = role_split(dict.fromkeys(MIX), 1.0, True)
+    senior_cap = 1.0 - 0.1 - split.shares[Role.TESTER] - split.shares[Role.DOCS] - split.repair_usd
+    script = {
+        "senior": [
+            Act(cost=senior_cap + 0.03, writes={"src/layout.ts": "broken\n"}),
+            Act(cost=0.05, writes={"src/layout.ts": "fixed\n"}),
+        ]
+    }
+    harness = Harness(tmp_path, script, budget=1.0, verify_results=[failing])
+    report, _ = harness.run({**MIX, Role.SENIOR: engine}, FIX)
+    writer = report.steps[1]
+    assert writer.role is Role.SENIOR and writer.budget_usd == pytest.approx(senior_cap)
+    assert writer.ok is repaired and writer.salvaged is not repaired
+    repair = [step for step in report.steps if step.repair]
+    assert len(harness.prompt_of("senior")) == (2 if repaired else 1)
+    if repaired:
+        assert [step.budget_usd for step in repair] == pytest.approx([split.repair_usd - 0.03])
+        assert writer.overrun_usd == pytest.approx(0.03)
+        assert [(item.attempt, item.passed) for item in report.verifications] == [
+            (1, False),
+            (2, True),
+        ]
+        assert report.state is CompletionState.COMPLETE
+    else:
+        assert repair == []
+        assert [(item.attempt, item.passed) for item in report.verifications] == [(1, False)]
+
+
+def test_skewed_fix_shares_keep_every_floor_so_docs_still_runs_after_a_repair(
+    tmp_path: Path,
+) -> None:
+    seed(tmp_path)
+    failing = (VerifyResult("npm run build", 1, 2.0, ("src/layout.ts:1 Type error",)),)
+    skewed: dict[Role, float | None] = {
+        Role.ANALYST: 0.1,
+        Role.SENIOR: 3.0,
+        Role.TESTER: 0.1,
+        Role.DOCS: 0.02,
+    }
+    split = role_split(skewed, 1.0, True)
+    script = {
+        "analyst": [Act(whole_cap=True)],
+        "senior": [
+            Act(whole_cap=True, writes={"src/layout.ts": "broken\n"}),
+            Act(whole_cap=True, writes={"src/layout.ts": "fixed\n"}),
+        ],
+        "tester": [Act(whole_cap=True)],
+        "docs": [Act(whole_cap=True)],
+    }
+    harness = Harness(
+        tmp_path,
+        script,
+        budget=1.0,
+        shares=split.shares,
+        reserve=split.repair_usd,
+        verify_results=[failing],
+    )
+    report, recorder = harness.run(dict.fromkeys(CROSS_ORDER, "codex"), FIX)
+    assert [(step.role, step.repair) for step in report.steps] == [
+        (Role.ANALYST, False),
+        (Role.SENIOR, False),
+        (Role.SENIOR, True),
+        (Role.TESTER, False),
+        (Role.DOCS, False),
+    ]
+    assert not report.skipped and "docs skipped" not in " ".join(recorder.texts())
+    for step in report.steps:
+        if not step.repair:
+            assert step.budget_usd >= floor_fraction(step.role) - 1e-9
+    assert report.state is CompletionState.COMPLETE
 
 
 def test_a_second_failure_passes_the_results_to_the_tester(tmp_path: Path) -> None:

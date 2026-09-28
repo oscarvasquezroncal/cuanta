@@ -15,8 +15,10 @@ from cuanta.application.instinct_view import (
     BackendStatus,
     JevCard,
     ProbeRow,
+    calibration_cells,
     sentence,
 )
+from cuanta.domain.calibration import Calibration
 from cuanta.domain.ledger import Decision
 from cuanta.domain.messages import Message as Said
 from cuanta.domain.messages import msg, option_message, question_message
@@ -29,6 +31,17 @@ from cuanta.tui.widgets.flow import FlowRow
 
 PROBE_COLUMNS = ("col_primitive", "col_question", "col_answer", "col_latency", "col_cost")
 DECISION_COLUMNS = ("col_decision", "col_backend", "col_latency")
+CALIBRATION_COLUMNS = (
+    "col_provider",
+    "col_type",
+    "col_runs",
+    "col_unknown",
+    "col_mae",
+    "col_mape",
+    "col_coverage",
+    "col_p90_error",
+)
+NUMERIC_CALIBRATION = 2
 QUESTION_WIDTH = 48
 
 
@@ -84,21 +97,28 @@ class InstinctView(VerticalScroll):
             yield Static(t("instinct.decisions"), classes="card-title")
             yield DataTable(id="decisions-table", cursor_type="row", zebra_stripes=True)
             yield Static("", id="decisions-empty")
+        with Vertical(id="calibration-card", classes="card"):
+            yield Static(t("instinct.calibration"), classes="card-title")
+            yield Static(Content.styled(t("instinct.calibration_help"), "$text-muted"))
+            yield DataTable(id="calibration-table", cursor_type="row", zebra_stripes=True)
 
     def on_mount(self) -> None:
         with suppress(NoMatches):
             for table_id, columns in (
                 ("#probe-table", PROBE_COLUMNS),
                 ("#decisions-table", DECISION_COLUMNS),
+                ("#calibration-table", CALIBRATION_COLUMNS),
             ):
                 table = self.query_one(table_id, DataTable)
                 for key in columns:
                     table.add_column(self._t(f"instinct.{key}"), key=key)
             self.query_one("#probe-card").display = False
+            self.query_one("#calibration-card").display = False
             self.query_one("#preview-help").display = False
             self.query_one("#preview-body").display = False
             self.reload()
             self.load_jev(False)
+            self.load_calibration()
 
     @work(thread=True, exclusive=True, group="instinct", exit_on_error=False)
     def reload(self) -> None:
@@ -192,6 +212,30 @@ class InstinctView(VerticalScroll):
             button_widget.label = self._t("instinct.probing")
             button_widget.disabled = True
             self.run_probe()
+
+    @work(thread=True, exclusive=True, group="calibration", exit_on_error=False)
+    def load_calibration(self) -> None:
+        try:
+            rows = self._services.instinct_calibration()
+        except Exception as error:
+            self.app.call_from_thread(self.app.notify, str(error), severity="error")
+            return
+        self.app.call_from_thread(self.show_calibration, rows)
+
+    def show_calibration(self, rows: tuple[Calibration, ...]) -> None:
+        with suppress(NoMatches):
+            table = self.query_one("#calibration-table", DataTable)
+            table.clear()
+            missing = self._t("spectrum.na")
+            for row in rows:
+                cells = calibration_cells(row, missing)
+                table.add_row(
+                    *(
+                        Text(cell, justify="right" if index >= NUMERIC_CALIBRATION else "left")
+                        for index, cell in enumerate(cells)
+                    )
+                )
+            self.query_one("#calibration-card").display = bool(rows)
 
     @work(thread=True, exclusive=True, group="jev", exit_on_error=False)
     def load_jev(self, test: bool) -> None:

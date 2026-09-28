@@ -21,6 +21,10 @@ class Price:
     cache_read: float | None
 
 
+def base_model(model: str) -> str:
+    return _DATE_SUFFIX.sub("", _BRACKET_SUFFIX.sub("", model.strip().lower()))
+
+
 @dataclass(frozen=True, slots=True)
 class PriceTable:
     models: Mapping[str, Price] = field(default_factory=dict)

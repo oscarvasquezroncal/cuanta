@@ -6,10 +6,12 @@ from cuanta.application.recent_runs import latest_with_requests
 from cuanta.domain.cache import (
     CACHE_ENGINE,
     UNKNOWN_PREFIX,
+    CacheClock,
     PrefixWindow,
     moment_of,
     prefix_window,
 )
+from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.report import first_request_event
 from cuanta.ports.ledger import Ledger
 
@@ -37,14 +39,25 @@ class PrefixQuery:
         self._measured_model = measured_model
 
     def run(self, engine: str) -> PrefixWindow:
-        if (
+        events = self._events(engine)
+        if events is None:
+            return UNKNOWN_PREFIX
+        return prefix_window(events, self._ttl_s, moment_of(self._now_ms()))
+
+    def clock(self, engine: str) -> CacheClock:
+        return CacheClock(self._ttl_s if self._trusted(engine) else 0, moment_of(self._now_ms()))
+
+    def _trusted(self, engine: str) -> bool:
+        return not (
             self._ttl_s <= 0
             or self._auth not in MEASURED_AUTH
             or self._api_key_present() != (self._auth == "api")
             or engine != CACHE_ENGINE
-            or not self._has_ledger()
-        ):
-            return UNKNOWN_PREFIX
+        )
+
+    def _events(self, engine: str) -> tuple[LedgerEvent, ...] | None:
+        if not self._trusted(engine) or not self._has_ledger():
+            return None
         ledger = self._ledger_factory()
         try:
             latest = latest_with_requests(ledger, RUN_SCAN, CACHE_ENGINE)
@@ -52,7 +65,7 @@ class PrefixQuery:
             if self._measured_model:
                 first = first_request_event(events)
                 if first is None or first.model != self._measured_model:
-                    return UNKNOWN_PREFIX
-            return prefix_window(events, self._ttl_s, moment_of(self._now_ms()))
+                    return None
+            return events
         finally:
             ledger.close()

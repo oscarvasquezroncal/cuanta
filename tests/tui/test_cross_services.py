@@ -1,13 +1,28 @@
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
 from cuanta.application.cross_engine import CompletionState, CrossReport, CrossStep
+from cuanta.application.estimate import Estimate, estimate
+from cuanta.application.forecast import PlannedForecast
+from cuanta.application.mandate_flow import MandateOptions
+from cuanta.application.routing import RoutePlan
+from cuanta.domain.change_plan import ChangePlan
+from cuanta.domain.config import Config
 from cuanta.domain.errors import NotAvailable
 from cuanta.domain.ledger import Run
-from cuanta.domain.messages import msg
-from cuanta.domain.routing import Role
-from cuanta.tui.services import cross_report
+from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.messages import english, msg
+from cuanta.domain.pricing import PriceTable
+from cuanta.domain.routing import Role, RoutingPolicy
+from cuanta.tui.services import ContainerServices, cross_report
+
+if TYPE_CHECKING:
+    from cuanta.bootstrap import Container
 
 
 def test_a_cross_run_reaches_the_pipeline_screen_as_a_mandate_report() -> None:
@@ -34,3 +49,67 @@ def test_a_cross_run_reaches_the_pipeline_screen_as_a_mandate_report() -> None:
     assert converted.task_type == "feature"
     with pytest.raises(NotAvailable):
         cross_report(None, report)
+
+
+def test_the_team_step_reuses_the_change_plan_compiled_for_the_same_request(
+    tmp_path: Path,
+) -> None:
+    compiled: list[MandateRequest] = []
+
+    def compile_plan(request: MandateRequest) -> ChangePlan:
+        compiled.append(request)
+        return ChangePlan(verify=(f"check {len(compiled)}",))
+
+    container = cast("Container", SimpleNamespace(change_plan=compile_plan))
+    services = ContainerServices(tmp_path)
+    first = MandateRequest("bug", "fix add", "wrong sum")
+    other = MandateRequest("bug", "fix sub", "wrong difference")
+    assert services._compiled_plan(container, first).verify == ("check 1",)
+    assert services._compiled_plan(container, first).verify == ("check 1",)
+    assert services._compiled_plan(container, other).verify == ("check 2",)
+    assert compiled == [first, other]
+
+
+@pytest.mark.parametrize("engine", ["codex", "claude"])
+def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str
+) -> None:
+    team = RoutePlan(RoutingPolicy(engines=(engine,)), None, None, (), (), "heuristic")
+    reserves: list[bool] = []
+
+    def plan_route(*args: object, **kwargs: object) -> tuple[RoutePlan, None]:
+        return team, None
+
+    def team_estimate(
+        plan: RoutePlan,
+        task_type: str,
+        depth: str,
+        cap: float,
+        shape: str = "pipeline",
+        repair: bool = True,
+    ) -> Estimate:
+        reserves.append(repair)
+        return estimate(plan, (), PriceTable({}), task_type, depth, cap, shape, None, repair)
+
+    def team_forecast(*args: object, **kwargs: object) -> PlannedForecast:
+        raise ValueError("the code index is being written")
+
+    container = SimpleNamespace(
+        config=Config(engine=engine),
+        plan_route=plan_route,
+        team_estimate=team_estimate,
+        change_plan=lambda request: ChangePlan(),
+        team_forecast=team_forecast,
+        close=lambda: None,
+    )
+    services = ContainerServices(tmp_path)
+    monkeypatch.setattr(services, "_container", lambda: cast("Container", container))
+    request = MandateRequest("bug", "fix add", "wrong sum")
+    plan, found = services.team_plan(request, MandateOptions(engine=engine))
+    assert plan is team
+    assert found.forecast is None
+    assert found.forecast_error is not None
+    assert english(found.forecast_error) == (
+        "Forecast unavailable, the launch goes ahead without one: the code index is being written"
+    )
+    assert reserves == [False]

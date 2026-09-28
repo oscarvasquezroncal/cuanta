@@ -29,6 +29,7 @@ from tests.tui.fakes import (
     TEAM_CATALOG,
     FakeServices,
     pipeline_events,
+    sample_forecast,
     sandbox_handoff,
     sandbox_result,
     single_context_events,
@@ -482,8 +483,29 @@ def test_mandate_wizard(
     async def wizard(pilot: Pilot[None]) -> None:
         await understood(pilot, ("tell", "confirm", "team").index(step))
 
-    app = app_for(theme, FakeServices())
+    forecast = sample_forecast() if step == "team" else None
+    app = app_for(theme, FakeServices(forecast=forecast))
     assert snap_compare(app, terminal_size=size, run_before=wizard)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+@pytest.mark.parametrize("size", SIZES, ids=lambda size: f"{size[0]}x{size[1]}")
+def test_team_forecast(snap_compare: SnapCompare, theme: str, size: tuple[int, int]) -> None:
+    tight = sample_forecast(cap=0.6)
+
+    async def forecast_line(pilot: Pilot[None]) -> None:
+        wizard = await understood(pilot, 2)
+        estimate = wizard.query_one("#wiz-estimate")
+        for _ in range(300):
+            if "Forecast" in str(estimate.render()):
+                break
+            await pilot.pause(0.02)
+        assert "Forecast" in str(estimate.render())
+        estimate.scroll_visible(animate=False, top=True)
+        await loaded(pilot)
+
+    app = app_for(theme, FakeServices(forecast=tight))
+    assert snap_compare(app, terminal_size=size, run_before=forecast_line)
 
 
 @pytest.mark.parametrize("theme", THEMES)

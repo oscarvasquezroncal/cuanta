@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pytest
 from textual.pilot import Pilot
 from textual.widgets import Button, DataTable, Input, Select, Static, Switch
 
+from cuanta.domain.calibration import Calibration
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.views.instinct import InstinctView
 from cuanta.tui.views.models import ModelsView
@@ -117,3 +119,41 @@ def test_instinct_jev_card_tests_the_connection_and_shows_sentences() -> None:
         assert "never your code" in render(view.query_one("#preview-help", Static))
 
     drive(make_app(services), scenario, size=(120, 50))
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_instinct_shows_forecast_calibration_only_once_forecasts_exist(language: str) -> None:
+    rows = (
+        Calibration("claude", "fix", 6, 1, 0.0421, 0.18, 5 / 6, 0.31),
+        Calibration("codex", "feature", 2, 0, None, None, None, None),
+    )
+    services = FakeServices(calibration=rows)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        await pilot.press("6")
+        await settle(app, pilot)
+        view = app.query_one(InstinctView)
+        table = view.query_one("#calibration-table", DataTable)
+        await wait_for(pilot, lambda: table.row_count == 2)
+        assert view.query_one("#calibration-card").display
+        first = [str(cell) for cell in table.get_row_at(0)]
+        assert first == ["claude", "fix", "6", "1", "$0.0421", "18%", "83%", "31%"]
+        missing = "n/a" if language == "en" else "n/d"
+        assert [str(cell) for cell in table.get_row_at(1)][4:] == [missing] * 4
+        title = "Forecast calibration" if language == "en" else "Calibración del pronóstico"
+        assert title in render(view.query_one("#calibration-card .card-title", Static))
+
+    drive(make_app(services, language=language), scenario, size=(120, 50))
+
+
+def test_instinct_hides_calibration_without_forecasts() -> None:
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        await pilot.press("6")
+        await settle(app, pilot)
+        view = app.query_one(InstinctView)
+        await wait_for(pilot, lambda: view.query_one("#decisions-table", DataTable).row_count == 1)
+        await settle(app, pilot)
+        assert not view.query_one("#calibration-card").display
+        assert view.query_one("#calibration-table", DataTable).row_count == 0
+
+    drive(make_app(FakeServices()), scenario, size=(120, 50))

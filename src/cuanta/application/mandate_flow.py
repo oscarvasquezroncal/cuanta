@@ -5,6 +5,12 @@ from dataclasses import dataclass, field, replace
 
 from cuanta.application.engine_run import DEFAULT_DENIED, EngineLauncher, LaunchSpec
 from cuanta.application.estimate import Estimator, ShapeEstimator
+from cuanta.application.forecast import (
+    Forecaster,
+    PlannedForecast,
+    forecast_failure,
+    publish_forecast,
+)
 from cuanta.application.instinct import DecisionScope
 from cuanta.application.mandate import Composed, MandateReport, MandateService, allowed_tools
 from cuanta.application.route_apply import Applied, MandateRouting, RouteOptions
@@ -40,8 +46,8 @@ from cuanta.domain.mandate import (
 )
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pack import ContextPack
-from cuanta.domain.progress import Status, finished, started
-from cuanta.domain.routing import Role, RoleRoute
+from cuanta.domain.progress import Status, finished, note, started
+from cuanta.domain.routing import Role, RoleRoute, parse_provider
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, sandbox_launch
 from cuanta.domain.team import runs_per_role
 from cuanta.ports.engine import Engine
@@ -112,6 +118,17 @@ def resolve_max_turns(options: MandateOptions, chosen: DepthProfile | None, defa
     )
 
 
+def launch_turns(options: MandateOptions, task_type: str, engine: str, default: int) -> int:
+    if engine != "claude":
+        return 0
+    chosen = (
+        profile(parse_depth(options.depth), task_type)
+        if options.depth or task_type == INVESTIGATION
+        else None
+    )
+    return resolve_max_turns(options, chosen, default)
+
+
 @dataclass(frozen=True, slots=True)
 class Prepared:
     composed: Composed
@@ -119,6 +136,8 @@ class Prepared:
     launcher: EngineLauncher
     spec: LaunchSpec
     applied: Applied | None = None
+    forecast: PlannedForecast | None = None
+    forecast_error: Message | None = None
 
 
 def display_command(parts: tuple[str, ...], prompt: str) -> str:
@@ -188,7 +207,9 @@ class MandateFlow:
         | None = None,
         learn_run: Callable[[str], None] | None = None,
         pipeline_index_tools: bool = False,
+        forecaster: Forecaster | None = None,
     ) -> None:
+        self._forecaster = forecaster
         self._pipeline_index_tools = pipeline_index_tools
         self._learn_run = learn_run
         self._refresh_index = refresh_index
@@ -363,7 +384,43 @@ class MandateFlow:
             if options.intake_scope:
                 self._service.link_decisions(options.intake_scope, run_id)
         spec = replace(base, prompt=composed.prompt, scope=composed.hint.option)
-        return Prepared(composed, engine_name, launcher, spec, applied)
+        return Prepared(
+            composed,
+            engine_name,
+            launcher,
+            spec,
+            applied,
+            *self._forecast(request.type, applied, engine_name, options, base, protection),
+        )
+
+    def _forecast(
+        self,
+        task_type: str,
+        applied: Applied | None,
+        engine_name: str,
+        options: MandateOptions,
+        spec: LaunchSpec,
+        protection: ChangePlan | None,
+    ) -> tuple[PlannedForecast | None, Message | None]:
+        provider = parse_provider(engine_name)
+        if self._forecaster is None or applied is None or provider is None or options.simple:
+            return None, None
+        try:
+            planned = self._forecaster.plan(
+                task_type,
+                applied.plan,
+                provider,
+                options.depth,
+                spec.shape,
+                spec.max_budget_usd,
+                protection,
+                native=spec.shape == Shape.PIPELINE.value,
+                model=options.model,
+                max_turns=spec.max_turns,
+            )
+        except (CuantaError, ValueError) as error:
+            return None, forecast_failure(error)
+        return planned, None
 
     def _enrich(
         self,
@@ -460,6 +517,7 @@ class MandateFlow:
                 raise NotAvailable(
                     f"{name} lacks flags cuanta needs: {', '.join(missing)}", f"upgrade {name}"
                 )
+            self._record_forecast(prepared, progress)
             report = self._service.run(
                 prepared.composed,
                 prepared.launcher,
@@ -483,6 +541,20 @@ class MandateFlow:
         if self._learn_run is not None:
             self._learn_run(report.run.id)
         return report
+
+    def _record_forecast(self, prepared: Prepared, progress: ProgressSink) -> None:
+        planned = prepared.forecast
+        run_id = prepared.spec.run_id
+        if prepared.forecast_error is not None:
+            progress.publish(note(Status.WARN, prepared.forecast_error))
+        if self._forecaster is None or planned is None or not run_id:
+            return
+        try:
+            stored = self._forecaster.record(run_id, planned, prepared.composed.request)
+        except (CuantaError, ValueError) as error:
+            progress.publish(note(Status.WARN, forecast_failure(error)))
+            return
+        publish_forecast(progress, stored)
 
     def verdict(self, report: MandateReport, progress: ProgressSink) -> MandateReport:
         if self._final_suite is None or report.run.status == "interrupted":

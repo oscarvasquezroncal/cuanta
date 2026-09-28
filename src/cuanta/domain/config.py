@@ -38,6 +38,7 @@ class Config:
     model_tiers: tuple[tuple[str, str], ...] = ()
     routing: tuple[tuple[str, object], ...] = ()
     instinct_share_paths: bool = False
+    instinct_envelope: bool = False
     read_discipline: bool = False
     index_tools: bool = False
     pipeline_index_tools: bool = True
@@ -50,6 +51,7 @@ KEY_MAP: dict[str, str] = {
     "instinct.backend": "instinct",
     "instinct.consent": "remote_consent",
     "instinct.share_paths": "instinct_share_paths",
+    "instinct.envelope": "instinct_envelope",
     "ui.emoji": "emoji",
     "ui.theme": "theme",
     "ui.language": "language",

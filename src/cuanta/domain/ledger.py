@@ -188,3 +188,21 @@ class RouteAudit:
     status: str
     cause: str
     created_at: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Forecast:
+    run_id: str
+    created_at: str
+    provider: str
+    task_type: str
+    depth: str
+    shape: str
+    p50_usd: float
+    p90_usd: float
+    cap_usd: float | None
+    verdict: str
+    buckets: str = "{}"
+    per_role: str = "[]"
+    features: str = "{}"
+    source: str = "envelope"
