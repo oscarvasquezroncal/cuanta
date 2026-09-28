@@ -185,6 +185,46 @@ A run ends in one of four states, shown in the result, `cuanta runs show` and `c
 complete; complete with optional roles skipped; partial; failed. The cost per accepted change counts
 every attempt.
 
+## Forecast before launch
+
+Before a mandate starts, cuanta forecasts its cost from the plan, the depth, the team's models and
+prices, the fixed context each launch pays first, the expected cache warmth and earlier runs. The
+Team step and the dry run show one line, for example "Forecast $0.31 (P90 $0.45), margin $0.15,
+warm cache (78%)", and `--json` adds an `envelope` object with the tokens by bucket (start,
+exploration, writing, verification, handoff), each role's forecast and stop rules, and the verdict.
+
+- **P50 and P90.** The P50 adds each role's forecast. The P90 is the P50 times the 90th percentile of
+  actual/P50 once five runs of the same provider and type have a known cost; before that it is 1.6
+  times the P50.
+- **Margin and verdict.** The margin is the cap minus the P90. A forecast is infeasible when the
+  P50 is over the cap, tight when the P90 is over the cap or within 15% of it, and comfortable
+  otherwise. Tight and infeasible forecasts show the cheapest change first: a shallower depth, a
+  cheaper model for the costliest role, a narrower WHERE, or the scout shape.
+- **Fixed context.** Each launch's fixed first-request tokens come from earlier runs of the same
+  model, role and shape when telemetry measured them; otherwise from measured medians (Claude one
+  session 19.7K, native team main session 35.6K, analyst 19.5K, senior and tester 47.9K, docs
+  34.8K; Codex 20K per role), marked as not measured. A Claude team in one session also pays for
+  its main session: the pack, one task prompt and one report per role.
+- **Cache warmth.** Each model has its own warmth. A model is warm when one of its requests falls
+  inside the cache window (`cache.ttl_s`); its share is how much of the first request earlier warm
+  starts of that model read from the cache. Claude cache writes are priced at the one-hour rate
+  (twice the input price) when the window is longer than five minutes, and at the five-minute rate
+  otherwise.
+- **Fixes.** Bug and fix mandates are sized from fix history only, and the writer gets a planned
+  repair turn. A team of separate launches holds a repair share for it: 15% of the cap when docs
+  runs, or docs's share when docs is off. The repair turn gets that share plus the writer's
+  left-over.
+- **Stored with the run.** Every launched mandate stores its forecast before it starts, keyed by
+  the run (the first role's run for a team of separate launches). The actual is the run's recorded
+  cost; a cost that is not known stays n/a and is left out of the numbers.
+  `cuanta instinct calibration` and the app's Instinct view show, per provider and type, the runs,
+  the P50 error in dollars and percent, the P90 coverage and the P90 error.
+- **Jev, opt-in.** With `instinct.envelope = true` and consent for Jev (`cuanta instinct use jev`),
+  cuanta sends Jev a numbers-only summary of the forecast (plan sizes, warmth, reach, risk, earlier
+  factors and margin; never code, paths or text) and asks for risk and exploration multipliers and
+  a tier per role. The call is priced first and is not made above $0.001. The answer counts by its
+  confidence times Jev's track record on earlier forecasts, which starts at 20%.
+
 ## Guards between roles
 
 cuanta snapshots the working copy after every role. A change to a protected path stops the pipeline
