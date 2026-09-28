@@ -99,6 +99,37 @@ def test_a_hung_command_is_closed_as_a_tree_at_its_timeout(tmp_path: Path) -> No
     assert missing.exit_code is None and missing.errors == ("[WinError 2] not found",)
 
 
+def test_a_stop_closes_the_running_command_and_no_later_command_starts(tmp_path: Path) -> None:
+    hanging = Hanging()
+    runner = FakeRunner(streams={"npm run build": hanging})
+    requested = threading.Event()
+    press = threading.Timer(0.1, requested.set)
+    press.daemon = True
+    press.start()
+    started = time.monotonic()
+    results = Verifier(runner, tmp_path, windows=False).run(
+        ("npm run build", "npm run lint"), requested.is_set
+    )
+    assert time.monotonic() - started < 5.0
+    assert hanging.closed
+    assert runner.calls == [("npm", "run", "build")]
+    assert [result.command for result in results] == ["npm run build"]
+    assert results[0].exit_code is None and not results[0].timed_out and not results[0].passed
+    assert results[0].errors == ("stopped before it finished",)
+
+
+def test_a_stop_before_the_checks_runs_nothing_and_no_stop_runs_everything(
+    tmp_path: Path,
+) -> None:
+    runner = FakeRunner(streams={"npm run": FakeStream(["ok"], 0)})
+    verifier = Verifier(runner, tmp_path, windows=False)
+    assert verifier.run(("npm run build", "npm run lint"), lambda: True) == ()
+    assert runner.calls == []
+    results = verifier.run(("npm run build", "npm run lint"), lambda: False)
+    assert [result.passed for result in results] == [True, True]
+    assert len(runner.calls) == 2
+
+
 def test_an_unparseable_command_is_reported_without_running(tmp_path: Path) -> None:
     runner = FakeRunner()
     results = Verifier(runner, tmp_path, windows=False).run(('npm run "unclosed',))

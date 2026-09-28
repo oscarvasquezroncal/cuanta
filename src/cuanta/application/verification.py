@@ -17,9 +17,15 @@ SCAN_LIMIT = 400
 TOKEN_LIMIT = 260
 KEPT_LINES = 400
 DEFAULT_TIMEOUT_S = 900.0
+STOP_POLL_S = 0.2
+STOPPED_ERROR = "stopped before it finished"
 LOCATION = re.compile(r"(?P<path>[^\s:()]+\.[A-Za-z][A-Za-z0-9]{0,5})[:(](?P<line>\d+)")
 DRIVE = re.compile(r"[A-Za-z]:[\\/]")
 ERROR_WORDS = re.compile(r"\b(error|failed|failure|cannot|exception)\b", re.IGNORECASE)
+
+
+def never() -> bool:
+    return False
 
 
 def command_argv(command: str, windows: bool) -> list[str]:
@@ -87,42 +93,66 @@ class Verifier:
         self._timeout = timeout_s
         self._monotonic = monotonic
 
-    def run(self, commands: Sequence[str]) -> tuple[VerifyResult, ...]:
+    def run(
+        self, commands: Sequence[str], stopped: Callable[[], bool] = never
+    ) -> tuple[VerifyResult, ...]:
         results: list[VerifyResult] = []
         for command in commands:
+            if stopped():
+                break
             try:
                 argv = command_argv(command, self._windows)
             except ValueError:
                 results.append(VerifyResult(command, None, 0.0, ("could not parse the command",)))
                 continue
             if argv:
-                results.append(self._one(command, argv))
+                results.append(self._one(command, argv, stopped))
         return tuple(results)
 
-    def _one(self, command: str, argv: list[str]) -> VerifyResult:
+    def _one(self, command: str, argv: list[str], stopped: Callable[[], bool]) -> VerifyResult:
         started = self._monotonic()
         try:
             handle = self._runner.stream(argv, cwd=self._cwd, env=self._env)
         except OSError as error:
             return VerifyResult(command, None, 0.0, (str(error)[:LINE_LIMIT],))
         fired = threading.Event()
+        halted = threading.Event()
+        done = threading.Event()
+        closing = threading.Lock()
+
+        def shut() -> None:
+            with closing:
+                handle.close()
 
         def expire() -> None:
             fired.set()
-            handle.close()
+            shut()
+
+        def watch() -> None:
+            while not done.wait(STOP_POLL_S):
+                if stopped():
+                    halted.set()
+                    shut()
+                    return
 
         timer = threading.Timer(self._timeout, expire)
         timer.daemon = True
         timer.start()
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
         kept: deque[str] = deque(maxlen=KEPT_LINES)
         try:
             for line in handle.lines():
                 kept.append(line)
             code = handle.wait()
         finally:
+            done.set()
             timer.cancel()
-            handle.close()
+            watcher.join()
+            shut()
         seconds = round(self._monotonic() - started, 2)
+        if halted.is_set():
+            return VerifyResult(command, None, seconds, (STOPPED_ERROR,))
         output = "\n".join((*kept, *handle.stderr_text().splitlines()[-KEPT_LINES:]))
         if fired.is_set():
             return VerifyResult(
