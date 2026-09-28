@@ -302,7 +302,7 @@ Use `--help` on any command. Global `--plain` and `--json` control CLI output; `
 | `cuanta ledger export` | CSV or JSON export |
 | `cuanta listen` | Local OTLP collector: `--background`, `--status`, `--stop` |
 | `cuanta telemetry on \| off \| status \| env` | Wire each engine's telemetry, with backups |
-| `cuanta instinct show \| use \| probe` | Configure Instinct. `cuanta instinct use NAME --global` sets the user-wide default |
+| `cuanta instinct show \| use \| probe \| calibration` | Configure Instinct. `cuanta instinct use NAME --global` sets the user-wide default; `calibration` shows forecast error and P90 coverage per provider and type |
 | `cuanta models` | The model catalog and its tiers |
 | `cuanta bench run \| report` | The reproducible benchmark |
 | `cuanta probe cache-ttl` | Measure Claude's prompt-cache window with capped runs in a temporary project. Preview without spend; `--yes` runs it, `--long` adds a later check |

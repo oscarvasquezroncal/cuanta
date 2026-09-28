@@ -7,6 +7,8 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 Teams by provider: a mandate's team runs on Claude or GPT (Codex), with a current model per role.
+A forecast envelope before launch: P50, P90, margin and verdict, stored with each run and
+calibrated against its actual cost.
 
 ### Added
 - Default models per provider and tier in `model_tiers.toml`: Claude `haiku`, `sonnet`, `opus`;
@@ -18,6 +20,17 @@ Teams by provider: a mandate's team runs on Claude or GPT (Codex), with a curren
 - The app's Team step offers "Claude team" and "GPT team". Cards list each role's model with its price
   per million tokens, the model menu lists only the provider's models with prices, and the preview
   lists each role's model. `docs/TEAMS.md` explains how each team runs.
+- A forecast before launch: the Team step and the dry run show the P50, the P90, the margin to the
+  cap and the expected cache warmth, with the verdict and the first suggestion when the forecast is
+  tight or infeasible. `--json` adds an `envelope` object with the buckets, each role's forecast and
+  stop rules. `docs/TEAMS.md` explains the forecast.
+- Every launched mandate stores its forecast before it starts; its actual is the run's recorded cost.
+  `cuanta instinct calibration` and the app's Instinct view show the P50 error, the P90 coverage
+  and the P90 error per provider and task type. Unknown costs stay n/a. The ledger moves to schema 13
+  (a `forecasts` table); the migration runs on first open and is idempotent.
+- `instinct.envelope` (off by default) asks Jev, with consent, to adjust the forecast from a
+  numbers-only summary. The call is priced first and capped, and its answer is weighted by its track
+  record.
 
 ### Changed
 - `--role-model role=model` pins a model within the team's provider; a pin to the other provider is
@@ -28,6 +41,10 @@ Teams by provider: a mandate's team runs on Claude or GPT (Codex), with a curren
   (builds or tests); cuanta runs the checks itself between roles.
 - Team recommends a provider, not a preset, from measured cost per accepted change. Codex pipeline
   mandates that ran as one session are left out of the count.
+- Bug and fix mandates get their own budget. A team of separate launches holds a repair share for
+  one repair turn after a failed check: 15% of the cap when docs runs, or docs's share when docs is
+  off. The repair turn gets that share plus the writer's left-over, so a writer that spent its whole
+  share still gets its repair. Feature and other mandates split the cap as before.
 - From the command line, a GPT team is capped by `--max-budget-usd`, else the `--depth` cap, else the
   `budget.usd` setting, else the normal depth's cap, as in the app; `--cross-budget-usd` sets the cap
   and `--max-budget-usd` bounds it. A Claude team run with `--cross-engine` keeps its $1.00 default.
