@@ -26,6 +26,7 @@ from tests.tui.fakes import (
     AGENTS,
     RED,
     SANDBOX_RUN,
+    TEAM_CATALOG,
     FakeServices,
     pipeline_events,
     sandbox_handoff,
@@ -606,11 +607,11 @@ def test_no_cap_confirmation(snap_compare: SnapCompare, theme: str) -> None:
 
 
 @pytest.mark.parametrize("size", SIZES, ids=lambda size: f"{size[0]}x{size[1]}")
-def test_team_mix_cards(snap_compare: SnapCompare, size: tuple[int, int]) -> None:
-    async def show_mix(pilot: Pilot[None]) -> None:
+def test_team_provider_cards(snap_compare: SnapCompare, size: tuple[int, int]) -> None:
+    async def show_provider(pilot: Pilot[None]) -> None:
         wizard = await understood(pilot, 2)
         wizard.kind = "feature"
-        wizard.choose_mix("claude-plans-codex-writes")
+        wizard.choose_provider("codex")
         for _ in range(300):
             if wizard.query("#override-senior") and wizard.estimate is not None:
                 break
@@ -620,5 +621,27 @@ def test_team_mix_cards(snap_compare: SnapCompare, size: tuple[int, int]) -> Non
         wizard.query_one("#override-senior").scroll_visible(animate=False, top=True)
         await loaded(pilot)
 
-    services = FakeServices(engines=(("claude", True), ("codex", True)))
-    assert snap_compare(app_for("calico-dark", services), terminal_size=size, run_before=show_mix)
+    services = FakeServices(engines=(("claude", True), ("codex", True)), catalog=TEAM_CATALOG)
+    assert snap_compare(
+        app_for("calico-dark", services), terminal_size=size, run_before=show_provider
+    )
+
+
+def test_team_provider_chips_narrow(snap_compare: SnapCompare) -> None:
+    async def show_chips(pilot: Pilot[None]) -> None:
+        wizard = await understood(pilot, 2)
+        wizard.kind = "feature"
+        wizard.choose_provider("codex")
+        for _ in range(300):
+            if wizard.query("#override-senior") and wizard.estimate is not None:
+                break
+            await pilot.pause(0.02)
+        await loaded(pilot)
+        await pilot.pause(0.2)
+        wizard.query_one("#wiz-provider-label").scroll_visible(animate=False, top=True)
+        await loaded(pilot)
+
+    services = FakeServices(engines=(("claude", True), ("codex", True)), catalog=TEAM_CATALOG)
+    assert snap_compare(
+        app_for("calico-dark", services), terminal_size=(80, 24), run_before=show_chips
+    )

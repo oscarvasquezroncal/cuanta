@@ -115,6 +115,10 @@ def test_attempts_keep_mandates_and_cross_roots_only() -> None:
     assert cross.mix == CROSS_MIX
     lost = attempts((root, replace(child, cost_usd=None)))
     assert lost[0].cost is None
+    team = attempts((root, replace(child, engine="codex")))
+    assert team[0].mix == "codex"
+    unnamed = attempts((replace(root, engine=""), replace(child, engine="")))
+    assert unnamed[0].mix == CROSS_MIX
 
 
 def test_outcome_eligibility_follows_the_attempt_rule() -> None:

@@ -17,6 +17,7 @@ from textual.timer import Timer
 from textual.widgets import Button, Checkbox, Input, Label, Select, Static, TextArea
 
 from cuanta.application.assistant import Improvement
+from cuanta.application.cross_engine import CROSS_ORDER
 from cuanta.application.estimate import Estimate
 from cuanta.application.intake import Understanding
 from cuanta.application.mandate_flow import MandateOptions, MandatePreview
@@ -45,8 +46,9 @@ from cuanta.domain.mandate import (
     second_field,
 )
 from cuanta.domain.messages import msg
-from cuanta.domain.routing import ENGINE_ORDER, Mix
-from cuanta.domain.team import MixAdvice, RoleCard, advice_message
+from cuanta.domain.models import ModelEntry
+from cuanta.domain.routing import ENGINE_ORDER, Provider
+from cuanta.domain.team import ProviderAdvice, RoleCard, advice_message, runs_per_role
 from cuanta.tui.cache_text import prefix_content
 from cuanta.tui.fmt import money
 from cuanta.tui.i18n import Catalog
@@ -150,7 +152,6 @@ class MandateWizard(Vertical):
         self.custom_cap = False
         self.no_cap = False
         self.sandbox = False
-        self.mix = ""
         self.advice = ""
         self.understanding: Understanding | None = None
         self.plan: RoutePlan | None = None
@@ -194,6 +195,7 @@ class MandateWizard(Vertical):
                 with Vertical(id="preview-card", classes="card"):
                     yield Static(t("mandate.preview_title"), classes="card-title")
                     yield Static("", id="preview-command", classes="command")
+                    yield Static("", id="preview-team")
                     yield TextArea(id="preview-prompt", read_only=True, soft_wrap=True)
             with Vertical(id="wiz-summary", classes="card"):
                 yield Static(t("wizard.summary_title"), classes="card-title")
@@ -300,16 +302,16 @@ class MandateWizard(Vertical):
         yield Select([], allow_blank=True, disabled=True, id="wiz-engine")
         yield Static("", id="wiz-guarantees")
         yield Static("", id="wiz-guarantee-warning")
-        yield Label(t("wizard.mix_title"), id="wiz-mix-label")
-        with FlowRow(id="mix-row", classes="chips"):
-            for mix in Mix:
+        yield Label(t("wizard.provider_title"), id="wiz-provider-label")
+        with FlowRow(id="provider-row", classes="chips"):
+            for provider in Provider:
                 yield Button(
-                    t(f"wizard.mix_{mix.name.lower()}"),
-                    id=f"mix-{mix.value}",
-                    classes="chip mix-chip",
+                    t(f"wizard.provider_{provider.value}"),
+                    id=f"provider-{provider.value}",
+                    classes="chip provider-chip",
                     compact=True,
                 )
-        yield Static("", id="wiz-mix-note")
+        yield Static("", id="wiz-provider-note")
         yield Static("", id="wiz-verify-note")
         with Horizontal(id="sandbox-row"):
             yield Checkbox(t("wizard.sandbox"), False, id="wiz-sandbox", compact=True)
@@ -500,7 +502,6 @@ class MandateWizard(Vertical):
             no_cap=self.no_cap,
             intake_scope=understood.intake_scope if understood is not None else "",
             sandbox=self.sandbox,
-            mix=self.mix,
             plan_overrides=tuple(
                 (path, "read" if self.kind == INVESTIGATION and role == "edit" else role)
                 for path, role in self._plan_overrides.items()
@@ -537,12 +538,14 @@ class MandateWizard(Vertical):
         for depth in DEPTHS:
             chip = self.query_one(f"#depth-{depth.value}", Button)
             chip.set_class(depth.value == self.depth, "-current")
-        for mix in Mix:
-            self.query_one(f"#mix-{mix.value}", Button).set_class(mix.value == self.mix, "-current")
-        note = t("wizard.mix_cross") if self.mix else t("wizard.mix_native")
+        for provider in Provider:
+            chip = self.query_one(f"#provider-{provider.value}", Button)
+            chip.set_class(provider.value == self.engine, "-current")
+            chip.disabled = provider.value not in self.engines
+        note = t(self.run_note)
         if self.advice:
             note = f"{note}\n{self.advice}"
-        self.query_one("#wiz-mix-note", Static).update(Content.styled(note, "$text-muted"))
+        self.query_one("#wiz-provider-note", Static).update(Content.styled(note, "$text-muted"))
         self.query_one("#forge-gate").display = self.gated
         mode = Content.styled(t("wizard.simple_mode"), "$warning") if self.simple else ""
         self.query_one("#wiz-mode", Static).update(mode)
@@ -949,6 +952,7 @@ class MandateWizard(Vertical):
             return
         self.engine = event.value
         self._paint_depth()
+        self._paint()
         if self.kind and (self.one_page or STEPS[self.step] == "team"):
             self.refresh_team()
         else:
@@ -1152,16 +1156,19 @@ class MandateWizard(Vertical):
             request = self.request()
             options = self.options()
             plan, estimate = self._services.team_plan(request, options)
-            cards = self._services.team_cards(plan, estimate, options)
-            verify = self._services.change_plan(request).verify if options.mix else ()
+            cards = self._services.team_cards(plan, estimate, options, request.type)
+            per_role = runs_per_role(
+                options.engine, not options.simple and self.kind != INVESTIGATION
+            )
+            verify = self._services.change_plan(request).verify if per_role else ()
             advice = self._services.team_advice(request.type)
             view = self._services.models_view(False)
         except Exception as error:
             self._call(self.app.notify, str(error), severity="error")
             return
-        models: dict[str, tuple[str, ...]] = {}
+        models: dict[str, tuple[ModelEntry, ...]] = {}
         for entry in view.entries:
-            models[entry.engine] = (*models.get(entry.engine, ()), entry.id)
+            models[entry.engine] = (*models.get(entry.engine, ()), entry)
         self._call(self.show_verify, verify)
         self._call(self.show_advice, advice, request.type)
         self._call(self.show_team, plan, estimate, cards, models, options.engine, revision)
@@ -1171,7 +1178,7 @@ class MandateWizard(Vertical):
         plan: RoutePlan,
         estimate: Estimate,
         details: tuple[RoleCard, ...],
-        models: dict[str, tuple[str, ...]],
+        models: dict[str, tuple[ModelEntry, ...]],
         engine: str,
         revision: int,
     ) -> None:
@@ -1181,7 +1188,7 @@ class MandateWizard(Vertical):
             with suppress(NoMatches):
                 await self._show_team(plan, estimate, details, models, engine, revision)
 
-    def show_advice(self, advice: MixAdvice | None, task_type: str) -> None:
+    def show_advice(self, advice: ProviderAdvice | None, task_type: str) -> None:
         self.advice = (
             self._t.message(advice_message(advice, task_type)) if advice is not None else ""
         )
@@ -1192,8 +1199,25 @@ class MandateWizard(Vertical):
         with suppress(NoMatches):
             note = self.query_one("#wiz-verify-note", Static)
             text = self._t("wizard.verify_commands", commands=", ".join(commands))
-            note.update(Content.styled(text, "$text-muted") if commands and self.mix else "")
-            note.display = bool(commands and self.mix)
+            note.update(Content.styled(text, "$text-muted") if commands and self.per_role else "")
+            note.display = bool(commands and self.per_role)
+
+    def _price_line(self, entry: ModelEntry) -> str:
+        if entry.input_price is None or entry.output_price is None:
+            return self._t("wizard.card_no_price")
+        return self._t(
+            "wizard.card_price", input=money(entry.input_price), output=money(entry.output_price)
+        )
+
+    def _model_choice(self, entry: ModelEntry) -> str:
+        if entry.input_price is None or entry.output_price is None:
+            return self._t("wizard.model_no_price", model=entry.id)
+        return self._t(
+            "wizard.model_price",
+            model=entry.id,
+            input=money(entry.input_price),
+            output=money(entry.output_price),
+        )
 
     def _guarantee_line(self, guarantees: tuple[Guarantee, ...]) -> str:
         t = self._t
@@ -1218,27 +1242,31 @@ class MandateWizard(Vertical):
         plan: RoutePlan,
         estimate: Estimate,
         details: tuple[RoleCard, ...],
-        models: dict[str, tuple[str, ...]],
+        models: dict[str, tuple[ModelEntry, ...]],
         engine: str,
         revision: int,
     ) -> None:
         t = self._t
         costs = {item.role: item for item in estimate.roles}
-        mixed = bool(self.mix) or len({route.engine for route in plan.routes if route.model}) > 1
         by_role = {card.role: card for card in details}
+        choices = [
+            (t("wizard.keep_plan"), AUTO_MODEL),
+            *((self._model_choice(entry), entry.id) for entry in models.get(engine, ())),
+        ]
         cards = self.query_one("#team-cards", Vertical)
         await cards.remove_children(".team-card")
         if engine != self.engine or revision != self._team_revision or not self.kind:
             return
         widgets: list[Horizontal] = []
         selects: list[Select[str]] = []
-        for route in plan.routes:
+        routes = [route for route in plan.routes if not self.per_role or route.role in CROSS_ORDER]
+        for route in routes:
             model = route.model.id if route.model else t("wizard.engine_default")
             tier = t(f"models.tier_{route.tier.value}") if route.tier else "–"
             cost = costs.get(route.role)
             card = by_role.get(route.role)
             warnings = list(card.warnings) if card is not None else []
-            native = self._services.build_warning(route.engine) if not self.mix else None
+            native = self._services.build_warning(route.engine) if not self.per_role else None
             if native is not None:
                 warnings.append(native)
             spread = (
@@ -1246,7 +1274,7 @@ class MandateWizard(Vertical):
                 if cost is not None and cost.low is not None
                 else ""
             )
-            if mixed and cost is not None and cost.share > 0:
+            if self.per_role and cost is not None and cost.share > 0:
                 spread = f"{spread}  {t('wizard.role_share', cap=money(cost.share))}".strip()
             lines: list[tuple[str, str]] = [
                 (f"{t(f'models.role_{route.role.value}')}", "bold"),
@@ -1256,17 +1284,17 @@ class MandateWizard(Vertical):
                     + "\n",
                     "$accent",
                 ),
-                (t.message(route.reason), "$text-muted"),
             ]
-            if card is not None and self.mix:
+            if route.model is not None:
+                lines.append((f"{self._price_line(route.model)}\n", "$text-muted"))
+            lines.append((t.message(route.reason), "$text-muted"))
+            if card is not None and self.per_role:
                 lines.append((f"\n{self._guarantee_line(card.guarantees)}", "$text-muted"))
                 lines.append((f"\n{t.message(card.context)}", "$text-muted"))
             lines.extend((f"\n{t.message(warning)}", "$warning") for warning in warnings)
             body = Content.assemble(*lines)
-            names = models.get(route.engine, ()) if self.mix else models.get(engine, ())
-            options = [(t("wizard.keep_plan"), AUTO_MODEL), *((name, name) for name in names)]
             select = Select(
-                options,
+                choices,
                 id=f"override-{route.role.value}",
                 allow_blank=False,
                 value=AUTO_MODEL,
@@ -1304,11 +1332,33 @@ class MandateWizard(Vertical):
         cards.display = True
         self.query_one("#wiz-estimate", Static).update("")
 
-    def choose_mix(self, mix: str) -> None:
-        self.mix = "" if self.mix == mix else mix
+    @property
+    def pipeline(self) -> bool:
+        return not self.simple and self.kind != INVESTIGATION
+
+    @property
+    def per_role(self) -> bool:
+        return runs_per_role(self.engine, self.pipeline)
+
+    @property
+    def run_note(self) -> str:
+        if self.per_role:
+            return "wizard.provider_per_role"
+        if self.pipeline and self.engine == Provider.CLAUDE:
+            return "wizard.provider_native"
+        return "wizard.provider_single"
+
+    def choose_provider(self, provider: str) -> None:
+        if provider not in self.engines or provider == self.engine:
+            return
+        self.engine = provider
+        self.query_one("#wiz-engine", Select).value = provider
+        self._paint_depth()
         self._paint()
         if self.kind and (self.one_page or STEPS[self.step] == "team"):
             self.refresh_team()
+        else:
+            self._team_revision += 1
 
     def choose_depth(self, depth: str) -> None:
         self.depth = parse_depth(depth).value
@@ -1361,7 +1411,7 @@ class MandateWizard(Vertical):
             "place-": lambda _, label: self._append("#wiz-where", label),
             "answer-": lambda rest, _: self.answer(*rest.partition("-")[::2]),
             "depth-": lambda rest, _: self.choose_depth(rest),
-            "mix-": lambda rest, _: self.choose_mix(rest),
+            "provider-": lambda rest, _: self.choose_provider(rest),
         }
 
     def understand_now(self) -> None:
@@ -1523,13 +1573,34 @@ class MandateWizard(Vertical):
 
     def show_preview(self, preview: MandatePreview) -> None:
         t = self._t
-        self.query_one("#preview-command", Static).update(
-            Content.assemble((f"{t('mandate.command')}  ", "$text-muted"), preview.command)
+        command = (
+            Content.styled(t("wizard.preview_per_role"), "$text-muted")
+            if preview.per_role
+            else Content.assemble((f"{t('mandate.command')}  ", "$text-muted"), preview.command)
         )
+        self.query_one("#preview-command", Static).update(command)
+        team = self.query_one("#preview-team", Static)
+        team.update(self._role_lines(preview))
+        team.display = bool(preview.roles)
         self.query_one("#preview-prompt", TextArea).text = preview.prompt
         card = self.query_one("#preview-card")
         card.display = True
         self.call_after_refresh(card.scroll_visible)
+
+    def _role_lines(self, preview: MandatePreview) -> Content:
+        t = self._t
+        lines = [
+            t(
+                "wizard.preview_role",
+                role=t(f"models.role_{route.role.value}"),
+                model=route.model.id if route.model is not None else t("wizard.engine_default"),
+                tier=t(f"models.tier_{route.tier.value}") if route.tier is not None else "–",
+            )
+            for route in preview.roles
+        ]
+        return Content.assemble(
+            (f"{t('wizard.preview_team')}\n", "bold"), ("\n".join(lines), "$accent")
+        )
 
     def prefilled(self, request: MandateRequest) -> None:
         self._plan_overrides.clear()

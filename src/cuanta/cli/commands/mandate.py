@@ -16,6 +16,9 @@ if TYPE_CHECKING:
     from cuanta.cli.document import Block, Document
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.mandate import MandateRequest
+    from cuanta.domain.routing import Provider
+
+TEAM_BUDGET_USD = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,8 +43,7 @@ class MandateArgs:
     role_models: tuple[str, ...] = ()
     keep_env_model: bool = True
     cross_engine: bool = False
-    cross_budget: float = 1.0
-    mix: str = ""
+    cross_budget: float | None = None
     simple: bool = False
     session: str = ""
     depth: str = ""
@@ -94,23 +96,20 @@ def mandate_command(
         bool,
         typer.Option(
             "--cross-engine",
-            help="Experimental: run each role separately on its own routed engine.",
+            help="Run each role as its own launch, same provider (a codex team always does).",
         ),
     ] = False,
     cross_budget: Annotated[
-        float,
-        typer.Option("--cross-budget-usd", help="Spend cap for the whole cross-engine run."),
-    ] = 1.0,
-    mix: Annotated[
-        str,
+        float | None,
         typer.Option(
-            "--mix",
+            "--cross-budget-usd",
             help=(
-                "Cross-engine team preset: claude-only, claude-plans-codex-writes "
-                "or codex-plans-claude-writes."
+                "Spend cap for a team run as one launch per role; a codex team defaults to "
+                "--max-budget-usd, the --depth cap, the budget.usd setting, then the normal "
+                "depth cap; --cross-engine defaults to $1.00."
             ),
         ),
-    ] = "",
+    ] = None,
     simple: Annotated[
         bool,
         typer.Option(
@@ -170,7 +169,6 @@ def mandate_command(
         keep_env_model=not override_env_model,
         cross_engine=cross_engine,
         cross_budget=cross_budget,
-        mix=mix,
         simple=simple,
         session=session,
         depth=depth,
@@ -253,7 +251,6 @@ def _options(args: MandateArgs) -> "MandateOptions":
     from cuanta.domain.errors import DomainFailure
     from cuanta.domain.mandate import Shape
     from cuanta.domain.plugins import SESSIONS
-    from cuanta.domain.routing import MIXES
 
     check_choice(args.route, ROUTE_MODES, "--route")
     check_choice(args.session, SESSIONS, "--session")
@@ -262,11 +259,6 @@ def _options(args: MandateArgs) -> "MandateOptions":
     check_choice(args.shape, tuple(shape.value for shape in Shape), "--shape")
     if args.keep and not args.sandbox:
         raise DomainFailure("--keep only applies to --sandbox runs", "add --sandbox")
-    check_choice(args.mix, MIXES, "--mix")
-    if args.mix and not args.cross_engine:
-        raise DomainFailure(
-            "--mix sets engines per role in a cross-engine run", "add --cross-engine"
-        )
     return MandateOptions(
         engine=args.engine,
         model=args.model,
@@ -290,19 +282,28 @@ def _options(args: MandateArgs) -> "MandateOptions":
 
 
 def _prepare(
-    session: Session, container: "Container", args: MandateArgs
+    session: Session,
+    container: "Container",
+    args: MandateArgs,
+    built: "tuple[MandateRequest, int] | None" = None,
 ) -> "tuple[MandateFlow, Prepared]":
     flow = container.mandate_flow(container.shared_ledger())
-    request, signatures = _build_request(session, flow.service, args)
+    request, signatures = (
+        built if built is not None else _build_request(session, flow.service, args)
+    )
     return flow, flow.prepare(request, signatures, _options(args), preview=args.dry_run)
 
 
 def run_mandate_core(
-    session: Session, container: "Container", args: MandateArgs, verdict: bool = True
+    session: Session,
+    container: "Container",
+    args: MandateArgs,
+    verdict: bool = True,
+    built: "tuple[MandateRequest, int] | None" = None,
 ) -> "MandateReport":
     from cuanta.domain.progress import Status, StepFinished, StepStarted
 
-    flow, prepared = _prepare(session, container, args)
+    flow, prepared = _prepare(session, container, args, built)
     publish_team(session, prepared)
     label = f"pounce · {prepared.engine_name} · {prepared.composed.hint.option}"
     session.presenter.publish(StepStarted("mandate", label))
@@ -320,8 +321,14 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
 
     container = Container.for_project(session.project)
     try:
+        options = _options(args)
+        built = _build_request(session, container.mandate_service(container.shared_ledger()), args)
+        request = built[0]
+        per_role = _per_role(container, args, options, request.type)
+        if args.dry_run and per_role:
+            return preview_per_role(container, args, request)
         if args.dry_run:
-            _, prepared = _prepare(session, container, args)
+            _, prepared = _prepare(session, container, args, built)
             composed = prepared.composed
             shown = display_command(composed.command, composed.prompt)
             team = tuple(Line(line, Status.INFO) for line in team_lines(prepared))
@@ -349,22 +356,26 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
                     "model": prepared.spec.model or None,
                 },
             )
-        if args.cross_engine:
-            return run_cross_engine(session, container, args)
+        if per_role:
+            return run_cross_engine(session, container, args, request)
         if args.sandbox:
-            return run_sandbox(session, container, args)
-        report = run_mandate_core(session, container, args)
+            return run_sandbox(session, container, args, built)
+        report = run_mandate_core(session, container, args, built=built)
     finally:
         container.close()
     return _final(report)
 
 
-def run_sandbox(session: Session, container: "Container", args: MandateArgs) -> "Document":
+def run_sandbox(
+    session: Session,
+    container: "Container",
+    args: MandateArgs,
+    built: "tuple[MandateRequest, int]",
+) -> "Document":
     from cuanta.domain.progress import Status, StepFinished, StepStarted
 
     ledger = container.shared_ledger()
-    flow = container.mandate_flow(ledger)
-    request, signatures = _build_request(session, flow.service, args)
+    request, signatures = built
 
     def started(_: "MandateFlow", prepared: "Prepared") -> None:
         publish_team(session, prepared)
@@ -382,21 +393,63 @@ def run_sandbox(session: Session, container: "Container", args: MandateArgs) -> 
     return _final(report, result)
 
 
-def run_cross_engine(session: Session, container: "Container", args: MandateArgs) -> "Document":
-    from cuanta.application.mandate_flow import resolve_max_turns
-    from cuanta.cli.document import Document, Line
-    from cuanta.domain.depth import parse_depth, profile
+def _per_role(
+    container: "Container", args: MandateArgs, options: "MandateOptions", task_type: str
+) -> bool:
+    from cuanta.application.mandate_flow import per_role_run
+
+    if args.cross_engine:
+        return True
+    return per_role_run(options, task_type, container.config.engine)
+
+
+def team_budget(
+    container: "Container",
+    args: MandateArgs,
+    options: "MandateOptions",
+    task_type: str,
+    provider: "Provider",
+) -> float:
+    from cuanta.application.mandate_flow import resolve_budget
+    from cuanta.domain.depth import DEFAULT_DEPTH, profile
+    from cuanta.domain.routing import Provider
+
+    if args.cross_budget is not None:
+        chosen = args.cross_budget
+    elif provider is Provider.CODEX:
+        default = container.config.budget_usd
+        chosen = (
+            resolve_budget(options, task_type, default)
+            or profile(DEFAULT_DEPTH, task_type).cost_cap_usd
+        )
+    else:
+        chosen = TEAM_BUDGET_USD
+    if args.budget > 0 and (chosen <= 0 or args.budget < chosen):
+        return args.budget
+    return chosen
+
+
+def _provider(container: "Container", args: MandateArgs) -> "Provider":
+    from cuanta.domain.errors import DomainFailure
+    from cuanta.domain.routing import PROVIDERS, parse_provider
+
+    engine = args.engine or container.config.engine
+    provider = parse_provider(engine)
+    if provider is None:
+        choices = " or ".join(f"--engine {item.value}" for item in PROVIDERS)
+        raise DomainFailure(f"{engine} cannot run a team of separate launches", f"use {choices}")
+    return provider
+
+
+def _team_plan(
+    container: "Container", args: MandateArgs, request: "MandateRequest"
+) -> "tuple[MandateOptions, RoutePlan, Provider, float]":
     from cuanta.domain.errors import DomainFailure
     from cuanta.domain.messages import english, msg
-    from cuanta.domain.progress import Note, Status
-    from cuanta.domain.routing import ENGINE_ORDER, parse_mix
-    from cuanta.domain.team import mix_title
 
-    flow = container.mandate_flow(container.shared_ledger())
-    request, _ = _build_request(session, flow.service, args)
+    provider = _provider(container, args)
     options = _options(args)
     roles = dict(options.route.role_models)
-    mix = parse_mix(args.mix) if args.mix else None
     plan, _ = container.plan_route(
         request.type,
         request.what,
@@ -405,19 +458,99 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
         args.preset,
         roles,
         depth=options.depth,
-        mix=mix,
+        engine=provider.value,
     )
     issues = container.route_advisor(container.shared_ledger()).pin_issues(
-        plan, roles, ENGINE_ORDER, cross=True
+        plan, roles, (provider.value,)
     )
     if issues:
         raise DomainFailure(
             english(msg("route.pins_rejected")), "; ".join(english(item) for item in issues)
         )
-    session.presenter.publish(Note(Status.WARN, "cross-engine pipeline (experimental)"))
-    if mix is not None:
-        session.presenter.publish(Note(Status.INFO, english(mix_title(mix))))
-    publish_cross_team(session, container, request, plan, options.depth, args.cross_budget)
+    budget = team_budget(container, args, options, request.type, provider)
+    return options, plan, provider, budget
+
+
+def per_role_title(provider: "Provider") -> str:
+    from cuanta.domain.messages import english
+    from cuanta.domain.team import provider_title
+
+    return f"{english(provider_title(provider))} · one launch per role"
+
+
+def per_role_lines(container: "Container", plan: "RoutePlan", provider: "Provider") -> list[str]:
+    from cuanta.domain.messages import english, msg
+    from cuanta.domain.routing import Role
+
+    lines = [f"team · {per_role_title(provider)}"]
+    for route in plan.routes:
+        if route.role is Role.ORCHESTRATOR:
+            continue
+        model = route.model.id if route.model else "engine default"
+        tier = route.tier.value if route.tier else "-"
+        lines.append(f"team · {route.role.value} → {model} ({tier}) · {english(route.reason)}")
+    if provider.value in container.build_blocked():
+        lines.append(english(msg("guarantee.codex_builds")))
+    return lines
+
+
+def preview_per_role(
+    container: "Container", args: MandateArgs, request: "MandateRequest"
+) -> "Document":
+    from cuanta.cli.document import Document, Line
+    from cuanta.cli.fmt import usd
+    from cuanta.domain.messages import english, msg
+    from cuanta.domain.progress import Status
+    from cuanta.domain.routing import Role
+
+    options, plan, provider, budget = _team_plan(container, args, request)
+    lines = per_role_lines(container, plan, provider)
+    lines.append(f"spend cap {usd(budget)}" if budget > 0 else "spend cap: none")
+    lines.append(estimate_line(container.run_estimate(plan, request.type, options.depth)))
+    verify = container.change_plan(request).verify
+    if verify:
+        lines.append(english(msg("cross.verify_commands", commands=", ".join(verify))))
+    if args.sandbox:
+        lines.append("isolated copy: not created in a dry run")
+    return Document(
+        blocks=tuple(Line(line, Status.INFO) for line in lines),
+        payload={
+            "dry_run": True,
+            "sandbox": args.sandbox,
+            "engine": provider.value,
+            "per_role": True,
+            "budget_usd": budget,
+            "team": lines,
+            "roles": [
+                {
+                    "role": route.role.value,
+                    "engine": route.engine,
+                    "model": route.model.id if route.model else None,
+                    "tier": route.tier.value if route.tier else None,
+                }
+                for route in plan.routes
+                if route.role is not Role.ORCHESTRATOR
+            ],
+            "verify": list(verify),
+        },
+    )
+
+
+def run_cross_engine(
+    session: Session, container: "Container", args: MandateArgs, request: "MandateRequest"
+) -> "Document":
+    from cuanta.application.mandate_flow import resolve_max_turns
+    from cuanta.cli.document import Document, Line
+    from cuanta.domain.depth import parse_depth, profile
+    from cuanta.domain.messages import english
+    from cuanta.domain.progress import Note, Status
+    from cuanta.domain.routing import Provider
+
+    options, plan, provider, budget = _team_plan(container, args, request)
+    if provider is Provider.CLAUDE:
+        session.presenter.publish(Note(Status.WARN, "cross-engine pipeline (experimental)"))
+    session.presenter.publish(Note(Status.INFO, per_role_title(provider)))
+    publish_cross_team(session, container, request, plan, options.depth, budget)
     guess = container.run_estimate(plan, request.type, options.depth)
     session.presenter.publish(Note(Status.INFO, estimate_line(guess)))
     max_turns = resolve_max_turns(
@@ -430,7 +563,7 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
             request,
             plan,
             session.presenter,
-            args.cross_budget,
+            budget,
             max_turns,
             args.keep,
             options.depth,
@@ -440,10 +573,10 @@ def run_cross_engine(session: Session, container: "Container", args: MandateArgs
         report = isolated.cross
     else:
         pipeline = container.cross_engine(
-            container.shared_ledger(), args.cross_budget, max_turns, depth=options.depth
+            container.shared_ledger(), budget, max_turns, depth=options.depth
         )
         report = pipeline.run(request, plan, session.presenter)
-    blocks = cross_blocks(report, args.cross_budget)
+    blocks = cross_blocks(report, budget, per_role_title(provider))
     if report.stopped is not None:
         blocks.append(Line(english(report.stopped), Status.WARN))
     if isolated is not None:
@@ -465,7 +598,12 @@ def publish_cross_team(
 ) -> None:
     from cuanta.domain.messages import english, msg
     from cuanta.domain.progress import Note, Status
-    from cuanta.domain.team import advice_message, mix_attempts, recommend_mix, team_cards
+    from cuanta.domain.team import (
+        advice_message,
+        provider_attempts,
+        recommend_provider,
+        team_cards,
+    )
 
     shares = container.role_budget(plan, request.type, depth, budget)
     for card in team_cards(
@@ -482,7 +620,9 @@ def publish_cross_team(
         for warning in card.warnings:
             text = english(msg("team.warning", warning=warning))
             session.presenter.publish(Note(Status.WARN, f"  {text}"))
-    advice = recommend_mix(mix_attempts(container.shared_ledger().runs()), request.type)
+    runs = container.shared_ledger().runs()
+    attempts = provider_attempts(runs, container.estimate_shapes(runs))
+    advice = recommend_provider(attempts, request.type)
     if advice is not None:
         session.presenter.publish(Note(Status.INFO, english(advice_message(advice, request.type))))
     verify = container.change_plan(request).verify
@@ -493,7 +633,7 @@ def publish_cross_team(
         )
 
 
-def cross_blocks(report: "CrossReport", budget: float) -> "list[Block]":
+def cross_blocks(report: "CrossReport", budget: float, title: str) -> "list[Block]":
     from cuanta.cli.document import Column, Line, Table
     from cuanta.cli.fmt import usd
     from cuanta.domain.messages import english, msg
@@ -528,7 +668,7 @@ def cross_blocks(report: "CrossReport", budget: float) -> "list[Block]":
                 )
     blocks: list[Block] = [
         Table(
-            "cross-engine pipeline (experimental)",
+            title,
             (
                 Column("role"),
                 Column("engine"),

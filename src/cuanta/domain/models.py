@@ -66,6 +66,7 @@ class TierTable:
     verified_on: str
     anchors: Mapping[str, Tier]
     aliases: Mapping[str, str] = field(default_factory=dict)
+    defaults: Mapping[str, Mapping[Tier, str]] = field(default_factory=dict)
 
     def anchor(self, model: str) -> Tier | None:
         name = model.lower()
@@ -89,6 +90,26 @@ def parse_tier(value: str) -> Tier | None:
         return Tier(value.strip().lower())
     except ValueError:
         return None
+
+
+def tier_defaults(table: object) -> dict[str, dict[Tier, str]]:
+    if not isinstance(table, Mapping):
+        return {}
+    found: dict[str, dict[Tier, str]] = {}
+    for engine, tiers in table.items():
+        if not isinstance(tiers, Mapping):
+            continue
+        chosen: dict[Tier, str] = {
+            tier: model.strip()
+            for name, model in tiers.items()
+            if (tier := parse_tier(str(name))) is not None
+            and tier is not Tier.FRONTIER
+            and isinstance(model, str)
+            and model.strip()
+        }
+        if chosen:
+            found[str(engine).strip().lower()] = chosen
+    return found
 
 
 def anchor_prices(entries: Iterable[ModelEntry], table: TierTable) -> dict[Tier, float]:

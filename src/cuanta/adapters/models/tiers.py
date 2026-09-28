@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass
+from functools import cache
 from importlib import resources
 
-from cuanta.domain.models import Tier, TierTable, parse_tier
+from cuanta.domain.models import Tier, TierTable, parse_tier, tier_defaults
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +17,7 @@ class ClaudeFacts:
     efforts: tuple[str, ...]
 
 
+@cache
 def _data() -> dict[str, object]:
     text = resources.files("cuanta").joinpath("assets", "model_tiers.toml").read_text("utf-8")
     return tomllib.loads(text)
@@ -36,6 +38,7 @@ def load_tier_table() -> TierTable:
         verified_on=str(data.get("verified_on", "")),
         anchors=anchors,
         aliases={fact.resolves: fact.alias for fact in claude_facts()},
+        defaults=tier_defaults(data.get("defaults")),
     )
 
 

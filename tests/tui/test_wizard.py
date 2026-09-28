@@ -12,15 +12,15 @@ from cuanta.application.assistant import sent_payload
 from cuanta.application.intake import Understanding
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixState, PrefixWindow
 from cuanta.domain.change_plan import ChangePlan
-from cuanta.domain.routing import Mix
-from cuanta.domain.team import MixAdvice
+from cuanta.domain.routing import Provider
+from cuanta.domain.team import ProviderAdvice
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.cache_text import clock_time
 from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.screens.pipeline import PipelineScreen
 from cuanta.tui.views.mandate import MandateView
 from cuanta.tui.widgets.wizard import IntentCard, MandateWizard
-from tests.tui.fakes import FakeServices
+from tests.tui.fakes import TEAM_CATALOG, FakeServices
 from tests.tui.test_app import drive, make_app, settle
 from tests.tui.test_t5_screens import render, wait_for
 
@@ -460,41 +460,135 @@ def test_see_what_is_sent_matches_the_payload() -> None:
     drive(make_app(services), scenario, size=(120, 50))
 
 
-def test_a_team_mix_routes_roles_across_engines_and_explains_each_card() -> None:
-    services = FakeServices(engines=(("claude", True), ("codex", True)))
+async def reach_team(wizard: MandateWizard, pilot: Pilot[None]) -> None:
+    await tell(wizard, pilot, STORY)
+    wizard.query_one("#intent-feature", IntentCard).post_message(IntentCard.Chosen("feature"))
+    await wait_for(pilot, lambda: wizard.kind == "feature")
+    wizard.query_one("#wiz-why", TextArea).text = "The checkout needs a canonical tag"
+    wizard.query_one("#wiz-out", Input).value = "the footer"
+    wizard.query_one("#wiz-next", Button).press()
+    await wait_for(pilot, lambda: current(wizard) == "team")
+
+
+def choices(wizard: MandateWizard, role: str) -> dict[str, str]:
+    select = wizard.query_one(f"#override-{role}", Select)
+    return {str(value): str(prompt) for prompt, value in select._options}
+
+
+def test_provider_chips_pick_one_provider_and_show_each_roles_model_and_price() -> None:
+    services = FakeServices(engines=(("claude", True), ("codex", True)), catalog=TEAM_CATALOG)
     services.change_plan_result = ChangePlan(verify=("npx tsc --noEmit", "npm run build"))
-    services.advice = MixAdvice(Mix.CLAUDE_ONLY, 2, 2, 0.91)
+    services.advice = ProviderAdvice(Provider.CLAUDE, 2, 2, 0.91)
 
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
         wizard = await open_wizard(app, pilot)
-        await tell(wizard, pilot, STORY)
-        wizard.query_one("#intent-feature", IntentCard).post_message(IntentCard.Chosen("feature"))
-        await wait_for(pilot, lambda: wizard.kind == "feature")
-        wizard.query_one("#wiz-why", TextArea).text = "The checkout needs a canonical tag"
-        wizard.query_one("#wiz-out", Input).value = "the footer"
-        wizard.query_one("#wiz-next", Button).press()
-        await wait_for(pilot, lambda: current(wizard) == "team")
-        note = wizard.query_one("#wiz-mix-note", Static)
-        assert "Native pipeline" in render(note)
-        await wait_for(pilot, lambda: "recommend Claude only: $0.9100" in render(note))
-        wizard.query_one("#mix-claude-plans-codex-writes", Button).press()
-        await wait_for(pilot, lambda: services.team_options[-1].mix == "claude-plans-codex-writes")
-        await wait_for(pilot, lambda: "runs separately" in render(note))
+        await reach_team(wizard, pilot)
+        note = wizard.query_one("#wiz-provider-note", Static)
+        assert "One Claude session" in render(note)
+        assert wizard.query_one("#provider-claude", Button).has_class("-current")
+        assert not wizard.query_one("#provider-codex", Button).has_class("-current")
+        await wait_for(pilot, lambda: "recommend the Claude team: $0.9100" in render(note))
         cards = wizard.query_one("#team-cards")
-        await wait_for(pilot, lambda: "Codex, gpt-5.6-sol" in render_all(cards))
+        await wait_for(pilot, lambda: "Claude, opus, premium tier" in render_all(cards))
+        assert "$4.00 in, $20.00 out per million tokens" in render_all(cards)
+        assert choices(wizard, "senior") == {
+            "": "Keep the plan",
+            "opus": "opus $4.00/$20.00",
+            "sonnet": "sonnet $2.00/$10.00",
+            "haiku": "haiku $1.00/$5.00",
+        }
+
+        wizard.query_one("#provider-codex", Button).press()
+        await wait_for(pilot, lambda: services.team_options[-1].engine == "codex")
+        await wait_for(pilot, lambda: "One launch per role" in render(note))
+        assert wizard.query_one("#provider-codex", Button).has_class("-current")
+        assert not wizard.query_one("#provider-claude", Button).has_class("-current")
+        await wait_for(pilot, lambda: "Codex, gpt-6-sol, premium tier" in render_all(cards))
         text = render_all(cards)
+        assert "Codex, gpt-6-sol, standard tier" in text
+        assert "Codex, gpt-6-luna, economy tier" in text
+        assert "$2.00 in, $10.00 out per million tokens" in text
+        assert "$0.10 in, $0.50 out per million tokens" in text
+        assert "gpt-5.6" not in text
+        assert "Claude" not in text and "opus" not in text
+        assert "Orchestrator" not in text
         assert "Enforced:" in text and "Checked after the run:" in text
         assert "Context: index tools and the anchored handoff chain" in text
         assert "Codex cannot run builds on this Windows host; cuanta verifies instead" in text
         assert " · " not in text
+        assert choices(wizard, "docs") == {
+            "": "Keep the plan",
+            "gpt-5.6-sol": "gpt-5.6-sol $4.00/$20.00",
+            "gpt-9-private": "gpt-9-private (no price)",
+            "gpt-6-sol": "gpt-6-sol $2.00/$10.00",
+            "gpt-6-luna": "gpt-6-luna $0.10/$0.50",
+        }
         verify = wizard.query_one("#wiz-verify-note", Static)
         await wait_for(pilot, lambda: "npx tsc --noEmit, npm run build" in render(verify))
         assert verify.display
-        assert wizard.options().mix == "claude-plans-codex-writes"
-        wizard.query_one("#mix-claude-plans-codex-writes", Button).press()
-        await wait_for(pilot, lambda: wizard.options().mix == "")
+        assert wizard.options().engine == "codex"
+
+        wizard.query_one("#wiz-team-preview", Button).press()
+        card = wizard.query_one("#preview-card")
+        await wait_for(pilot, lambda: card.display)
+        team = wizard.query_one("#preview-team", Static)
+        assert team.display
+        assert "One launch per role" in render(wizard.query_one("#preview-command", Static))
+        shown = render(team)
+        assert "Model per role" in shown
+        assert "Analyst: gpt-6-sol, standard tier" in shown
+        assert "Senior: gpt-6-sol, premium tier" in shown
+        assert "Tester: gpt-6-sol, standard tier" in shown
+        assert "Docs: gpt-6-luna, economy tier" in shown
+        assert "Orchestrator" not in shown
+
+        wizard.query_one("#provider-claude", Button).press()
+        await wait_for(pilot, lambda: wizard.options().engine == "claude")
+        await wait_for(pilot, lambda: "One Claude session" in render(note))
+        await wait_for(pilot, lambda: "Claude, opus, premium tier" in render_all(cards))
+        wizard.query_one("#wiz-team-preview", Button).press()
+        await wait_for(pilot, lambda: "Orchestrator: sonnet, standard tier" in render(team))
+        assert "Senior: opus, premium tier" in render(team)
+        assert '"<prompt>"' in render(wizard.query_one("#preview-command", Static))
 
     drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_the_engine_menu_marks_the_provider_chip_before_any_team_is_planned() -> None:
+    services = FakeServices(engines=(("claude", True), ("codex", True)), catalog=TEAM_CATALOG)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await reach_team(wizard, pilot)
+        wizard.kind = ""
+        wizard.query_one("#wiz-engine", Select).value = "codex"
+        await pilot.pause()
+        assert wizard.engine == "codex"
+        assert wizard.query_one("#provider-codex", Button).has_class("-current")
+        assert not wizard.query_one("#provider-claude", Button).has_class("-current")
+        assert "One launch per role" in render(wizard.query_one("#wiz-provider-note", Static))
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_the_provider_step_speaks_spanish() -> None:
+    services = FakeServices(engines=(("claude", True), ("codex", True)), catalog=TEAM_CATALOG)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await reach_team(wizard, pilot)
+        assert "Equipo Claude" in str(wizard.query_one("#provider-claude", Button).label)
+        assert "Equipo GPT" in str(wizard.query_one("#provider-codex", Button).label)
+        note = wizard.query_one("#wiz-provider-note", Static)
+        assert "Una sesión de Claude" in render(note)
+        wizard.choose_provider("codex")
+        await wait_for(pilot, lambda: "Un lanzamiento por rol" in render(note))
+        cards = wizard.query_one("#team-cards")
+        await wait_for(pilot, lambda: "Codex, gpt-6-sol, nivel premium" in render_all(cards))
+        assert "$2.00 entrada, $10.00 salida por millón de tokens" in render_all(cards)
+        assert choices(wizard, "senior")["gpt-9-private"] == "gpt-9-private (sin precio)"
+
+    drive(make_app(services, language="es"), scenario, size=(120, 50))
 
 
 def render_all(widget: object) -> str:

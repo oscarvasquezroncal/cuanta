@@ -6,28 +6,30 @@ from dataclasses import dataclass
 from cuanta.domain.guarantees import Guarantee, cap_warning, engine_guarantees
 from cuanta.domain.ledger import Run
 from cuanta.domain.messages import Message, msg
-from cuanta.domain.routing import Mix, Role, RoleRoute
+from cuanta.domain.routing import Provider, Role, RoleRoute, parse_provider
 
-MIX_TITLES: Mapping[Mix, str] = {
-    Mix.CLAUDE_ONLY: "mix.claude_only",
-    Mix.CLAUDE_PLANS: "mix.claude_plans",
-    Mix.CODEX_PLANS: "mix.codex_plans",
+PROVIDER_TITLES: Mapping[Provider, str] = {
+    Provider.CLAUDE: "provider.claude",
+    Provider.CODEX: "provider.codex",
 }
 BUILD_ROLES = frozenset({Role.SENIOR, Role.TESTER})
 ACCEPTED = "accepted"
+PIPELINE = "pipeline"
+CROSS = "cross"
+MANDATE = "mandate"
 
 
 @dataclass(frozen=True, slots=True)
-class MixAttempt:
-    mix: Mix
+class ProviderAttempt:
+    provider: Provider
     task_type: str
     cost_usd: float | None
     accepted: bool
 
 
 @dataclass(frozen=True, slots=True)
-class MixAdvice:
-    mix: Mix
+class ProviderAdvice:
+    provider: Provider
     attempts: int
     accepted: int
     per_accepted: float
@@ -57,61 +59,75 @@ class RoleCard:
         return msg("team.role_unshared", role=self.role.value, engine=self.engine, model=self.model)
 
 
-def mix_title(mix: Mix) -> Message:
-    return msg(MIX_TITLES[mix])
+def provider_title(provider: Provider) -> Message:
+    return msg(PROVIDER_TITLES[provider])
 
 
-def mix_of(engines: Mapping[str, str]) -> Mix | None:
-    pair = (engines.get(Role.ANALYST.value, ""), engines.get(Role.SENIOR.value, ""))
-    return {
-        ("claude", "claude"): Mix.CLAUDE_ONLY,
-        ("claude", "codex"): Mix.CLAUDE_PLANS,
-        ("codex", "claude"): Mix.CODEX_PLANS,
-    }.get(pair)
+def runs_per_role(engine: str, pipeline: bool) -> bool:
+    return pipeline and parse_provider(engine) is Provider.CODEX
 
 
-def mix_attempts(runs: Sequence[Run]) -> tuple[MixAttempt, ...]:
-    roots = {run.id: run for run in runs if run.kind == "cross" and not run.parent_id}
-    engines: dict[str, dict[str, str]] = {}
+def _team_provider(engines: set[str]) -> Provider | None:
+    return parse_provider(next(iter(engines))) if len(engines) == 1 else None
+
+
+def provider_attempts(
+    runs: Sequence[Run], shapes: Mapping[str, str]
+) -> tuple[ProviderAttempt, ...]:
+    roots = {run.id: run for run in runs if run.kind == CROSS and not run.parent_id}
+    engines: dict[str, set[str]] = {}
     costs: dict[str, list[float | None]] = {}
     for run in runs:
-        if run.kind != "cross":
+        if run.kind != CROSS:
             continue
         root = run.parent_id or run.id
         if root not in roots:
             continue
-        engines.setdefault(root, {}).setdefault(run.scope, run.engine)
+        engines.setdefault(root, set()).add(run.engine)
         costs.setdefault(root, []).append(run.cost_usd)
-    found: list[MixAttempt] = []
+    found: list[ProviderAttempt] = []
     for root, run in roots.items():
-        mix = mix_of(engines.get(root, {}))
-        if mix is None or not run.outcome:
+        provider = _team_provider(engines.get(root, set()))
+        if provider is None or not run.outcome:
             continue
         spent = costs.get(root, [])
         total = None if any(value is None for value in spent) else sum(v or 0.0 for v in spent)
-        found.append(MixAttempt(mix, run.task_type, total, run.outcome == ACCEPTED))
+        found.append(ProviderAttempt(provider, run.task_type, total, run.outcome == ACCEPTED))
+    for run in runs:
+        provider = parse_provider(run.engine)
+        if run.kind != MANDATE or provider is None or not run.outcome:
+            continue
+        if shapes.get(run.id) != PIPELINE or runs_per_role(run.engine, True):
+            continue
+        found.append(
+            ProviderAttempt(provider, run.task_type, run.cost_usd, run.outcome == ACCEPTED)
+        )
     return tuple(found)
 
 
-def recommend_mix(attempts: Sequence[MixAttempt], task_type: str) -> MixAdvice | None:
-    best: MixAdvice | None = None
-    for mix in Mix:
-        group = [item for item in attempts if item.mix is mix and item.task_type == task_type]
+def recommend_provider(
+    attempts: Sequence[ProviderAttempt], task_type: str
+) -> ProviderAdvice | None:
+    best: ProviderAdvice | None = None
+    for provider in Provider:
+        group = [
+            item for item in attempts if item.provider is provider and item.task_type == task_type
+        ]
         accepted = sum(item.accepted for item in group)
         if not accepted or any(item.cost_usd is None for item in group):
             continue
         per = sum(item.cost_usd or 0.0 for item in group) / accepted
         if best is None or per < best.per_accepted:
-            best = MixAdvice(mix, len(group), accepted, per)
+            best = ProviderAdvice(provider, len(group), accepted, per)
     return best
 
 
-def advice_message(advice: MixAdvice, task_type: str) -> Message:
+def advice_message(advice: ProviderAdvice, task_type: str) -> Message:
     return msg(
         "team.recommended",
         type=task_type,
         attempts=advice.attempts,
-        mix=mix_title(advice.mix),
+        provider=provider_title(advice.provider),
         cost=f"{advice.per_accepted:.4f}",
     )
 

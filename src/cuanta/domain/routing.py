@@ -22,13 +22,19 @@ class Role(StrEnum):
     DOCS = "docs"
 
 
+class Provider(StrEnum):
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+
 ROLES = tuple(Role)
 ENGINE_ORDER = ("claude", "codex", "opencode")
+PROVIDERS = tuple(Provider)
 DEFAULT_ROLE_TIERS: Mapping[Role, Tier] = {
     Role.ORCHESTRATOR: Tier.STANDARD,
     Role.ANALYST: Tier.STANDARD,
     Role.SENIOR: Tier.PREMIUM,
-    Role.TESTER: Tier.PREMIUM,
+    Role.TESTER: Tier.STANDARD,
     Role.DOCS: Tier.ECONOMY,
 }
 DEFAULT_CAP = Tier.PREMIUM
@@ -94,7 +100,7 @@ class RoutingPolicy:
     min_samples: int = DEFAULT_MIN_SAMPLES
     role_models: Mapping[Role, str] = field(default_factory=dict)
     fixed_roles: frozenset[Role] = frozenset()
-    role_engines: Mapping[Role, str] = field(default_factory=dict)
+    tier_defaults: Mapping[str, Mapping[Tier, str]] = field(default_factory=dict)
 
     def tier_for(self, role: Role) -> Tier:
         return self.roles.get(role, DEFAULT_ROLE_TIERS[role])
@@ -136,6 +142,13 @@ def _number(value: object, fallback: float) -> float:
 def _role(name: str) -> Role | None:
     try:
         return Role(name.strip().lower())
+    except ValueError:
+        return None
+
+
+def parse_provider(value: str) -> Provider | None:
+    try:
+        return Provider(value.strip().lower())
     except ValueError:
         return None
 
@@ -255,6 +268,21 @@ def pinned(entries: Iterable[ModelEntry], reference: str) -> ModelEntry | None:
     return None
 
 
+def tier_default(
+    policy: RoutingPolicy, entries: Sequence[ModelEntry], tier: Tier
+) -> ModelEntry | None:
+    if tier is Tier.FRONTIER:
+        return None
+    for engine in policy.engines:
+        reference = policy.tier_defaults.get(engine, {}).get(tier)
+        if not reference:
+            continue
+        entry = pinned(entries, f"{engine}:{reference}")
+        if entry is not None and entry.engine == engine:
+            return entry
+    return None
+
+
 def route_role(
     policy: RoutingPolicy, entries: Sequence[ModelEntry], request: RoleRequest
 ) -> RoleRoute:
@@ -273,12 +301,12 @@ def route_role(
             )
     requested = capped(policy, role, request.tier)
     ceiling = policy.caps.ceiling(role)
-    engines = (policy.role_engines[role],) if role in policy.role_engines else policy.engines
     for tier in search_order(requested, ceiling):
-        found = candidates(entries, engines, tier)
-        if not found:
+        preferred = tier_default(policy, entries, tier)
+        found = candidates(entries, policy.engines, tier)
+        if preferred is None and not found:
             continue
-        model = found[0]
+        model = preferred if preferred is not None else found[0]
         if tier is requested and requested is request.tier:
             reason = request.reason
         elif tier is requested:
@@ -293,31 +321,11 @@ def route_role(
     )
 
 
-class Mix(StrEnum):
-    CLAUDE_ONLY = "claude-only"
-    CLAUDE_PLANS = "claude-plans-codex-writes"
-    CODEX_PLANS = "codex-plans-claude-writes"
-
-
-MIXES = tuple(item.value for item in Mix)
-MIX_ENGINES: Mapping[Mix, Mapping[Role, str]] = {
-    Mix.CLAUDE_ONLY: dict.fromkeys(ROLES, "claude"),
-    Mix.CLAUDE_PLANS: {**dict.fromkeys(ROLES, "claude"), Role.SENIOR: "codex"},
-    Mix.CODEX_PLANS: {**dict.fromkeys(ROLES, "claude"), Role.ANALYST: "codex"},
-}
-
-
-def with_mix(policy: RoutingPolicy, mix: Mix | None) -> RoutingPolicy:
-    if mix is None:
-        return policy
-    chosen = MIX_ENGINES[mix]
-    engines = tuple(dict.fromkeys((*chosen.values(), *policy.engines)))
-    return replace(policy, role_engines=dict(chosen), engines=engines)
-
-
-def parse_mix(value: str) -> Mix | None:
-    cleaned = value.strip().lower()
-    return Mix(cleaned) if cleaned in MIXES else None
+def foreign_pin(role: Role, entry: ModelEntry, engines: Sequence[str]) -> Message:
+    provider = parse_provider(engines[0]) if len(engines) == 1 else None
+    if provider is not None:
+        return msg("route.pin_provider", role=role.value, model=entry.key, provider=provider.value)
+    return msg("route.pin_engine", role=role.value, model=entry.key, engines=", ".join(engines))
 
 
 def pin_issues(
@@ -325,9 +333,7 @@ def pin_issues(
     entries: Sequence[ModelEntry],
     routes: Sequence[RoleRoute],
     engines: Sequence[str],
-    build_blocked: Iterable[str] = (),
 ) -> tuple[Message, ...]:
-    blocked = frozenset(build_blocked)
     chosen = {route.role: route for route in routes}
     issues: list[Message] = []
     for role, reference in pins.items():
@@ -336,16 +342,7 @@ def pin_issues(
         if entry is None:
             issues.append(msg("route.pin_unknown", role=role.value, model=reference))
         elif entry.engine not in engines:
-            issues.append(
-                msg(
-                    "route.pin_engine",
-                    role=role.value,
-                    model=entry.key,
-                    engines=", ".join(engines),
-                )
-            )
-        elif role is Role.TESTER and entry.engine in blocked:
-            issues.append(msg("route.pin_build", role=role.value, model=entry.key))
+            issues.append(foreign_pin(role, entry, engines))
         elif route is None or route.model is None or route.model.key != entry.key:
             issues.append(msg("route.pin_lost", role=role.value, model=entry.key))
     return tuple(issues)

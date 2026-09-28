@@ -30,17 +30,23 @@ def advisor(ledger: MemoryLedger) -> RouteAdvisor:
     return RouteAdvisor(decisions, lambda: CATALOG, ledger, lambda: "2026-09-23T00:00:00Z")
 
 
-def test_unverified_windows_codex_builds_keep_the_cross_tester_on_claude() -> None:
+def test_a_gpt_team_keeps_its_tester_on_codex_even_where_codex_cannot_build() -> None:
     ledger = MemoryLedger()
     decisions = DecisionMaker(HeuristicInstinct(), ledger, lambda: "2026-09-27T00:00:00Z")
     catalog = (*CATALOG, ModelEntry("codex", "codex-premium", "c", "openai", tier=Tier.PREMIUM))
-    service = RouteAdvisor(decisions, lambda: catalog, ledger, lambda: "", frozenset({"codex"}))
+    service = RouteAdvisor(decisions, lambda: catalog, ledger, lambda: "")
     policy = with_overrides(
-        RoutingPolicy(), mode="fixed", role_models={"tester": "codex:codex-premium"}
+        RoutingPolicy(engines=("codex",)),
+        mode="fixed",
+        role_models={"tester": "codex:codex-premium"},
     )
-    route = service.plan(policy, RouteInputs("bug", "fix build")).route(Role.TESTER)
-    assert route is not None and route.engine == "claude"
-    assert "tester stays on Claude" in english(route.reason)
+    plan = service.plan(policy, RouteInputs("bug", "fix build"))
+    route = plan.route(Role.TESTER)
+    assert route is not None and route.engine == "codex"
+    assert english(route.reason) == "pinned by you: codex:codex-premium"
+    assert service.pin_issues(plan, {"tester": "codex:codex-premium"}, ("codex",)) == ()
+    refused = service.pin_issues(plan, {"tester": "opus"}, ("codex",))
+    assert [issue.key for issue in refused] == ["route.pin_provider"]
 
 
 def test_auto_plan_asks_scope_tiers_and_risk_and_explains_them() -> None:

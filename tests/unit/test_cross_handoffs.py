@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+import threading
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from cuanta.application.cross_engine import (
 )
 from cuanta.application.engine_run import EngineLauncher
 from cuanta.application.routing import RoutePlan
+from cuanta.application.verification import Verifier
 from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest, RunResult
 from cuanta.domain.mandate import MandateRequest
@@ -28,6 +31,7 @@ from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.progress import ProgressEvent
 from cuanta.domain.role_handoff import VerifyResult
 from cuanta.domain.routing import ROLES, Role, RoleRoute, RoutingPolicy
+from tests.fakes import FakeRunner, FakeStream
 
 REQUEST = MandateRequest(type="feature", what="add canonical", why="seo", out_of_scope="secrets")
 
@@ -149,7 +153,9 @@ class Harness:
     def allocate(self, plan: RoutePlan, kind: str, depth: str, cap: float) -> Mapping[Role, float]:
         return self.shares or {}
 
-    def verifier(self, commands: Sequence[str]) -> tuple[VerifyResult, ...]:
+    def verifier(
+        self, commands: Sequence[str], stopped: Callable[[], bool]
+    ) -> tuple[VerifyResult, ...]:
         if self.verify_results:
             return self.verify_results.pop(0)
         return tuple(VerifyResult(command, 0, 1.0) for command in commands)
@@ -352,6 +358,69 @@ def test_a_second_failure_passes_the_results_to_the_tester(tmp_path: Path) -> No
     assert (
         english(report.stopped) == "the checks still fail after tester; the change is not verified"
     )
+
+
+class Building(FakeStream):
+    def __init__(self, pressed: Callable[[], object]) -> None:
+        super().__init__(["building"], 1)
+        self.pressed = pressed
+        self.released = threading.Event()
+
+    def lines(self) -> Iterator[str]:
+        yield from self.output
+        self.pressed()
+        self.released.wait(10)
+
+    def close(self) -> None:
+        self.closed = True
+        self.released.set()
+
+
+@dataclass
+class Checked(Harness):
+    checks: Verifier | None = None
+
+    def verifier(
+        self, commands: Sequence[str], stopped: Callable[[], bool]
+    ) -> tuple[VerifyResult, ...]:
+        assert self.checks is not None
+        return self.checks.run(commands, stopped)
+
+
+@pytest.mark.parametrize("attempt", [1, 2])
+def test_a_stop_during_the_checks_ends_the_run_and_no_later_check_starts(
+    tmp_path: Path, attempt: int
+) -> None:
+    seed(tmp_path)
+    harness = Checked(
+        tmp_path,
+        {"senior": [Act(writes={"src/layout.ts": f"v{n}\n"}) for n in range(attempt)]},
+        plan=ChangePlan(verify=("npm run build", "npm run lint")),
+    )
+    pipeline = harness.build()
+    building = Building(pipeline.stop)
+    queued: list[FakeStream] = [FakeStream(["src/layout.ts:1 Type error"], 1)] * (attempt - 1)
+    queued.append(building)
+    runner = FakeRunner(queued={"npm run build": queued})
+    harness.checks = Verifier(runner, tmp_path, windows=False)
+    recorder = Recorder()
+    started = time.monotonic()
+    report = pipeline.run(REQUEST, routes(MIX), recorder)
+    assert time.monotonic() - started < 5.0
+    assert building.closed
+    assert runner.calls[-1] == ("npm", "run", "build")
+    assert runner.calls.count(("npm", "run", "lint")) == attempt - 1
+    assert [(item.attempt, item.passed) for item in report.verifications] == [
+        (number, False) for number in range(1, attempt + 1)
+    ]
+    stopped = report.verifications[-1].results
+    assert [(result.command, result.exit_code) for result in stopped] == [("npm run build", None)]
+    assert stopped[0].errors == ("stopped before it finished",)
+    assert [step.role for step in report.steps] == [Role.ANALYST, *[Role.SENIOR] * attempt]
+    assert harness.prompt_of("tester") == []
+    assert report.state is CompletionState.PARTIAL and not report.ok
+    assert report.stopped == msg("cross.stopped")
+    assert "the tester receives the results" not in " ".join(recorder.texts())
 
 
 def test_a_protected_change_stops_before_the_next_role_and_names_it(tmp_path: Path) -> None:

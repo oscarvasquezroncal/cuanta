@@ -41,8 +41,9 @@ from cuanta.domain.mandate import (
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pack import ContextPack
 from cuanta.domain.progress import Status, finished, started
-from cuanta.domain.routing import Role
+from cuanta.domain.routing import Role, RoleRoute
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, sandbox_launch
+from cuanta.domain.team import runs_per_role
 from cuanta.ports.engine import Engine
 from cuanta.ports.progress import ProgressSink
 
@@ -73,7 +74,12 @@ class MandateOptions:
     keep_copy: bool = False
     estimate: RunEstimate | None = None
     plan_overrides: tuple[tuple[str, str], ...] = ()
-    mix: str = ""
+
+
+def per_role_run(options: MandateOptions, task_type: str, default_engine: str) -> bool:
+    single = single_context(task_type, options.simple, parse_shape(options.shape))
+    pipeline = not options.simple and not single
+    return runs_per_role(options.engine or default_engine, pipeline)
 
 
 def isolated(spec: LaunchSpec, sandbox: SandboxLaunch | None, claude: bool) -> LaunchSpec:
@@ -522,16 +528,24 @@ class MandatePreview:
     engine: str
     scope: str
     confidence: float
+    roles: tuple[RoleRoute, ...] = ()
+    per_role: bool = False
 
 
 def preview_of(prepared: Prepared) -> MandatePreview:
     composed = prepared.composed
+    applied = prepared.applied
     return MandatePreview(
         prompt=composed.prompt,
         command=display_command(composed.command, composed.prompt),
         engine=prepared.engine_name,
         scope=composed.hint.option,
         confidence=composed.hint.probability,
+        roles=(
+            tuple(route for route in applied.plan.routes if route.model is not None)
+            if applied is not None and applied.agents is not None
+            else ()
+        ),
     )
 
 

@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, Protocol
 from cuanta.application.assistant import Improvement
 from cuanta.application.bench import BenchResult
 from cuanta.application.cat_capsule import CapsuleView
-from cuanta.application.cross_engine import CrossReport
+from cuanta.application.cross_engine import (
+    CROSS_ORDER,
+    CrossEnginePipeline,
+    CrossReport,
+    request_block,
+)
 from cuanta.application.doctor import DoctorReport
 from cuanta.application.estimate import Estimate
 from cuanta.application.home import HomeSnapshot
@@ -32,6 +37,7 @@ from cuanta.application.mandate_flow import (
     MandateOptions,
     MandatePreview,
     MandateSetup,
+    per_role_run,
     preview_of,
     resolve_budget,
 )
@@ -61,12 +67,12 @@ from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.models import ModelEntry
 from cuanta.domain.progress import ProgressEvent
 from cuanta.domain.real_costs import CostReport
-from cuanta.domain.routing import RoutingPolicy, parse_mix
+from cuanta.domain.routing import RoutingPolicy
 from cuanta.domain.team import (
-    MixAdvice,
+    ProviderAdvice,
     RoleCard,
-    mix_attempts,
-    recommend_mix,
+    provider_attempts,
+    recommend_provider,
     team_cards,
 )
 from cuanta.domain.telemetry import WiringPlan, WiringReport
@@ -103,6 +109,45 @@ def cross_report(run: Run | None, report: CrossReport) -> MandateReport:
         text=english(report.stopped) if report.stopped is not None else "",
         task_type=run.task_type,
         change_plan=report.change_plan,
+    )
+
+
+def role_plan(container: Container, request: MandateRequest, options: MandateOptions) -> RoutePlan:
+    route = options.route
+    roles = dict(route.role_models)
+    engine = options.engine or container.config.engine
+    plan, _ = container.plan_route(
+        request.type,
+        request.what,
+        request.where,
+        route.mode,
+        route.preset,
+        roles,
+        clarity=route.clarity,
+        depth=options.depth,
+        scope=route.scope,
+        risk=route.risk,
+        engine=engine,
+    )
+    issues = container.route_advisor(container.shared_ledger()).pin_issues(plan, roles, (engine,))
+    if issues:
+        raise DomainFailure(
+            english(msg("route.pins_rejected")), "; ".join(english(item) for item in issues)
+        )
+    return plan
+
+
+def role_preview(request: MandateRequest, plan: RoutePlan, engine: str) -> MandatePreview:
+    return MandatePreview(
+        prompt=request_block(request),
+        command="",
+        engine=engine,
+        scope="",
+        confidence=0.0,
+        roles=tuple(
+            route for route in plan.routes if route.model is not None and route.role in CROSS_ORDER
+        ),
+        per_role=True,
     )
 
 
@@ -270,10 +315,10 @@ class Services(Protocol):
     ) -> tuple[RoutePlan, Estimate]: ...
 
     def team_cards(
-        self, plan: RoutePlan, estimate: Estimate, options: MandateOptions
+        self, plan: RoutePlan, estimate: Estimate, options: MandateOptions, task_type: str
     ) -> tuple[RoleCard, ...]: ...
 
-    def team_advice(self, task_type: str) -> MixAdvice | None: ...
+    def team_advice(self, task_type: str) -> ProviderAdvice | None: ...
 
     def understand(self, story: str) -> Understanding: ...
 
@@ -312,7 +357,7 @@ class ContainerServices:
 
     def __init__(self, project: Path) -> None:
         self._project = project
-        self._flow: MandateFlow | None = None
+        self._flow: MandateFlow | CrossEnginePipeline | None = None
         self._starting = False
         self._stop_requested = False
         self._stop_lock = threading.Lock()
@@ -434,6 +479,9 @@ class ContainerServices:
     ) -> MandatePreview:
         container = self._container()
         try:
+            engine = options.engine or container.config.engine
+            if per_role_run(options, request.type, container.config.engine):
+                return role_preview(request, role_plan(container, request, options), engine)
             flow = container.mandate_flow(container.shared_ledger())
             return preview_of(flow.prepare(request, signatures, options, preview=True))
         finally:
@@ -449,7 +497,7 @@ class ContainerServices:
     ) -> MandateReport:
         container = self._container()
         try:
-            if parse_mix(options.mix) is not None:
+            if per_role_run(options, request.type, container.config.engine):
                 return self._run_cross(container, request, options, progress)
             if options.sandbox:
                 return self._run_sandboxed(
@@ -470,50 +518,57 @@ class ContainerServices:
         options: MandateOptions,
         progress: ProgressCallback,
     ) -> MandateReport:
+        self._starting, self._stop_requested = True, False
+        try:
+            report = self._cross(container, request, options, CallbackSink(progress))
+        finally:
+            self._starting = False
+        return cross_report(
+            container.shared_ledger().get_run(report.steps[0].run_id) if report.steps else None,
+            report,
+        )
+
+    def _cross(
+        self,
+        container: Container,
+        request: MandateRequest,
+        options: MandateOptions,
+        sink: CallbackSink,
+    ) -> CrossReport:
         from cuanta.application.mandate_flow import resolve_max_turns
         from cuanta.domain.depth import parse_depth, profile
-        from cuanta.domain.routing import ENGINE_ORDER
 
         ledger = container.shared_ledger()
-        route = options.route
-        roles = dict(route.role_models)
-        plan, _ = container.plan_route(
-            request.type,
-            request.what,
-            request.where,
-            route.mode,
-            route.preset,
-            roles,
-            clarity=route.clarity,
-            depth=options.depth,
-            scope=route.scope,
-            risk=route.risk,
-            mix=parse_mix(options.mix),
-        )
-        issues = container.route_advisor(ledger).pin_issues(plan, roles, ENGINE_ORDER, cross=True)
-        if issues:
-            raise DomainFailure(
-                english(msg("route.pins_rejected")), "; ".join(english(item) for item in issues)
-            )
+        plan = role_plan(container, request, options)
         cap = resolve_budget(options, request.type, container.config.budget_usd)
         turns = resolve_max_turns(
             options, profile(parse_depth(options.depth), request.type), container.config.max_turns
         )
-        sink = CallbackSink(progress)
-        if options.sandbox:
-            isolated = container.run_sandboxed_cross(
-                ledger, request, plan, sink, cap, turns, options.keep_copy, options.depth
-            )
-            if isolated.cross is None:
-                raise NotAvailable("the isolated run ended without a report", "check the ledger")
-            report = isolated.cross
-        else:
-            report = container.cross_engine(ledger, cap, turns, depth=options.depth).run(
-                request, plan, sink
-            )
-        return cross_report(
-            ledger.get_run(report.steps[0].run_id) if report.steps else None, report
+
+        def started(pipeline: CrossEnginePipeline) -> None:
+            with self._stop_lock:
+                if self._stop_requested:
+                    raise DomainFailure(english(msg("sandbox.stopped_before_launch")))
+                self._flow = pipeline
+
+        if not options.sandbox:
+            pipeline = container.cross_engine(ledger, cap, turns, depth=options.depth)
+            started(pipeline)
+            return pipeline.run(request, plan, sink)
+        isolated = container.run_sandboxed_cross(
+            ledger,
+            request,
+            plan,
+            sink,
+            cap,
+            turns,
+            options.keep_copy,
+            options.depth,
+            on_start=started,
         )
+        if isolated.cross is None:
+            raise NotAvailable("the isolated run ended without a report", "check the ledger")
+        return isolated.cross
 
     def _run_sandboxed(
         self,
@@ -847,7 +902,6 @@ class ContainerServices:
         container = self._container()
         route = options.route
         try:
-            mix = parse_mix(options.mix)
             plan, _ = container.plan_route(
                 request.type,
                 request.what,
@@ -859,8 +913,7 @@ class ContainerServices:
                 depth=options.depth,
                 scope=route.scope,
                 risk=route.risk,
-                engine="" if mix is not None else options.engine or container.config.engine,
-                mix=mix,
+                engine=options.engine or container.config.engine,
             )
             cap = resolve_budget(options, request.type, container.config.budget_usd)
             shape = options.simple or single_context(
@@ -877,11 +930,11 @@ class ContainerServices:
             container.close()
 
     def team_cards(
-        self, plan: RoutePlan, estimate: Estimate, options: MandateOptions
+        self, plan: RoutePlan, estimate: Estimate, options: MandateOptions, task_type: str
     ) -> tuple[RoleCard, ...]:
         container = self._container()
         try:
-            if parse_mix(options.mix) is not None:
+            if per_role_run(options, task_type, container.config.engine):
                 shares = {cost.role: cost.share for cost in estimate.roles if cost.share > 0}
                 return team_cards(
                     plan.routes,
@@ -899,10 +952,12 @@ class ContainerServices:
         finally:
             container.close()
 
-    def team_advice(self, task_type: str) -> MixAdvice | None:
+    def team_advice(self, task_type: str) -> ProviderAdvice | None:
         container = self._container()
         try:
-            return recommend_mix(mix_attempts(container.shared_ledger().runs()), task_type)
+            runs = container.shared_ledger().runs()
+            attempts = provider_attempts(runs, container.estimate_shapes(runs))
+            return recommend_provider(attempts, task_type)
         finally:
             container.close()
 
