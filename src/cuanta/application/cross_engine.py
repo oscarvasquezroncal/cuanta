@@ -49,6 +49,7 @@ from cuanta.domain.role_handoff import (
 from cuanta.domain.routing import Role
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, docs_only
 from cuanta.ports.capsules import CapsuleStore
+from cuanta.ports.engine import Engine
 from cuanta.ports.progress import ProgressSink
 
 CROSS_ORDER = (Role.ANALYST, Role.SENIOR, Role.TESTER, Role.DOCS)
@@ -58,9 +59,11 @@ WRITING_ROLES = frozenset({Role.SENIOR, Role.TESTER, Role.DOCS})
 REPAIR_MINIMUM_USD = 0.01
 BUDGET_EPSILON = 1e-9
 SHOWN_PATHS = 5
+NO_NODE_COMMANDS = "Do not run node, npm or npx commands (builds or tests)"
 
 ReadRanges = tuple[tuple[str, int, int], ...]
 LinesOf = Callable[[str], Sequence[str] | None]
+VerifyCommands = Callable[[Sequence[str], Callable[[], bool]], tuple[VerifyResult, ...]]
 
 
 class CompletionState(StrEnum):
@@ -199,7 +202,13 @@ def request_block(request: MandateRequest) -> str:
     return "\n".join(lines)
 
 
-def guidance(role: Role, index_tools: bool, verify: Sequence[str], partial: bool = False) -> str:
+def guidance(
+    role: Role,
+    index_tools: bool,
+    verify: Sequence[str],
+    partial: bool = False,
+    no_builds: bool = False,
+) -> str:
     opener = " with Cuanta page (path and lines as start:end)" if index_tools else ""
     finder = " Use Cuanta find before Glob or Grep." if index_tools else ""
     lines = [
@@ -218,8 +227,14 @@ def guidance(role: Role, index_tools: bool, verify: Sequence[str], partial: bool
         commands = ", ".join(f"`{command}`" for command in verify)
         lines.append(
             f"After you finish, cuanta itself runs {commands} and adds the results to the chain. "
-            "Do not run builds yourself."
+            + (
+                f"{NO_NODE_COMMANDS}; cuanta runs the checks between roles."
+                if no_builds
+                else "Do not run builds yourself."
+            )
         )
+    elif no_builds and role in WRITING_ROLES:
+        lines.append(f"{NO_NODE_COMMANDS}: this engine cannot run them on this host.")
     if role is Role.TESTER:
         lines.append(
             "Write or adjust tests and review the change; the verification results in the chain "
@@ -374,13 +389,15 @@ class CrossEnginePipeline:
         context_pack: Callable[[MandateRequest, str, str, ChangePlan | None], ContextPack]
         | None = None,
         learn_run: Callable[[str], None] | None = None,
-        verifier: Callable[[Sequence[str]], tuple[VerifyResult, ...]] | None = None,
+        verifier: VerifyCommands | None = None,
         lines_of: LinesOf | None = None,
         reads_of: Callable[[str], ReadRanges] | None = None,
         margin: Callable[[], float] | None = None,
         index_tools: Callable[[str], bool] | None = None,
         new_files: NewFileGuard | None = None,
+        build_blocked: frozenset[str] = frozenset(),
     ) -> None:
+        self._build_blocked = build_blocked
         self._learn_run = learn_run
         self._refresh_index = refresh_index
         self._change_plan = change_plan
@@ -400,6 +417,8 @@ class CrossEnginePipeline:
         self._new_files = new_files
         self.completed: list[CrossStep] = []
         self.current = ""
+        self._active: Engine | None = None
+        self._halted = False
         self._launchers = launchers
         self._definitions = definitions
         self._capsules = capsules
@@ -469,9 +488,34 @@ class CrossEnginePipeline:
         return replace(handoff, facts=refresh_facts(handoff.facts, self._lines_of))
 
     def _launch(self, turn: _Turn, spec: LaunchSpec) -> Launch:
-        return turn.launcher.launch(
-            self._isolated(spec, turn.engine), lambda _: None, self._started
-        )
+        engine = turn.launcher.engine
+        self._active = engine
+        if self._halted:
+            engine.cancel()
+        try:
+            return turn.launcher.launch(
+                self._isolated(spec, turn.engine), lambda _: None, self._started
+            )
+        finally:
+            self._active = None
+
+    def _stopped(self) -> bool:
+        return self._halted
+
+    def stop(self) -> bool:
+        self._halted = True
+        engine = self._active
+        if engine is not None:
+            engine.cancel()
+        return True
+
+    def _halt(self, state: _Pass, handoff: RoleHandoff | None = None) -> CrossReport | None:
+        if not self._halted:
+            return None
+        if handoff is not None:
+            state.handoffs.append(handoff)
+        final = CompletionState.PARTIAL if state.steps else CompletionState.FAILED
+        return state.report(final, msg("cross.stopped"))
 
     def run(self, request: MandateRequest, plan: RoutePlan, progress: ProgressSink) -> CrossReport:
         if self._refresh_index is not None:
@@ -530,6 +574,9 @@ class CrossEnginePipeline:
         self.completed = state.steps
         definitions = self._definitions()
         for role in CROSS_ORDER:
+            halt = self._halt(state)
+            if halt is not None:
+                return halt
             turn = self._admit(state, role, definitions)
             if isinstance(turn, CrossReport):
                 return turn
@@ -649,7 +696,13 @@ class CrossEnginePipeline:
         chain_text = render_chain(self._refresh(merge_chain(state.handoffs)), state.budget_tokens)
         stable, volatile, packed = self._context(state.request, role, effective)
         partial = any(item.status is not HandoffStatus.DONE for item in state.handoffs)
-        advice = guidance(role, indexed, state.verify if not read_only else (), partial)
+        advice = guidance(
+            role,
+            indexed,
+            state.verify if not read_only else (),
+            partial,
+            engine in self._build_blocked,
+        )
         body = definition.prompt if definition is not None else ""
         return LaunchSpec(
             kind=CROSS_KIND,
@@ -838,6 +891,9 @@ class CrossEnginePipeline:
         stop = self._guarded(state, handoff)
         if stop is not None:
             return stop
+        halt = self._halt(state, handoff)
+        if halt is not None:
+            return halt
         if not ok and not budget_stop:
             state.handoffs.append(handoff)
             if subtype == "error_cost_unknown":
@@ -882,7 +938,7 @@ class CrossEnginePipeline:
             started(key, msg("cross.verify_commands", commands=", ".join(state.verify)))
         )
         before = self._snap()
-        results = self._verifier(state.verify) if self._verifier is not None else ()
+        results = self._verifier(state.verify, self._stopped) if self._verifier is not None else ()
         after = self._snap()
         state.baseline = after
         found = VerificationRound(role, attempt, results, _diff(before, after))
@@ -915,7 +971,7 @@ class CrossEnginePipeline:
             return handoff, None
         found = self._verify(state, turn.role, 1)
         handoff = replace(handoff, verification=found.results)
-        stop = self._guarded(state, handoff)
+        stop = self._guarded(state, handoff) or self._halt(state, handoff)
         if stop is not None:
             return handoff, stop
         left_share = turn.role_cap - (cost or 0.0)
@@ -971,12 +1027,12 @@ class CrossEnginePipeline:
         guard = self._guard(state, turn.role, handoff, changed, turn.spec.change_plan)
         if guard is not None:
             return handoff, guard
-        stop = self._guarded(state, handoff)
+        stop = self._guarded(state, handoff) or self._halt(state, handoff)
         if stop is not None:
             return handoff, stop
         found = self._verify(state, turn.role, 2)
         handoff = replace(handoff, verification=found.results)
-        stop = self._guarded(state, handoff)
+        stop = self._guarded(state, handoff) or self._halt(state, handoff)
         if stop is not None:
             return handoff, stop
         if not found.passed:

@@ -316,7 +316,7 @@ def test_verification_outputs_stay_out_of_the_recorded_trial(tmp_path: Path) -> 
     ) -> CrossEnginePipeline:
         roots.append(copy.root)
 
-        def verifier(commands: object) -> tuple[VerifyResult, ...]:
+        def verifier(commands: object, stopped: Callable[[], bool]) -> tuple[VerifyResult, ...]:
             _write(copy.root, "next-env.d.ts", b"compiled\n")
             return (VerifyResult("npm run build", 0, 1.0),)
 

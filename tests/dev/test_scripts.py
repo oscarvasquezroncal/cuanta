@@ -263,6 +263,54 @@ def test_cross_trial_preserves_qualified_role_models(tmp_path: Path) -> None:
     )
 
 
+def test_a_codex_team_trial_is_capped_and_counted_as_one_launch_per_role(tmp_path: Path) -> None:
+    matrix = definition(tmp_path)
+    team = replace(matrix.trials[0], engine="codex")
+    command = trial.command(matrix, team)
+    assert "--cross-engine" not in command
+    assert command[command.index("--cross-budget-usd") + 1] == "0.4"
+    audit = replace(team, type="investigation")
+    assert trial.per_role(team) and not trial.per_role(audit)
+    assert "--cross-budget-usd" not in trial.command(matrix, audit)
+    assert "--cross-budget-usd" in trial.command(matrix, replace(audit, shape="pipeline"))
+    assert "--cross-budget-usd" not in trial.command(matrix, replace(team, simple=True))
+    assert "--cross-budget-usd" not in trial.command(matrix, matrix.trials[0])
+
+
+@pytest.mark.parametrize(("senior", "code"), [(0.25, 0), (None, 1)])
+def test_a_codex_team_trial_counts_every_role_and_stops_on_an_unknown_role_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, senior: float | None, code: int
+) -> None:
+    report = results.Report("team", tmp_path)
+    monkeypatch.setattr(trial, "Report", lambda *a: report)
+    original = report.run
+    steps = [
+        {"role": "analyst", "run_id": "run-a", "cost_usd": 0.1, "cost_source": "estimated"},
+        {"role": "senior", "run_id": "run-s", "cost_usd": senior, "cost_source": "estimated"},
+    ]
+
+    def fake(name: str, command: list[str], **kwargs: Any) -> results.Step:
+        value: dict[str, Any]
+        if name.endswith("mandate"):
+            value = {"spent_usd": 0.35, "steps": steps}
+        elif name.endswith("show"):
+            value = {"actual_usd": 0.1, "cost_source": "estimated"}
+        else:
+            value = {"totals": {"fresh_input": 10}}
+        return original(name, [sys.executable, "-c", f"print({json.dumps(value)!r})"])
+
+    monkeypatch.setattr(report, "run", fake)
+    matrix = definition(tmp_path)
+    matrix = replace(matrix, trials=(replace(matrix.trials[0], engine="codex"),))
+    assert trial.run(matrix, False, None, True) == code
+    summary = json.loads((report.directory / "summary.json").read_text())
+    if senior is None:
+        assert summary["unknown_spend_trials"] == ["one"]
+    else:
+        assert summary["known_spend_usd"] == 0.35
+        assert summary["trials"][0]["cost_source"] == ["estimated"]
+
+
 def test_native_trial_refuses_a_role_from_another_engine(tmp_path: Path) -> None:
     matrix = definition(tmp_path)
     chosen = replace(matrix.trials[0], role_models=("senior=codex:gpt-6-sol",))

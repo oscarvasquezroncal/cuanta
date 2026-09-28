@@ -67,11 +67,17 @@ def test_every_anchor_and_alias_in_the_tiers_file_is_known() -> None:
     assert table.version >= 1
     assert table.anchor("opus") is Tier.PREMIUM
     assert table.anchor("claude-opus-5-5") is Tier.PREMIUM
-    assert table.anchor("gpt-5.6-luna") is Tier.ECONOMY
+    assert table.anchor("gpt-6-luna") is Tier.ECONOMY
+    assert table.anchor("gpt-6-sol") is Tier.STANDARD
     prices = load_prices()
     for fact in claude_facts():
         assert prices.lookup(fact.resolves) is not None, fact.resolves
-    for model in ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+    for model in ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra"):
+        assert prices.lookup(model) is not None, model
+    aliases = {fact.alias for fact in claude_facts()}
+    assert set(table.defaults) == {"claude", "codex"}
+    assert set(table.defaults["claude"].values()) <= aliases
+    for model in table.defaults["codex"].values():
         assert prices.lookup(model) is not None, model
 
 

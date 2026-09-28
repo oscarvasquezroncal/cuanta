@@ -13,6 +13,7 @@ from typing import Any
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from cuanta.application.mandate_flow import MandateOptions, per_role_run
 from dev.acceptance import verify
 from dev.results import ROOT, Report, python
 from dev.spec import Spec, Trial, load
@@ -45,6 +46,11 @@ def display(arguments: list[str], windows: bool | None = None) -> str:
     return subprocess.list2cmdline(arguments) if use_windows else shlex.join(arguments)
 
 
+def per_role(trial: Trial) -> bool:
+    options = MandateOptions(engine=trial.engine, simple=trial.simple, shape=trial.shape)
+    return trial.cross_engine or per_role_run(options, trial.type, trial.engine)
+
+
 def command(spec: Spec, trial: Trial) -> list[str]:
     arguments = [
         "mandate",
@@ -67,7 +73,9 @@ def command(spec: Spec, trial: Trial) -> list[str]:
         str(trial.cap),
     ]
     if trial.cross_engine:
-        arguments.extend(["--cross-engine", "--cross-budget-usd", str(trial.cap)])
+        arguments.append("--cross-engine")
+    if per_role(trial):
+        arguments.extend(["--cross-budget-usd", str(trial.cap)])
     if trial.simple:
         arguments.append("--simple")
     for value in trial.role_models:
@@ -112,10 +120,11 @@ def collect(report: Report, spec: Spec, trial: Trial, launch: dict[str, Any]) ->
     duration = report.steps[-1].seconds
     show = report.run(trial.name + "-show", cli(spec, "runs", "show", run_id))
     run = launch if show.code else payload(Path(show.log))
-    if trial.cross_engine and any(step.get("cost_usd") is None for step in launch.get("steps", [])):
+    roles = per_role(trial)
+    if roles and any(step.get("cost_usd") is None for step in launch.get("steps", [])):
         raise ValueError("Cross-engine role cost unknown; stop before another trial")
-    actual = launch.get("spent_usd") if trial.cross_engine else run.get("actual_usd")
-    if actual is None and not trial.cross_engine:
+    actual = launch.get("spent_usd") if roles else run.get("actual_usd")
+    if actual is None and not roles:
         actual = run.get("cost_usd")
     actual = cost(actual)
     sources = [step.get("cost_source") for step in launch.get("steps", [])]

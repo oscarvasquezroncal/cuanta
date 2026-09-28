@@ -7,11 +7,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from cuanta.adapters.instinct.heuristic import HeuristicInstinct
+from cuanta.adapters.models.tiers import load_tier_table
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.adapters.system.prices import load_prices
 from cuanta.application.assistant import Improvement, changes, sent_payload
 from cuanta.application.bench import BenchResult
 from cuanta.application.cat_capsule import CapsuleView
+from cuanta.application.cross_engine import CROSS_ORDER
 from cuanta.application.doctor import CheckResult, DoctorReport, result
 from cuanta.application.estimate import Estimate, estimate
 from cuanta.application.home import HomeSnapshot, next_step
@@ -31,6 +33,7 @@ from cuanta.application.mandate_flow import (
     MandateOptions,
     MandatePreview,
     MandateSetup,
+    per_role_run,
     resolve_budget,
 )
 from cuanta.application.map import MapFile, MapStatus
@@ -80,7 +83,7 @@ from cuanta.domain.handoff import Handoff, Workflow
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import Capsule, Decision, Run
 from cuanta.domain.loop import LoopGate, StopReason
-from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.mandate import MandateRequest, parse_shape, single_context
 from cuanta.domain.messages import Message, msg, option_message
 from cuanta.domain.models import ModelEntry, Tier, TierSource
 from cuanta.domain.new_files import original_of, side_by_side
@@ -97,15 +100,14 @@ from cuanta.domain.progress import (
 from cuanta.domain.real_costs import CostReport, cost_report
 from cuanta.domain.report import ContextSplit, file_refs, next_request, parse_sections
 from cuanta.domain.routing import (
+    RoleRoute,
     RoutingPolicy,
     default_requests,
-    parse_mix,
     plan_route,
     roles_that_run,
-    with_mix,
 )
 from cuanta.domain.sandbox import ChangeKind
-from cuanta.domain.team import MixAdvice, RoleCard, team_cards
+from cuanta.domain.team import ProviderAdvice, RoleCard, team_cards
 from cuanta.domain.telemetry import WiringPlan, WiringReport, WiringState
 from cuanta.domain.terminal import TerminalKind, TerminalReport
 from cuanta.tui.services import ALL_IMPORTED, LoopState, TelemetryPanel
@@ -209,6 +211,25 @@ CATALOG = tuple(
         ("codex", "gpt-9-private", "openai", 0, None, "gpt-9-private", False, Tier.STANDARD),
     )
 )
+GPT_6 = tuple(
+    ModelEntry(
+        "codex",
+        name,
+        name,
+        "openai",
+        context=400_000,
+        input_price=input_price,
+        output_price=output_price,
+        resolved=name,
+        tier=tier,
+        tier_source=TierSource.ANCHOR,
+    )
+    for name, input_price, output_price, tier in (
+        ("gpt-6-sol", 2.0, 10.0, Tier.STANDARD),
+        ("gpt-6-luna", 0.1, 0.5, Tier.ECONOMY),
+    )
+)
+TEAM_CATALOG = (*CATALOG, *GPT_6)
 ROLE_STATS = (
     RoleStats("bug", "senior", "premium", 6, 5, 3.1, 6),
     RoleStats("bug", "tester", "standard", 4, 4, 0.8, 4),
@@ -411,7 +432,7 @@ COST_RUNS = (
     cost_run("01JCOST5", "feature", None),
     cost_run("01JCOST6", "feature", 2.4, "accepted", kind="cross"),
     replace(
-        cost_run("01JCOST7", "", 0.7, kind="cross", parent="01JCOST6"),
+        cost_run("01JCOST7", "", 0.7, engine="codex", kind="cross", parent="01JCOST6"),
         started_at="2026-09-26T10:03:00Z",
         ended_at="2026-09-26T10:05:00Z",
     ),
@@ -598,12 +619,22 @@ class FakeServices:
     ) -> MandatePreview:
         self.requests.append(request)
         engine = options.engine or "claude"
+        per_role = per_role_run(options, request.type, "claude")
+        single = single_context(request.type, options.simple, parse_shape(options.shape))
+        native = engine == "claude" and not options.simple and not single
+        roles = tuple(
+            route
+            for route in self.routes(request, options)
+            if route.model is not None and (native or route.role in CROSS_ORDER)
+        )
         return MandatePreview(
             f"=== REQUEST ===\nTYPE: {request.type}\nWHAT: {request.what}",
-            f'{engine} -p "<prompt>" --output-format stream-json',
+            "" if per_role else f'{engine} -p "<prompt>" --output-format stream-json',
             engine,
             "normal",
             0.72,
+            roles if per_role or native else (),
+            per_role,
         )
 
     def run_mandate(
@@ -814,7 +845,7 @@ class FakeServices:
     stories: dict[str, str] = field(default_factory=dict)
     understood: list[str] = field(default_factory=list)
     team_options: list[MandateOptions] = field(default_factory=list)
-    advice: MixAdvice | None = None
+    advice: ProviderAdvice | None = None
     change_plan_result: ChangePlan = field(default_factory=ChangePlan)
     change_plan_requests: list[MandateRequest] = field(default_factory=list)
     similar: tuple[Run, ...] = field(default_factory=lambda: SIMILAR_RUNS)
@@ -1043,19 +1074,25 @@ class FakeServices:
         self, request: MandateRequest, options: MandateOptions
     ) -> tuple[RoutePlan, Estimate]:
         self.team_options.append(options)
-        policy = with_mix(
-            RoutingPolicy(engines=(options.engine or "claude",)), parse_mix(options.mix)
-        )
-        requests = default_requests(policy, roles_that_run(request.type, options.simple))
-        routes = plan_route(policy, self.catalog, requests)
-        plan = RoutePlan(policy, None, None, (), routes, "heuristic")
+        routes = self.routes(request, options)
+        plan = RoutePlan(self.team_policy(options), None, None, (), routes, "heuristic")
         cap = resolve_budget(options, request.type, 0.0)
         return plan, estimate(plan, self.similar, load_prices(), request.type, options.depth, cap)
 
+    def team_policy(self, options: MandateOptions) -> RoutingPolicy:
+        return RoutingPolicy(
+            engines=(options.engine or "claude",), tier_defaults=load_tier_table().defaults
+        )
+
+    def routes(self, request: MandateRequest, options: MandateOptions) -> tuple[RoleRoute, ...]:
+        policy = self.team_policy(options)
+        requests = default_requests(policy, roles_that_run(request.type, options.simple))
+        return plan_route(policy, self.catalog, requests)
+
     def team_cards(
-        self, plan: RoutePlan, estimate: Estimate, options: MandateOptions
+        self, plan: RoutePlan, estimate: Estimate, options: MandateOptions, task_type: str
     ) -> tuple[RoleCard, ...]:
-        if parse_mix(options.mix) is not None:
+        if per_role_run(options, task_type, "claude"):
             shares = {cost.role: cost.share for cost in estimate.roles if cost.share > 0}
             return team_cards(
                 plan.routes,
@@ -1066,7 +1103,7 @@ class FakeServices:
             )
         return team_cards(plan.routes, {}, 0.0, lambda engine: False)
 
-    def team_advice(self, task_type: str) -> MixAdvice | None:
+    def team_advice(self, task_type: str) -> ProviderAdvice | None:
         return self.advice
 
     def change_plan(self, request: MandateRequest) -> ChangePlan:

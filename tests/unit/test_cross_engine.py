@@ -8,7 +8,12 @@ import pytest
 from cuanta.adapters.storage.capsule_store import FileCapsuleStore
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.adapters.system.clock import FixedClock
-from cuanta.application.cross_engine import CROSS_ORDER, CompletionState, CrossEnginePipeline
+from cuanta.application.cross_engine import (
+    CROSS_ORDER,
+    CompletionState,
+    CrossEnginePipeline,
+    guidance,
+)
 from cuanta.application.engine_run import EngineLauncher
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.agents import parse_agent
@@ -121,6 +126,74 @@ def test_each_role_runs_on_its_engine_with_the_previous_handoff(tmp_path: Path) 
     assert CROSS_ORDER[-1] is Role.DOCS
 
 
+@pytest.mark.parametrize("blocked", [frozenset({"codex"}), frozenset()])
+def test_a_gpt_team_runs_every_role_on_codex_and_the_tester_never_runs_builds(
+    tmp_path: Path, blocked: frozenset[str]
+) -> None:
+    models = {Role.ANALYST: "gpt-6-sol", Role.SENIOR: "gpt-5.6-sol", Role.TESTER: "gpt-6-luna"}
+    routes = tuple(
+        RoleRoute(
+            role,
+            Tier.STANDARD,
+            Tier.STANDARD if role in models else None,
+            ModelEntry("codex", models[role], "m", "openai") if role in models else None,
+            msg("route.policy", tier="standard"),
+        )
+        for role in ROLES
+    )
+    team = RoutePlan(RoutingPolicy(engines=("codex",)), None, None, (), routes, "heuristic")
+    prompts: list[str] = []
+    ledger = MemoryLedger()
+    counter = iter(range(100))
+
+    def launcher(name: str) -> EngineLauncher:
+        return EngineLauncher(
+            ScriptedEngine(name, prompts),
+            ledger,
+            FixedClock(),
+            lambda: f"RUN{next(counter)}",
+            lambda size: b"\x01" * size,
+            "shop",
+            4318,
+            None,
+        )
+
+    runner = CrossEnginePipeline(
+        launcher,
+        lambda: (),
+        FileCapsuleStore(tmp_path),
+        str(tmp_path),
+        5.0,
+        build_blocked=blocked,
+    )
+    report = runner.run(REQUEST, team, Recorder())
+    assert report.ok
+    assert [(step.engine, step.model) for step in report.steps] == [
+        ("codex", "gpt-6-sol"),
+        ("codex", "gpt-5.6-sol"),
+        ("codex", "gpt-6-luna"),
+    ]
+    told = (
+        "Do not run node, npm or npx commands (builds or tests): "
+        "this engine cannot run them on this host."
+    )
+    assert (told in prompts[2]) is bool(blocked)
+    assert (told in prompts[1]) is bool(blocked)
+    assert told not in prompts[0]
+
+
+def test_a_build_blocked_writer_is_told_to_leave_node_commands_to_cuanta() -> None:
+    blocked = guidance(Role.TESTER, False, ("npm run build",), no_builds=True)
+    assert "cuanta itself runs `npm run build`" in blocked
+    assert (
+        "Do not run node, npm or npx commands (builds or tests); "
+        "cuanta runs the checks between roles."
+    ) in blocked
+    assert "Do not run builds yourself" not in blocked
+    free = guidance(Role.TESTER, False, ("npm run build",))
+    assert "Do not run builds yourself." in free and "npx" not in free
+
+
 def test_a_spent_budget_ends_the_pipeline_as_partial_after_salvaging(tmp_path: Path) -> None:
     report = pipeline(tmp_path, [], 0.9).run(REQUEST, plan(), Recorder())
     assert not report.ok
@@ -141,6 +214,63 @@ def test_a_failed_role_stops_the_pipeline(tmp_path: Path) -> None:
     assert report.stopped is not None
     assert "senior failed" in english(report.stopped)
     assert report.state is CompletionState.FAILED
+
+
+def test_a_stop_cancels_the_running_role_and_no_later_role_starts(tmp_path: Path) -> None:
+    prompts: list[str] = []
+    cancelled: list[str] = []
+    ledger = MemoryLedger()
+    counter = iter(range(100))
+    runners: list[CrossEnginePipeline] = []
+
+    class StoppedEngine(ScriptedEngine):
+        def cancel(self) -> None:
+            cancelled.append(self.name)
+
+        def run(
+            self, request: EngineRequest, on_event: Callable[[EngineEvent], None]
+        ) -> EngineOutcome:
+            self.prompts.append(request.prompt)
+            assert runners[0].stop()
+            result = RunResult(False, "error_during_execution", 0.1, 1, "s")
+            on_event(result)
+            return EngineOutcome(1, result, 0)
+
+    def launcher(name: str) -> EngineLauncher:
+        return EngineLauncher(
+            StoppedEngine(name, prompts),
+            ledger,
+            FixedClock(),
+            lambda: f"RUN{next(counter)}",
+            lambda size: b"\x01" * size,
+            "shop",
+            4318,
+            None,
+        )
+
+    runners.append(
+        CrossEnginePipeline(launcher, lambda: (), FileCapsuleStore(tmp_path), str(tmp_path), 5.0)
+    )
+    report = runners[0].run(REQUEST, plan(), Recorder())
+    assert cancelled == ["claude"]
+    assert len(prompts) == 1
+    assert [(step.role, step.ok) for step in report.steps] == [(Role.ANALYST, False)]
+    assert report.state is CompletionState.PARTIAL and not report.ok
+    assert report.stopped == msg("cross.stopped")
+    assert english(report.stopped) == (
+        "the pipeline was stopped on request; later roles did not run"
+    )
+
+
+def test_a_stop_before_the_first_role_launches_nothing(tmp_path: Path) -> None:
+    prompts: list[str] = []
+    runner = pipeline(tmp_path, prompts, 5.0)
+    assert runner.stop()
+    report = runner.run(REQUEST, plan(), Recorder())
+    assert prompts == []
+    assert report.steps == ()
+    assert report.state is CompletionState.FAILED
+    assert report.stopped == msg("cross.stopped")
 
 
 def test_role_shares_reserve_a_floor_and_preserve_the_total() -> None:

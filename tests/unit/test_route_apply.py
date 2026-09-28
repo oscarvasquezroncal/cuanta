@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from cuanta.adapters.instinct.heuristic import HeuristicInstinct
+from cuanta.adapters.models.tiers import load_tier_table
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.adapters.system.workspace import LocalHome, LocalWorkspace
 from cuanta.application.detect import DetectProject
@@ -62,6 +63,61 @@ def test_claude_routes_write_an_agents_file(tmp_path: Path) -> None:
     assert written["tester"]["prompt"] == "Body of tester."
     planned = applied.planned()
     assert planned["main"] == ("orchestrator", "claude-sonnet-5")
+
+
+def test_the_claude_team_agents_file_takes_each_role_model_from_the_defaults(
+    tmp_path: Path,
+) -> None:
+    agents = tmp_path / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    for name in ("architecture-analyst", "python-senior", "tester", "docs-updater"):
+        (agents / f"{name}.md").write_text(AGENT.format(name=name), encoding="utf-8")
+    older = ModelEntry(
+        "claude",
+        "claude-sonnet-4-5",
+        "Sonnet 4.5",
+        "p",
+        resolved="claude-sonnet-4-5",
+        default=True,
+        tier=Tier.STANDARD,
+        tier_source=TierSource.PRICE,
+    )
+    catalog = (*CATALOG, older)
+    defaults = load_tier_table().defaults
+
+    def written(policy: RoutingPolicy, options: RouteOptions) -> dict[str, str]:
+        ledger = MemoryLedger()
+        decisions = DecisionMaker(HeuristicInstinct(), ledger, lambda: NOW)
+        service = MandateRouting(
+            advisor=RouteAdvisor(decisions, lambda: catalog, ledger, lambda: NOW),
+            policy=lambda: policy,
+            workspace=LocalWorkspace(tmp_path),
+            ledger=ledger,
+            environ={},
+            settings_env=dict,
+            blast_radius=lambda text: 0,
+            clock_iso=lambda: NOW,
+        )
+        applied = service.apply(REQUEST, options, "claude")
+        data = json.loads(Path(applied.agents_file).read_text(encoding="utf-8"))
+        return {name: spec["model"] for name, spec in data.items()}
+
+    fixed = RouteOptions(mode="fixed")
+    assert written(RoutingPolicy(), fixed)["tester"] == "claude-sonnet-4-5"
+    assert written(RoutingPolicy(tier_defaults=defaults), fixed) == {
+        "architecture-analyst": "claude-sonnet-5",
+        "python-senior": "claude-opus-5-5",
+        "tester": "claude-sonnet-5",
+        "docs-updater": "claude-haiku-4-5",
+    }
+    quick = RouteOptions(mode="fixed", depth="quick")
+    assert written(RoutingPolicy(tier_defaults=defaults), quick)["python-senior"] == (
+        "claude-sonnet-5"
+    )
+    pinned = RouteOptions(mode="fixed", role_models=(("docs", "claude-sonnet-4-5"),))
+    assert written(RoutingPolicy(tier_defaults=defaults), pinned)["docs-updater"] == (
+        "claude-sonnet-4-5"
+    )
 
 
 def test_broken_graph_runner_scrubs_runtime_agents_without_editing_source(tmp_path: Path) -> None:
@@ -133,7 +189,9 @@ def test_native_runs_reject_pins_they_cannot_honor(tmp_path: Path) -> None:
     cross = RouteOptions(mode="fixed", role_models=(("senior", "codex:gpt-5.6-sol"),))
     with pytest.raises(DomainFailure, match="role pins cannot be honored") as found:
         subject.apply(REQUEST, cross, "claude")
-    assert "this launch can only use claude; add --cross-engine" in str(found.value.hint)
+    assert str(found.value.hint) == (
+        "senior: codex:gpt-5.6-sol belongs to another provider; a team uses one provider (claude)"
+    )
     single = RouteOptions(
         mode="fixed", role_models=(("senior", "gpt-5.6-sol"), ("tester", "gpt-5.6-luna"))
     )

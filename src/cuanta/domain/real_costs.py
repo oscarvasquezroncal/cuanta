@@ -146,8 +146,11 @@ def type_key(task_type: str) -> str:
     return TYPE_ALIASES.get(task_type, task_type) or UNTYPED
 
 
-def mix_key(run: Run) -> str:
-    return CROSS_MIX if run.kind == CROSS_KIND else run.engine or UNTYPED
+def mix_key(run: Run, roles: Sequence[Run] = ()) -> str:
+    if run.kind != CROSS_KIND:
+        return run.engine or UNTYPED
+    engines = {role.engine for role in (run, *roles) if role.engine}
+    return engines.pop() if len(engines) == 1 else CROSS_MIX
 
 
 def known_cost(run: Run) -> float | None:
@@ -177,7 +180,7 @@ def attempts(runs: Iterable[Run], now_iso: str = "") -> tuple[Attempt, ...]:
                 any(role.cost_source == ESTIMATED for role in roles),
                 seconds_between(run.started_at, max(ends)) if ends else None,
                 type_key(run.task_type),
-                mix_key(run),
+                mix_key(run, roles),
                 tuple(dict.fromkeys(role.id for role in roles)),
             )
         )

@@ -94,7 +94,8 @@ def test_costs_count_every_attempt_and_never_show_unknown_as_zero(
     assert fix["median_cost_includes_estimated"] is True
     feature = _row(payload, "by_type", "feature")
     assert feature["spend_usd"] == 1.5 and feature["cost_per_accepted_usd"] is None
-    assert _row(payload, "by_engine_mix", "cross-engine")["runs"] == 1
+    assert _row(payload, "by_engine_mix", "claude")["runs"] == 4
+    assert _row(payload, "by_engine_mix", "cross-engine")["runs"] == 0
     assert _row(payload, "by_type", "investigation")["runs"] == 0
     older = json.loads(
         invoke(["costs", "--json", "--since", "2025-09-01", "--project", str(tmp_path)]).stdout

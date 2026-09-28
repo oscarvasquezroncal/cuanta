@@ -250,7 +250,7 @@ def test_query_groups_cross_root_children_as_one_attempt_and_file_sample() -> No
     assert view.report.known_cost_usd == view.report.allocated_known_usd == 2.0
     assert len(view.report.rows) == 1
     assert view.report.rows[0].samples == 1
-    assert view.report.rows[0].mix == "cross-engine"
+    assert view.report.rows[0].mix == "claude"
     assert harness.calls.count("ledger:read") == 1
 
 

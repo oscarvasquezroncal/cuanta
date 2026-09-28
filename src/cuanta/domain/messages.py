@@ -435,25 +435,24 @@ ENGLISH: dict[str, str] = {
         "{role} is pinned to {model}, which is not in the model catalog; run cuanta models"
     ),
     "route.pin_engine": (
-        "{role} is pinned to {model}, but this launch can only use {engines}; add --cross-engine "
-        "to mix engines"
+        "{role} is pinned to {model}, but this launch can only use {engines}; pin a model of "
+        "{engines} or leave it unpinned"
     ),
-    "route.pin_build": (
-        "{role} is pinned to {model}, but Codex cannot run builds on this Windows host (CX-09); "
-        "pin a Claude model or leave it unpinned"
+    "route.pin_provider": (
+        "{role}: {model} belongs to another provider; a team uses one provider ({provider})"
     ),
     "route.pin_lost": "{role} is pinned to {model}, but the route chose another model",
     "route.pins_rejected": "role pins cannot be honored",
-    "mix.claude_only": "Claude only",
-    "mix.claude_plans": "Claude plans, Codex writes",
-    "mix.codex_plans": "Codex plans, Claude writes",
+    "provider.claude": "Claude team",
+    "provider.codex": "GPT team",
     "team.role": "{role}: {engine} {model}, share ${share}",
     "team.role_unshared": "{role}: {engine} {model}",
     "team.context_index": "Context: index tools and the anchored handoff chain",
     "team.context_text": "Context: a text pack and the anchored handoff chain",
     "team.warning": "Warning: {warning}",
     "team.recommended": (
-        "Measured {type} runs recommend {mix}: ${cost} per accepted change (attempts: {attempts})"
+        "Measured {type} runs recommend the {provider}: ${cost} per accepted change "
+        "(attempts: {attempts})"
     ),
     "cross.blocked": "{role} reported that it is blocked: {reason}",
     "cross.writer_salvaged": (
@@ -503,9 +502,6 @@ ENGLISH: dict[str, str] = {
     "sandbox.record_failed": (
         "sandbox changes could not be collected ({error}); copy kept, result cannot be applied"
     ),
-    "route.build_unavailable": (
-        "Codex cannot run builds on this Windows host (CX-09); tester stays on Claude"
-    ),
     "guarantee.codex_builds": (
         "Codex cannot run builds on this Windows host; cuanta verifies instead"
     ),
@@ -515,6 +511,7 @@ ENGLISH: dict[str, str] = {
     ),
     "cross.no_engine": "{engine} is not available",
     "cross.failed": "{role} failed: the pipeline stopped",
+    "cross.stopped": "the pipeline was stopped on request; later roles did not run",
     "route.low_clarity": "request unclear (clarity {clarity} of 2): capped at {tier}",
     "overhead.context": (
         "fixed session context ≈ {fixed} tokens ({share}) of the first request's {total}"

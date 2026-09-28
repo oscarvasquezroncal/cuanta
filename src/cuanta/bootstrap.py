@@ -128,7 +128,7 @@ if TYPE_CHECKING:
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.pack import ContextPack
-    from cuanta.domain.routing import CostRange, Mix, Role, RoutingPolicy
+    from cuanta.domain.routing import CostRange, Role, RoutingPolicy
     from cuanta.domain.sandbox import SandboxLaunch
     from cuanta.domain.shells import Shell
     from cuanta.domain.terminal import TerminalReport
@@ -981,18 +981,16 @@ class Container:
         scope: Choice | None = None,
         risk: float | None = None,
         engine: str = "",
-        mix: Mix | None = None,
     ) -> tuple[RoutePlan, CostRange]:
         from cuanta.application.estimate import similar_costs
         from cuanta.application.routing import RouteInputs, with_overrides
         from cuanta.domain.depth import parse_depth, profile
         from cuanta.domain.mandate import MandateRequest as Request
-        from cuanta.domain.routing import cost_range, depth_capped, roles_that_run, with_mix
+        from cuanta.domain.routing import cost_range, depth_capped, roles_that_run
 
         policy = with_overrides(self.routing_policy(), route, preset, role_models)
         if engine:
             policy = replace(policy, engines=(engine,))
-        policy = with_mix(policy, mix)
         if depth:
             policy = depth_capped(policy, profile(parse_depth(depth), task_type).tier_cap)
         if scope is None:
@@ -1208,6 +1206,7 @@ class Container:
             margin=lambda: self.budget_margin(ledger),
             index_tools=self.pipeline_index_tools,
             new_files=self.codex_file_guard() if os.name == "nt" else None,
+            build_blocked=self.build_blocked(),
         )
 
     def verifier(self) -> Verifier:
@@ -1712,6 +1711,7 @@ class Container:
         max_turns: int,
         keep: bool,
         depth: str = "",
+        on_start: Callable[[CrossEnginePipeline], None] | None = None,
     ) -> SandboxResult:
         from cuanta.application.cross_engine import cross_metrics
 
@@ -1719,7 +1719,10 @@ class Container:
             copy: SandboxCopy, launch: SandboxLaunch, checkpoint: Callable[[], Message | None]
         ) -> CrossEnginePipeline:
             sub = self.sandbox_container(copy.root, launch.env)
-            return sub.cross_engine(ledger, budget_usd, max_turns, launch, checkpoint, depth)
+            pipeline = sub.cross_engine(ledger, budget_usd, max_turns, launch, checkpoint, depth)
+            if on_start is not None:
+                on_start(pipeline)
+            return pipeline
 
         def payload(report: CrossReport) -> dict[str, object]:
             return {
@@ -2024,9 +2027,11 @@ class Container:
         )
 
     def routing_policy(self) -> RoutingPolicy:
+        from cuanta.adapters.models.tiers import load_tier_table
         from cuanta.domain.routing import parse_policy
 
-        return parse_policy(dict(load_config(self.project).routing))
+        policy = parse_policy(dict(load_config(self.project).routing))
+        return replace(policy, tier_defaults=load_tier_table().defaults)
 
     def blast_radius(self, text: str) -> int:
         from cuanta.adapters.graph.file_graph import load_neighbours
@@ -2044,7 +2049,6 @@ class Container:
             catalog=lambda: service.view().entries,
             ledger=ledger,
             clock_iso=self.clock.now_iso,
-            build_blocked=self.build_blocked(),
         )
 
     def latest_tests(self) -> LatestTests:
