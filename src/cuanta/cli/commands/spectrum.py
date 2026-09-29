@@ -5,7 +5,9 @@ import typer
 from cuanta.cli.runtime import Session, execute
 
 if TYPE_CHECKING:
+    from cuanta.application.spectrum import SpectrumResult
     from cuanta.cli.document import Block, Document, TreeNode
+    from cuanta.domain.cost_trend import CostTrend
     from cuanta.domain.index_metrics import IndexMetrics
     from cuanta.domain.spectrum import View
 
@@ -24,9 +26,23 @@ def spectrum_command(
         bool,
         typer.Option("--rebuild", help="With --import: drop imported events and re-read them."),
     ] = False,
+    trend: Annotated[
+        bool,
+        typer.Option(
+            "--trend",
+            help="Add cost per accepted change over recent runs, by provider and task type.",
+        ),
+    ] = False,
+    last: Annotated[
+        int | None,
+        typer.Option("--last", min=1, help="With --trend: runs per provider and type (20)."),
+    ] = None,
 ) -> None:
     execute(
-        ctx, lambda current: _spectrum(current, run, session, since, by, plan, import_, rebuild)
+        ctx,
+        lambda current: _spectrum(
+            current, run, session, since, by, plan, import_, rebuild, trend, last
+        ),
     )
 
 
@@ -101,6 +117,8 @@ def _spectrum(
     plan: bool,
     do_import: bool,
     rebuild: bool = False,
+    trend: bool = False,
+    last: int | None = None,
 ) -> "Document":
     from cuanta.application.spectrum import Selection
     from cuanta.bootstrap import Container
@@ -113,6 +131,7 @@ def _spectrum(
     view = _view(by)
     if rebuild and not do_import:
         raise DomainFailure("--rebuild needs --import", "run cuanta spectrum --import --rebuild")
+    limit = _trend_limit(trend, last)
     container = Container.for_project(session.project)
     ledger = container.ledger()
     imported: dict[str, Any] = {}
@@ -122,7 +141,7 @@ def _spectrum(
         selection = Selection(run=run or "", session=session_id or "", since=since or "")
         if do_import and not (run or session_id or since):
             selection = Selection(since="0")
-        result = container.spectrum_query(ledger).run(selection)
+        result = _trended(container, container.spectrum_query(ledger).run(selection), limit)
     finally:
         ledger.close()
     report = result.report
@@ -259,8 +278,71 @@ def _spectrum(
             )
         )
         blocks.extend(Hint(suggestion.action) for suggestion in report.suggestions)
-    payload = _payload(result, view, plan, imported)
-    return Document(blocks=tuple(blocks), payload=payload)
+    payload = _payload(result, view, plan, imported, limit is not None)
+    return Document(
+        blocks=(*blocks, *_trend(result.trend, session.settings.unicode, limit is not None)),
+        payload=payload,
+    )
+
+
+def _trend_limit(trend: bool, last: int | None) -> int | None:
+    from cuanta.domain.cost_trend import DEFAULT_TREND_RUNS
+    from cuanta.domain.errors import DomainFailure
+
+    if last is not None and not trend:
+        raise DomainFailure("--last needs --trend", "run cuanta spectrum --trend --last N")
+    if not trend:
+        return None
+    return last or DEFAULT_TREND_RUNS
+
+
+def _trended(container: Any, result: "SpectrumResult", limit: int | None) -> "SpectrumResult":
+    from dataclasses import replace
+
+    if limit is None:
+        return result
+    return replace(result, trend=container.costs_query().trend(limit))
+
+
+def _trend(trend: "CostTrend", unicode: bool, shown: bool) -> "list[Block]":
+    from cuanta.cli.commands.costs import MIX_LABELS, TYPE_LABELS, money
+    from cuanta.cli.document import Column, Hint, Table
+    from cuanta.domain.cost_trend import ASCII_GLYPHS, SPARK_GLYPHS, sparkline
+
+    if not shown:
+        return []
+    title = f"cost per accepted change, last {trend.limit} runs by provider and type"
+    if trend.empty:
+        return [Hint(f"{title}: no mandates recorded yet")]
+    glyphs, blank = (SPARK_GLYPHS, "·") if unicode else (ASCII_GLYPHS, ".")
+    return [
+        Table(
+            title,
+            (
+                Column("provider"),
+                Column("type"),
+                Column("runs", numeric=True),
+                Column("acc.", numeric=True),
+                Column("per acc.", numeric=True),
+                Column("trend"),
+            ),
+            tuple(
+                (
+                    MIX_LABELS.get(row.provider, row.provider),
+                    TYPE_LABELS.get(row.task_type, row.task_type),
+                    str(row.runs),
+                    str(row.accepted),
+                    money(row.per_accepted_usd, row.lower_bound, row.estimated),
+                    sparkline(row.series, glyphs, blank),
+                )
+                for row in trend.rows
+            ),
+        ),
+        Hint(
+            "per acc.: every attempt ÷ accepted runs · ≥ lower bound · * includes estimated "
+            f"costs · trend: oldest to newest run, {blank} before the first accepted change"
+        ),
+    ]
 
 
 def _overhead(result: Any) -> "list[Block]":
@@ -326,9 +408,12 @@ def _anatomy(report: Any) -> "list[Block]":
     ]
 
 
-def _payload(result: Any, view: Any, plan: bool, imported: dict[str, Any]) -> dict[str, Any]:
+def _payload(
+    result: Any, view: Any, plan: bool, imported: dict[str, Any], trend: bool = False
+) -> dict[str, Any]:
     from dataclasses import asdict
 
+    from cuanta.domain.cost_trend import trend_payload
     from cuanta.domain.overhead import overhead_payload
     from cuanta.domain.spectrum import QUOTA_NOTE
 
@@ -437,4 +522,6 @@ def _payload(result: Any, view: Any, plan: bool, imported: dict[str, Any]) -> di
                 for item in weeks
             ],
         }
+    if trend:
+        payload["trend"] = trend_payload(result.trend)
     return payload

@@ -227,6 +227,7 @@ def prepared(ledger: MemoryLedger, run_id: str) -> Prepared:
             forecast_error=None,
             scout=False,
             docs=None,
+            read_hooks=False,
         ),
     )
 
@@ -291,6 +292,7 @@ def test_a_failed_native_forecast_is_reported_and_the_launch_goes_ahead() -> Non
             forecast_error=failure,
             scout=False,
             docs=None,
+            read_hooks=False,
         ),
     )
     recorder = Recorder()

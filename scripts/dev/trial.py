@@ -91,6 +91,8 @@ def command(spec: Spec, trial: Trial) -> list[str]:
         arguments.extend(["--model", trial.model])
     if trial.shape:
         arguments.extend(["--shape", trial.shape])
+    if trial.mode == "classic":
+        arguments.append("--classic")
     return cli(spec, *arguments)
 
 
@@ -113,6 +115,57 @@ def cost(value: Any) -> float:
     if not math.isfinite(result) or result < 0:
         raise ValueError("Invalid cost; stop before another trial")
     return result
+
+
+def mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def tokens_of(totals: Any) -> dict[str, Any]:
+    values = mapping(totals)
+    output = values.get("output")
+    reasoning = values.get("reasoning")
+    return {
+        "fresh_tokens": values.get("fresh_input"),
+        "cache_read_tokens": values.get("cache_read"),
+        "cache_write_tokens": values.get("cache_write"),
+        "output_tokens": (
+            output + (reasoning if isinstance(reasoning, int) else 0)
+            if isinstance(output, int)
+            else None
+        ),
+    }
+
+
+def metrics_row(report: Report, spec: Spec, trial: Trial, run_id: str) -> dict[str, Any]:
+    step = report.run(trial.name + "-metrics", cli(spec, "costs", "--metrics"))
+    if step.code:
+        raise ValueError("Costs metrics unavailable")
+    rows = payload(Path(step.log)).get("metrics")
+    if not isinstance(rows, list):
+        raise ValueError("Costs metrics missing")
+    for item in rows:
+        if isinstance(item, dict) and item.get("run_id") == run_id:
+            return item
+    raise ValueError(f"No costs metrics row for {run_id}")
+
+
+def r3_fields(run: dict[str, Any], totals: Any, metrics: dict[str, Any]) -> dict[str, Any]:
+    forecast = mapping(metrics.get("forecast"))
+    blocked = mapping(mapping(run.get("governor")).get("blocked")) or mapping(
+        metrics.get("blocked")
+    )
+    return {
+        **tokens_of(totals),
+        "first_request_fixed_tokens": mapping(run.get("overhead")).get("fixed_context_tokens"),
+        "reads_blocked": blocked.get("reads"),
+        "blocked_tokens_estimate": blocked.get("tokens_estimate"),
+        "forecast_p50_usd": forecast.get("p50_usd"),
+        "forecast_p90_usd": forecast.get("p90_usd"),
+        "forecast_actual_usd": metrics.get("actual_usd"),
+        "p90_minus_actual_usd": metrics.get("p90_minus_actual_usd"),
+        "outcome": run.get("outcome") or metrics.get("outcome"),
+    }
 
 
 def collect(report: Report, spec: Spec, trial: Trial, launch: dict[str, Any]) -> dict[str, Any]:
@@ -143,6 +196,8 @@ def collect(report: Report, spec: Spec, trial: Trial, launch: dict[str, Any]) ->
         "end_reason": run.get("end_reason"),
         "first_request": run.get("overhead"),
         "steps": launch.get("steps", []),
+        "mode": trial.mode,
+        "provider": trial.engine,
     }
     if show.code:
         row["metrics_error"] = "Run metrics unavailable"
@@ -156,6 +211,16 @@ def collect(report: Report, spec: Spec, trial: Trial, launch: dict[str, Any]) ->
         row["spectrum"] = tokens
     except (OSError, ValueError) as error:
         row["metrics_error"] = str(error)
+        return row
+    metrics: dict[str, Any] = {}
+    try:
+        metrics = metrics_row(report, spec, trial, run_id)
+    except (OSError, ValueError) as error:
+        row["r3_error"] = str(error)
+    recorded = metrics.get("mode")
+    if recorded is not None and recorded != trial.mode:
+        row["metrics_error"] = f"Run recorded mode {recorded}; the trial asked for {trial.mode}"
+    row.update(r3_fields(run, row["tokens"], metrics))
     return row
 
 
@@ -234,6 +299,7 @@ def run(spec: Spec, dry_run: bool, only: str | None, skip_accept: bool) -> int:
                 raise ValueError(row["metrics_error"])
             if not skip_accept:
                 row["acceptance"] = verify(report, trial, spec.project, row["run_id"])
+                row["accepted"] = row["acceptance"]["passed"]
             save(report, rows, spec)
             if launch.code:
                 raise ValueError(f"{trial.name} mandate failed; metrics saved")

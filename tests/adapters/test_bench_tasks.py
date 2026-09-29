@@ -22,6 +22,7 @@ TASKS = Path(__file__).parents[2] / "bench" / "tasks"
 KIT = TASKS.parent / "kit"
 MINI = select(load_tasks(TASKS), "mini")
 PUBLIC = tuple(task for task in select(load_tasks(TASKS), "full") if task.source is not None)
+PROOF = select(load_tasks(TASKS), "proof")
 
 
 def _sandbox(tmp_path: Path) -> LocalBenchSandbox:
@@ -111,6 +112,16 @@ def test_parse_task_rejects_broken_documents() -> None:
 def test_hidden_tests_fail_before_and_pass_with_the_reference(
     tmp_path: Path, task: BenchTask
 ) -> None:
+    _check_solvable(tmp_path, task)
+
+
+def test_the_proof_task_is_a_solvable_feature_that_does_not_name_its_files(
+    tmp_path: Path,
+) -> None:
+    (task,) = PROOF
+    assert task.request.type == "feature" and not task.request.where
+    assert ".py" not in task.prompt and ".py" not in task.request.what
+    assert len([path for path in task.files if path.startswith("src/")]) >= 6
     _check_solvable(tmp_path, task)
 
 

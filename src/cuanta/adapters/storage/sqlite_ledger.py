@@ -491,6 +491,10 @@ class SqliteLedger:
             chosen, [Run(**{name: row[name] for name in RUN_COLUMNS}) for row in runs]
         )
 
+    def forecast(self, run_id: str) -> Forecast | None:
+        rows = self._query("SELECT * FROM forecasts WHERE run_id = ?", (run_id,))
+        return Forecast(**{name: rows[0][name] for name in FORECAST_COLUMNS}) if rows else None
+
     def close(self) -> None:
         with self._lock:
             self._connection.close()

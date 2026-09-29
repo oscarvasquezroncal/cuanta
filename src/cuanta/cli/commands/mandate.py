@@ -57,6 +57,7 @@ class MandateArgs:
     sandbox: bool = False
     keep: bool = False
     scout_mode: str = ""
+    classic: bool = False
 
 
 def mandate_command(
@@ -157,6 +158,16 @@ def mandate_command(
     keep: Annotated[
         bool, typer.Option("--keep", help="Keep the isolated copy after the run (--sandbox).")
     ] = False,
+    classic: Annotated[
+        bool,
+        typer.Option(
+            "--classic",
+            help=(
+                "For this run only: pipeline shape (no scout), docs on, read discipline off "
+                "and governor off; recorded as mode classic."
+            ),
+        ),
+    ] = False,
 ) -> None:
     args = MandateArgs(
         type=type_,
@@ -186,6 +197,7 @@ def mandate_command(
         shape=shape,
         sandbox=sandbox,
         keep=keep,
+        classic=classic,
     )
     execute(ctx, lambda cli: run_mandate(cli, args))
 
@@ -269,6 +281,8 @@ def _options(args: MandateArgs) -> "MandateOptions":
     check_choice(args.shape, tuple(shape.value for shape in Shape), "--shape")
     if args.keep and not args.sandbox:
         raise DomainFailure("--keep only applies to --sandbox runs", "add --sandbox")
+    if args.classic and args.shape == Shape.SCOUT.value:
+        raise DomainFailure("--classic runs without a scout", "drop --shape scout or --classic")
     return MandateOptions(
         engine=args.engine,
         model=args.model,
@@ -341,6 +355,8 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
         options = _options(args)
         built = _build_request(session, container.mandate_service(container.shared_ledger()), args)
         request = built[0]
+        if args.classic:
+            args, options = _classic(session, container, args, options, request.type)
         options, choice = container.shaped_options(request, options, args.cross_engine)
         args = replace(args, shape=options.shape, scout_mode=options.scout_mode)
         per_role = _per_role(container, args, options, request.type)
@@ -389,6 +405,24 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
     finally:
         container.close()
     return _final(report)
+
+
+def _classic(
+    session: Session,
+    container: "Container",
+    args: MandateArgs,
+    options: "MandateOptions",
+    task_type: str,
+) -> "tuple[MandateArgs, MandateOptions]":
+    from dataclasses import replace
+
+    from cuanta.domain.progress import Note, Status
+    from cuanta.domain.run_mode import CLASSIC_NOTE, classic_shape
+
+    container.classic()
+    shape = classic_shape(args.shape, task_type, args.simple)
+    session.presenter.publish(Note(Status.INFO, CLASSIC_NOTE))
+    return replace(args, shape=shape), replace(options, shape=shape)
 
 
 def run_sandbox(

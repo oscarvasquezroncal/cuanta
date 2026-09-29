@@ -52,6 +52,7 @@ MANDATE_PARAMS = frozenset(
         "shape",
         "sandbox",
         "keep",
+        "classic",
     }
 )
 
@@ -220,6 +221,7 @@ def mandate_args(params: Mapping[str, object]) -> "MandateArgs":
         shape=_text(params, "shape"),
         sandbox=_flag(params, "sandbox"),
         keep=_flag(params, "keep"),
+        classic=_flag(params, "classic"),
     )
 
 

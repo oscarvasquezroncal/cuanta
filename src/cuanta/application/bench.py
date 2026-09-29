@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
+from itertools import groupby
 from math import isfinite
 
 from cuanta.domain.anatomy import (
@@ -20,6 +21,7 @@ from cuanta.domain.bench import (
     BenchTask,
     Condition,
     PlannedRun,
+    ProofRecord,
     RunMetrics,
     charts,
     plan_runs,
@@ -30,6 +32,15 @@ from cuanta.domain.bench import (
     splice,
     summarize,
     was_capped,
+)
+from cuanta.domain.bench_proof import (
+    NOT_LAUNCHED,
+    arm_named,
+    comparison_caps,
+    comparison_key,
+    ended_by_cap,
+    launched_cost,
+    proof_markdown,
 )
 from cuanta.domain.costs import sum_costs
 from cuanta.domain.errors import CuantaError
@@ -80,6 +91,45 @@ class Attempt:
     depth: str = ""
     anatomy: AnatomyReport = field(default_factory=AnatomyReport)
     read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
+    proof: ProofRecord | None = None
+
+
+def _empty(
+    task: BenchTask,
+    condition: Condition,
+    rep: int,
+    session: str,
+    index: str,
+    proof: ProofRecord | None = None,
+) -> RunMetrics:
+    return RunMetrics(
+        task.name,
+        condition,
+        rep,
+        "",
+        False,
+        False,
+        0,
+        0,
+        0,
+        0,
+        None,
+        0.0,
+        0,
+        0,
+        session=session,
+        index=index,
+        proof=proof,
+    )
+
+
+def planned_proof(run: PlannedRun) -> ProofRecord:
+    arm = arm_named(run.arm)
+    if arm is None:
+        raise ValueError(f"bench arm {run.arm!r} is not defined")
+    return ProofRecord(
+        arm.comparison.value, arm.name, run.cap_usd, group=run.group, position=arm.position
+    )
 
 
 class BenchExecutor:
@@ -88,10 +138,12 @@ class BenchExecutor:
         sandbox: BenchSandbox,
         attempt: Callable[[BenchTask, Condition, str, float, str, str], Attempt],
         monotonic: Callable[[], float],
+        arm_attempt: Callable[[BenchTask, PlannedRun, str], Attempt] | None = None,
     ) -> None:
         self._sandbox = sandbox
         self._attempt = attempt
         self._monotonic = monotonic
+        self._arm_attempt = arm_attempt
 
     def __call__(
         self,
@@ -104,24 +156,7 @@ class BenchExecutor:
     ) -> RunMetrics:
         selected = "off" if condition is Condition.BASELINE else index
         label = f"{task.name}-{condition.value}-{rep}-{selected}"
-        empty = RunMetrics(
-            task.name,
-            condition,
-            rep,
-            "",
-            False,
-            False,
-            0,
-            0,
-            0,
-            0,
-            None,
-            0.0,
-            0,
-            0,
-            session=session,
-            index=selected,
-        )
+        empty = _empty(task, condition, rep, session, selected)
         try:
             root = self._sandbox.prepare(task, condition is not Condition.BASELINE, label)
         except CuantaError as error:
@@ -133,53 +168,127 @@ class BenchExecutor:
             except CuantaError as error:
                 return replace(empty, wall_s=self._monotonic() - began, error=error.message)
             wall = self._monotonic() - began
-            capped = was_capped(done.subtype, done.cost_usd, cap)
-            if capped:
-                accepted, tail = False, ""
-            elif task.answer is not None:
-                accepted, tail = self._sandbox.accept(task, root, done.answer)
-            else:
-                accepted, tail = self._sandbox.accept(task, root)
-            if task.request.type == "investigation" and done.out_of_plan_edits:
-                accepted = False
-                tail = "Investigation changed source paths: " + ", ".join(done.out_of_plan_edits)
-            if done.guard_violations:
-                accepted = False
-                tail = "Protected paths changed: " + ", ".join(done.guard_violations)
-            return RunMetrics(
-                task=task.name,
-                condition=condition,
-                rep=rep,
-                run_id=done.run_id,
-                accepted=accepted,
-                capped=capped,
-                fresh_tokens=done.fresh_tokens,
-                cache_read_tokens=done.cache_read_tokens,
-                cache_write_tokens=done.cache_write_tokens,
-                output_tokens=done.output_tokens,
-                cost_usd=done.cost_usd,
-                wall_s=wall,
-                test_output_tokens=done.test_output_tokens,
-                retries=rerun_count(done.commands),
-                models=done.models,
-                error="" if accepted or capped else tail[-400:],
-                session=session,
-                context_tokens=done.context_tokens,
-                loaded=done.loaded,
-                index=selected,
-                exploration_tokens_estimate=done.exploration_tokens_estimate,
-                raw_reads=done.raw_reads,
-                index_calls=done.index_calls,
-                out_of_plan_edits=done.out_of_plan_edits,
-                guard_violations=done.guard_violations,
-                shape=done.shape,
-                pack=done.pack,
-                depth=done.depth,
-                anatomy=done.anatomy,
-                read_efficiency=done.read_efficiency,
-            )
+            return self._score(task, condition, rep, done, root, cap, wall, session, selected)
         finally:
             self._sandbox.discard(root)
+
+    def group(self, task: BenchTask, runs: Sequence[PlannedRun]) -> tuple[RunMetrics, ...]:
+        if self._arm_attempt is None:
+            raise RuntimeError("bench arms need an arm attempt; none is wired")
+        first = runs[0]
+        label = f"{task.name}-{first.arm}-{first.rep}-{first.index}"
+        records = [planned_proof(run) for run in runs]
+        empties = [
+            _empty(task, run.condition, run.rep, run.session, run.index, record)
+            for run, record in zip(runs, records, strict=True)
+        ]
+        try:
+            root = self._sandbox.prepare(task, True, label)
+        except CuantaError as error:
+            return tuple(_unlaunched(empty, error.message) for empty in empties)
+        found: list[RunMetrics] = []
+        failed = ""
+        try:
+            for run, record, empty in zip(runs, records, empties, strict=True):
+                if failed:
+                    found.append(_unlaunched(empty, f"not run: an earlier run failed: {failed}"))
+                    continue
+                began = self._monotonic()
+                try:
+                    done = self._arm_attempt(task, run, root)
+                except CuantaError as error:
+                    failed = error.message
+                    found.append(
+                        replace(empty, wall_s=self._monotonic() - began, error=error.message)
+                    )
+                    continue
+                wall = self._monotonic() - began
+                scored = replace(done, proof=done.proof if done.proof is not None else record)
+                capped = ended_by_cap(
+                    scored.proof, was_capped(done.subtype, done.cost_usd, run.cap_usd)
+                )
+                found.append(
+                    self._score(
+                        task,
+                        run.condition,
+                        run.rep,
+                        scored,
+                        root,
+                        run.cap_usd,
+                        wall,
+                        run.session,
+                        run.index,
+                        capped,
+                    )
+                )
+        finally:
+            self._sandbox.discard(root)
+        return tuple(found)
+
+    def _score(
+        self,
+        task: BenchTask,
+        condition: Condition,
+        rep: int,
+        done: Attempt,
+        root: str,
+        cap: float,
+        wall: float,
+        session: str,
+        selected: str,
+        cut: bool | None = None,
+    ) -> RunMetrics:
+        capped = was_capped(done.subtype, done.cost_usd, cap) if cut is None else cut
+        if capped:
+            accepted, tail = False, ""
+        elif task.answer is not None:
+            accepted, tail = self._sandbox.accept(task, root, done.answer)
+        else:
+            accepted, tail = self._sandbox.accept(task, root)
+        if task.request.type == "investigation" and done.out_of_plan_edits:
+            accepted = False
+            tail = "Investigation changed source paths: " + ", ".join(done.out_of_plan_edits)
+        if done.guard_violations:
+            accepted = False
+            tail = "Protected paths changed: " + ", ".join(done.guard_violations)
+        return RunMetrics(
+            task=task.name,
+            condition=condition,
+            rep=rep,
+            run_id=done.run_id,
+            accepted=accepted,
+            capped=capped,
+            fresh_tokens=done.fresh_tokens,
+            cache_read_tokens=done.cache_read_tokens,
+            cache_write_tokens=done.cache_write_tokens,
+            output_tokens=done.output_tokens,
+            cost_usd=done.cost_usd,
+            wall_s=wall,
+            test_output_tokens=done.test_output_tokens,
+            retries=rerun_count(done.commands),
+            models=done.models,
+            error="" if accepted or capped else tail[-400:],
+            session=session,
+            context_tokens=done.context_tokens,
+            loaded=done.loaded,
+            index=selected,
+            exploration_tokens_estimate=done.exploration_tokens_estimate,
+            raw_reads=done.raw_reads,
+            index_calls=done.index_calls,
+            out_of_plan_edits=done.out_of_plan_edits,
+            guard_violations=done.guard_violations,
+            shape=done.shape,
+            pack=done.pack,
+            depth=done.depth,
+            anatomy=done.anatomy,
+            read_efficiency=done.read_efficiency,
+            proof=done.proof,
+        )
+
+
+def _unlaunched(empty: RunMetrics, error: str) -> RunMetrics:
+    proof = replace(empty.proof, end_reason=NOT_LAUNCHED) if empty.proof is not None else None
+    return replace(empty, error=error, proof=proof)
 
 
 def _int(value: object) -> int:
@@ -188,6 +297,43 @@ def _int(value: object) -> int:
 
 def _float(value: object) -> float | None:
     return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _proof(value: object) -> ProofRecord | None:
+    if not isinstance(value, dict):
+        return None
+    data = _mapping(value)
+    dispatched = data.get("scout_dispatched")
+    return ProofRecord(
+        comparison=str(data.get("comparison") or ""),
+        arm=str(data.get("arm") or ""),
+        cap_usd=_float(data.get("cap_usd")) or 0.0,
+        end_reason=str(data.get("end_reason") or ""),
+        leak_tokens=_optional_int(data.get("leak_tokens")),
+        blocked_reads=_optional_int(data.get("blocked_reads")),
+        blocked_tokens=_optional_int(data.get("blocked_tokens")),
+        scout_mode=str(data.get("scout_mode") or ""),
+        scout_dispatched=dispatched if isinstance(dispatched, bool) else None,
+        first_cache_read=_optional_int(data.get("first_cache_read")),
+        fixed_prefix=_optional_int(data.get("fixed_prefix")),
+        finish_sent=data.get("finish_sent") is True,
+        finish_spent_usd=_float(data.get("finish_spent_usd")),
+        group=_int(data.get("group")),
+        position=_int(data.get("position")),
+        rule_tokens=_optional_int(data.get("rule_tokens")),
+        answered=answered if isinstance(answered := data.get("answered"), bool) else None,
+    )
+
+
+def stored_run(item: RunMetrics) -> dict[str, object]:
+    data = asdict(item)
+    if item.proof is None:
+        del data["proof"]
+    return data
 
 
 def metrics_from_json(item: dict[str, object]) -> RunMetrics:
@@ -232,6 +378,7 @@ def metrics_from_json(item: dict[str, object]) -> RunMetrics:
         depth=_choice(item.get("depth"), ("", "quick", "normal", "deep"), ""),
         anatomy=_anatomy(item.get("anatomy")),
         read_efficiency=_read_efficiency(item.get("read_efficiency")),
+        proof=_proof(item.get("proof")),
     )
 
 
@@ -393,9 +540,13 @@ class BenchRunner:
         self,
         execute: Callable[[BenchTask, Condition, int, float, str, str], RunMetrics],
         workspace: Workspace,
+        execute_group: (
+            Callable[[BenchTask, Sequence[PlannedRun]], tuple[RunMetrics, ...]] | None
+        ) = None,
     ) -> None:
         self._execute = execute
         self._workspace = workspace
+        self._execute_group = execute_group
 
     def folder(self, bench_id: str) -> str:
         return f"{BENCH_DIR}/{bench_id}"
@@ -455,9 +606,72 @@ class BenchRunner:
             self.save(meta, metrics)
         return BenchResult(meta, tuple(metrics), stopped, self.folder(meta.bench_id))
 
+    def run_proof(
+        self,
+        meta: BenchMeta,
+        tasks: Sequence[BenchTask],
+        planned: Sequence[PlannedRun],
+        progress: ProgressSink,
+    ) -> BenchResult:
+        if self._execute_group is None:
+            raise RuntimeError("bench arms need a group executor; none is wired")
+        by_name = {task.name: task for task in tasks}
+        needed = comparison_caps(planned)
+        opened: set[tuple[str, int]] = set()
+        reserved = 0.0
+        metrics: list[RunMetrics] = []
+        spent: float | None = 0.0
+        stopped = False
+        for _, members in groupby(planned, key=lambda item: item.group):
+            group = tuple(members)
+            if meta.budget_usd > 0 and spent is None:
+                progress.publish(note(Status.WARN, msg("bench.cost_unknown")))
+                stopped = True
+                break
+            key = comparison_key(group[0])
+            if key not in opened:
+                if stopped:
+                    continue
+                remaining = meta.budget_usd - reserved - spent if spent is not None else 0.0
+                if meta.budget_usd > 0 and remaining < needed[key]:
+                    progress.publish(note(Status.WARN, msg("bench.budget", spent=f"{spent:.2f}")))
+                    stopped = True
+                    continue
+                opened.add(key)
+                reserved += needed[key]
+            for item in group:
+                progress.publish(
+                    started(
+                        f"bench-{item.order}",
+                        msg(
+                            "bench.run",
+                            order=item.order,
+                            total=len(planned),
+                            task=item.task,
+                            condition=f"{item.condition.value} · {item.arm} · {item.session}",
+                            rep=item.rep,
+                        ),
+                    )
+                )
+            results = self._execute_group(by_name[group[0].task], group)
+            for item, result in zip(group, results, strict=True):
+                verdict = "bench.accepted" if result.accepted else "bench.rejected"
+                progress.publish(
+                    finished(
+                        f"bench-{item.order}",
+                        Status.OK if result.accepted else Status.FAIL,
+                        msg(verdict),
+                    )
+                )
+            metrics.extend(results)
+            reserved -= sum(item.cap_usd for item in group)
+            spent = sum_costs((spent, *(launched_cost(result) for result in results)))
+            self.save(meta, metrics)
+        return BenchResult(meta, tuple(metrics), stopped, self.folder(meta.bench_id))
+
     def save(self, meta: BenchMeta, metrics: Sequence[RunMetrics]) -> None:
         folder = self.folder(meta.bench_id)
-        document = {"meta": asdict(meta), "runs": [asdict(item) for item in metrics]}
+        document = {"meta": asdict(meta), "runs": [stored_run(item) for item in metrics]}
         self._workspace.write_text(f"{folder}/results.json", json.dumps(document, indent=2) + "\n")
         self._workspace.write_text(LATEST, meta.bench_id + "\n")
 
@@ -467,7 +681,9 @@ class BenchRunner:
     def report(self, result: BenchResult, folder: str = "") -> str:
         target = folder or result.folder
         summary = summarize(result.metrics)
-        text = report_markdown(result.meta, summary, result.metrics)
+        text = report_markdown(result.meta, summary, result.metrics) + proof_markdown(
+            result.metrics
+        )
         self._workspace.write_text(f"{target}/report.md", text)
         for name, svg in charts(summary).items():
             self._workspace.write_text(f"{target}/{name}", svg + "\n")

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 
 from cuanta.domain.index_metrics import _attributes, _object
 from cuanta.domain.ledger import LedgerEvent
-from cuanta.domain.report import file_refs
+from cuanta.domain.report import CHARS_PER_TOKEN, file_refs
 
 READ_TOOLS = frozenset({"read", "view", "notebookread"})
+SEARCH_TOOL = "grep"
 RESULT_KINDS = frozenset({"tool_result", "mcp_tool", "mcp_tool_call", "index_call"})
 FAILED_STATES = frozenset({"failed", "failure", "error", "denied", "rejected", "cancelled"})
 PENDING_STATES = frozenset({"started", "start", "running", "pending"})
@@ -259,4 +260,63 @@ def read_ranges(
             parameters.update(_object(values.get(key)))
         start, end = _span(parameters)
         found[path, start, end] = None
+    return tuple(found)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadCall:
+    tool: str
+    path: str
+    tokens: int
+    inputs: Mapping[str, object]
+    search: bool = False
+
+
+def _parameters(values: dict[str, object]) -> dict[str, object]:
+    parameters = dict(values)
+    for key in ("tool_input", "tool.parameters", "arguments"):
+        parameters.update(_object(values.get(key)))
+    return parameters
+
+
+def _search_path(value: object, project_root: str) -> object:
+    if not isinstance(value, str):
+        return value
+    text = value.strip().replace("\\", "/").rstrip("/")
+    root = project_root.strip().replace("\\", "/").rstrip("/")
+    if root and text.casefold() == root.casefold():
+        return "."
+    return _relative_to(value, project_root) or value
+
+
+def read_calls(events: Sequence[LedgerEvent], project_root: str) -> tuple[ReadCall, ...]:
+    seen: set[tuple[str, str, str, str]] = set()
+    found: list[ReadCall] = []
+    for event in events:
+        if event.kind not in RESULT_KINDS:
+            continue
+        values = _attributes(event)
+        search = event.tool_name.casefold() == SEARCH_TOOL
+        if not (search or _read_tool(event, values)) or not _usable(event, values):
+            continue
+        identity = _identity(event)
+        if event.tool_use_id and identity in seen:
+            continue
+        seen.add(identity)
+        parameters = _parameters(values)
+        tokens = max(event.tool_result_bytes, 0) // CHARS_PER_TOKEN
+        if search:
+            given = parameters.get("path") if "path" in parameters else event.file_path or None
+            inputs = (
+                parameters
+                if given is None
+                else {**parameters, "path": _search_path(given, project_root)}
+            )
+            where = inputs.get("path")
+            place = where if isinstance(where, str) else "."
+            found.append(ReadCall(event.tool_name, place, tokens, inputs, search=True))
+            continue
+        path = _relative_to(_event_path(event, values), project_root)
+        if path:
+            found.append(ReadCall(event.tool_name, path, tokens, parameters))
     return tuple(found)

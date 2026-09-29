@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from cuanta.application.cross_engine import CompletionState, CrossReport, CrossStep
@@ -102,6 +104,15 @@ def test_a_codex_stop_without_a_credible_end_saves_an_unknown_amount() -> None:
     assert (saved_usd(paced) or 0.0) > 0.4
 
 
+def test_a_governed_run_is_recorded_even_without_reactions() -> None:
+    assert governor_metrics([], recorded=True) == {"reactions": [], "read_discipline": {}}
+    hooked = governor_metrics([], hooks=True)
+    assert hooked == {"reactions": [], "read_discipline": {}, HOOKS: True}
+    summary = parse_governor(hooked)
+    assert summary.recorded and summary.hooks and not summary.shown
+    assert not parse_governor(None).recorded and not parse_governor({}).recorded
+
+
 def test_stored_metrics_round_trip_to_the_result_summary() -> None:
     items = [
         taken(ReactionKind.FINISH_NOW, Trigger.HEADROOM, 0.825, 0.92),
@@ -127,7 +138,8 @@ def test_stored_metrics_round_trip_to_the_result_summary() -> None:
     }
     blocked = BlockedCalls(2, 1, 1, 2_500)
     summary = parse_governor(stored, blocked)
-    assert summary == governor_summary(items, {"analyst": HOOKS, "senior": BEST_EFFORT}, blocked)
+    live = governor_summary(items, {"analyst": HOOKS, "senior": BEST_EFFORT}, blocked)
+    assert summary == replace(live, recorded=True) and not summary.hooks
     assert summary.shown and summary.enforced == ("analyst",)
     assert summary.best_effort == ("senior",)
     assert summary.saved_usd == pytest.approx(1.34)
@@ -144,7 +156,7 @@ def test_stored_metrics_round_trip_to_the_result_summary() -> None:
     assert governor_payload(GovernorSummary())["blocked"] is None
     assert not parse_governor(None).shown
     assert parse_governor({"reactions": [{"kind": 3}, "x"], "read_discipline": []}) == (
-        GovernorSummary()
+        GovernorSummary(recorded=True)
     )
 
 

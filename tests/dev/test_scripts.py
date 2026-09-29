@@ -553,3 +553,143 @@ def test_live_trial_stops_before_next_launch_on_unknown_or_exceeded_cap(
         assert summary["unknown_spend_trials"] == ["one"]
     else:
         assert summary["known_spend_usd"] == 0.5
+
+
+def test_a_trial_mode_defaults_to_v5_and_classic_passes_the_flag(tmp_path: Path) -> None:
+    loaded = spec.load(write_spec(tmp_path))
+    assert loaded.trials[0].mode == "v5"
+    assert "--classic" not in trial.command(loaded, loaded.trials[0])
+    classic = spec.load(write_spec(tmp_path, 'mode = "classic"'))
+    assert classic.trials[0].mode == "classic"
+    command = trial.command(classic, classic.trials[0])
+    assert command.count("--classic") == 1 and "--sandbox" in command
+    with pytest.raises(ValueError, match="mode must be classic or v5"):
+        spec.load(write_spec(tmp_path, 'mode = "v4"'))
+
+
+R3_RUN = {
+    "actual_usd": 0.31,
+    "cost_source": "reported",
+    "outcome": "pending",
+    "overhead": {"first_request_tokens": 21_000, "fixed_context_tokens": 19_500},
+    "governor": {"blocked": {"reads": 3, "tokens_estimate": 12_000}},
+}
+R3_TOTALS = {
+    "fresh_input": 1_200,
+    "cache_read": 250_000,
+    "cache_write": 30_000,
+    "output": 4_000,
+    "reasoning": 500,
+}
+
+
+def r3_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    recorded: str,
+    rows: list[dict[str, Any]] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    report = results.Report("r3", tmp_path)
+    monkeypatch.setattr(trial, "Report", lambda *a: report)
+    original = report.run
+    metrics = (
+        rows
+        if rows is not None
+        else [
+            {"run_id": "other", "mode": "v5"},
+            {
+                "run_id": "run-one",
+                "mode": recorded,
+                "outcome": "pending",
+                "forecast": {"p50_usd": 0.25, "p90_usd": 0.42, "cap_usd": 0.4},
+                "actual_usd": 0.31,
+                "p90_minus_actual_usd": 0.11,
+                "blocked": {"reads": None},
+            },
+        ]
+    )
+
+    def fake(name: str, command: list[str], **kwargs: Any) -> results.Step:
+        value: dict[str, Any]
+        if name.endswith("mandate"):
+            value = {"run_id": "run-one"}
+        elif name.endswith("show"):
+            value = R3_RUN
+        elif name.endswith("metrics"):
+            assert command[-2:] == ["costs", "--metrics"]
+            value = {"metrics": metrics}
+        else:
+            value = {"totals": R3_TOTALS}
+        return original(name, [sys.executable, "-c", f"print({json.dumps(value)!r})"])
+
+    monkeypatch.setattr(report, "run", fake)
+    matrix = definition(tmp_path)
+    matrix = replace(matrix, trials=(replace(matrix.trials[0], mode=mode),))
+    code = trial.run(matrix, False, None, True)
+    summary = json.loads((report.directory / "summary.json").read_text())
+    return code, summary
+
+
+def test_the_trial_summary_collects_the_r3_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, summary = r3_run(tmp_path, monkeypatch, "classic", "classic")
+    assert code == 0, summary["error"]
+    row = summary["trials"][0]
+    assert {
+        key: row[key]
+        for key in (
+            "mode",
+            "provider",
+            "cost_usd",
+            "fresh_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "output_tokens",
+            "first_request_fixed_tokens",
+            "reads_blocked",
+            "blocked_tokens_estimate",
+            "forecast_p50_usd",
+            "forecast_p90_usd",
+            "forecast_actual_usd",
+            "p90_minus_actual_usd",
+            "outcome",
+        )
+    } == {
+        "mode": "classic",
+        "provider": "claude",
+        "cost_usd": 0.31,
+        "fresh_tokens": 1_200,
+        "cache_read_tokens": 250_000,
+        "cache_write_tokens": 30_000,
+        "output_tokens": 4_500,
+        "first_request_fixed_tokens": 19_500,
+        "reads_blocked": 3,
+        "blocked_tokens_estimate": 12_000,
+        "forecast_p50_usd": 0.25,
+        "forecast_p90_usd": 0.42,
+        "forecast_actual_usd": 0.31,
+        "p90_minus_actual_usd": 0.11,
+        "outcome": "pending",
+    }
+    assert isinstance(row["duration_s"], float) and "r3_error" not in row
+
+
+def test_a_trial_stops_when_its_run_did_not_record_the_requested_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, summary = r3_run(tmp_path, monkeypatch, "classic", "v5")
+    assert code == 1
+    assert "recorded mode v5; the trial asked for classic" in summary["error"]
+
+
+def test_missing_costs_metrics_leave_the_forecast_unknown_without_stopping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, summary = r3_run(tmp_path, monkeypatch, "v5", "v5", rows=[])
+    assert code == 0
+    row = summary["trials"][0]
+    assert row["r3_error"] == "No costs metrics row for run-one"
+    assert row["forecast_p50_usd"] is None and row["mode"] == "v5"
+    assert row["reads_blocked"] == 3

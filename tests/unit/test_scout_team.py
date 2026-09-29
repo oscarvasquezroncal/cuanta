@@ -502,6 +502,7 @@ def native_run(
             forecast_error=None,
             scout=True,
             docs=docs,
+            read_hooks=False,
         ),
     )
     recorder = Recorder()

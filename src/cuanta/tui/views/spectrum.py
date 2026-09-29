@@ -14,6 +14,7 @@ from textual.widgets.tree import TreeNode
 
 from cuanta.application.spectrum import SpectrumResult
 from cuanta.domain.audit import AuditStatus
+from cuanta.domain.cost_trend import CostTrend
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.ledger import Run
 from cuanta.domain.messages import parse_english
@@ -26,6 +27,7 @@ from cuanta.tui.cache_text import first_request_text
 from cuanta.tui.fmt import compact, glyph, money, status_style
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.index_text import index_content
+from cuanta.tui.metrics_text import trend_cells
 from cuanta.tui.read_efficiency_text import utilization_note
 from cuanta.tui.services import ALL_IMPORTED, Services
 from cuanta.tui.widgets.flow import FlowRow
@@ -34,6 +36,16 @@ LATEST = ""
 VIEWS = (View.AGENT, View.MODEL, View.TOOL, View.FILE)
 LEAK_COLUMNS = ("col_kind", "col_subject", "col_agent", "col_tokens", "col_detail")
 GATEWAY_LEAKS = frozenset({LeakKind.AMPLIFICATION, LeakKind.TEST_OUTPUT})
+TREND_TAB = "tab-trend"
+TREND_COLUMNS = (
+    "spectrum.col_provider",
+    "spectrum.col_task",
+    "costs.col_runs",
+    "costs.col_accepted",
+    "costs.col_per_accepted",
+    "spectrum.col_trend",
+)
+TREND_NUMERIC = frozenset({2, 3, 4})
 
 
 def run_option(run: Run, t: Catalog) -> str:
@@ -115,6 +127,13 @@ class SpectrumView(VerticalScroll):
                 yield Static("", id="plan-weeks", classes="bars")
             with TabPane(t("anatomy.title"), id="tab-anatomy"):
                 yield Static("", id="spectrum-anatomy", classes="bars")
+            with TabPane(t("spectrum.tab_trend"), id=TREND_TAB):
+                yield Static("", id="spectrum-trend-title", classes="card-title")
+                yield DataTable(id="spectrum-trend", cursor_type="none", zebra_stripes=True)
+                yield Static(
+                    Content.styled(t("spectrum.trend_note"), "$text-muted"),
+                    id="spectrum-trend-note",
+                )
 
     def on_mount(self) -> None:
         with suppress(NoMatches):
@@ -124,6 +143,10 @@ class SpectrumView(VerticalScroll):
         table = self.query_one("#leaks", DataTable)
         for key in LEAK_COLUMNS:
             table.add_column(self._t(f"spectrum.{key}"), key=key)
+        trend = self.query_one("#spectrum-trend", DataTable)
+        for index, key in enumerate(TREND_COLUMNS):
+            label = Text(self._t(key), justify="right" if index in TREND_NUMERIC else "left")
+            trend.add_column(label, key=key)
         self._show_actions(None)
         self._set_loaded(False)
 
@@ -254,6 +277,27 @@ class SpectrumView(VerticalScroll):
         none = t("spectrum.no_windows")
         self.query_one("#plan-windows", Static).update(bar_lines(window_rows(windows[-12:]), none))
         self.query_one("#plan-weeks", Static).update(bar_lines(window_rows(weeks[-8:]), none))
+        self._show_trend(result.trend)
+
+    def _show_trend(self, trend: CostTrend) -> None:
+        tabs = self.query_one("#spectrum-tabs", TabbedContent)
+        if trend.empty:
+            tabs.hide_tab(TREND_TAB)
+            return
+        self.query_one("#spectrum-trend-title", Static).update(
+            self._t("spectrum.trend_title", limit=trend.limit)
+        )
+        table = self.query_one("#spectrum-trend", DataTable)
+        table.clear()
+        for index, row in enumerate(trend.rows):
+            table.add_row(
+                *(
+                    Text(cell, justify="right" if column in TREND_NUMERIC else "left")
+                    for column, cell in enumerate(trend_cells(self._t, row))
+                ),
+                key=str(index),
+            )
+        tabs.show_tab(TREND_TAB)
 
     def _audit(self, result: SpectrumResult) -> Content:
         t = self._t

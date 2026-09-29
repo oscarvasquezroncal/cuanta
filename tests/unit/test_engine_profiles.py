@@ -314,3 +314,46 @@ def test_codex_index_server_inherits_the_state_root_inside_an_isolated_copy() ->
     assert server["command"] == python
     assert server["args"] == ["-m", "cuanta", "mcp", "serve"]
     assert server["env"] == {STATE_ROOT_ENV: state}
+
+
+@pytest.mark.parametrize("session", ["lean", "full"])
+@pytest.mark.parametrize("discipline", [False, True])
+def test_a_native_launch_knows_whether_its_profile_carries_the_discipline_hooks(
+    tmp_path: Path, session: str, discipline: bool
+) -> None:
+    engine = ClaudeCodeEngine(FakeRunner())
+    workspace = LocalWorkspace(tmp_path)
+    workspace.write_text("docs/MANDATE_TEMPLATE.md", TEMPLATE)
+    ledger = MemoryLedger()
+    clock = FixedClock()
+    service = MandateService(
+        workspace, ledger, DecisionMaker(HeuristicInstinct(), ledger, clock.now_iso), clock.now_iso
+    )
+    built = MandateFlow(
+        service,
+        lambda _: engine,
+        lambda chosen: owned_launcher(chosen, session),
+        Stack,
+        lambda _: ({}, None),
+        str(tmp_path),
+        engine.name,
+        0.0,
+        read_discipline=discipline,
+    )
+    prepared = built.prepare(REQUEST, 0, MandateOptions(simple=True))
+    assert prepared.read_hooks is (discipline and session == "lean")
+
+
+def owned_launcher(engine: Engine, session: str) -> EngineLauncher:
+    return EngineLauncher(
+        engine,
+        MemoryLedger(),
+        FixedClock(),
+        lambda: "RUN1",
+        lambda size: b"\x01" * size,
+        "project",
+        4318,
+        None,
+        default_session=session,
+        guard_files=lambda spec: ("", ""),
+    )
