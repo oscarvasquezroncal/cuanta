@@ -105,6 +105,7 @@ from cuanta.domain.progress import (
 from cuanta.domain.real_costs import CostReport, cost_report
 from cuanta.domain.report import ContextSplit, file_refs, next_request, parse_sections
 from cuanta.domain.routing import (
+    SCOUT_ROLES,
     Provider,
     Role,
     RoleRoute,
@@ -114,6 +115,7 @@ from cuanta.domain.routing import (
     roles_that_run,
 )
 from cuanta.domain.sandbox import ChangeKind
+from cuanta.domain.scout import DocsChoice, ShapeChoice
 from cuanta.domain.team import ProviderAdvice, RoleCard, team_cards
 from cuanta.domain.telemetry import WiringPlan, WiringReport, WiringState
 from cuanta.domain.terminal import TerminalKind, TerminalReport
@@ -1110,6 +1112,8 @@ class FakeServices:
 
     forecast: PlannedForecast | None = None
     forecast_error: Message | None = None
+    team_shape: ShapeChoice | None = None
+    team_docs: DocsChoice | None = None
 
     def team_plan(
         self, request: MandateRequest, options: MandateOptions
@@ -1119,7 +1123,13 @@ class FakeServices:
         plan = RoutePlan(self.team_policy(options), None, None, (), routes, "heuristic")
         cap = resolve_budget(options, request.type, 0.0)
         found = estimate(plan, self.similar, load_prices(), request.type, options.depth, cap)
-        return plan, replace(found, forecast=self.forecast, forecast_error=self.forecast_error)
+        return plan, replace(
+            found,
+            forecast=self.forecast,
+            forecast_error=self.forecast_error,
+            shape=self.team_shape,
+            docs=self.team_docs,
+        )
 
     def team_policy(self, options: MandateOptions) -> RoutingPolicy:
         return RoutingPolicy(
@@ -1128,7 +1138,12 @@ class FakeServices:
 
     def routes(self, request: MandateRequest, options: MandateOptions) -> tuple[RoleRoute, ...]:
         policy = self.team_policy(options)
-        requests = default_requests(policy, roles_that_run(request.type, options.simple))
+        roles = roles_that_run(request.type, options.simple)
+        if roles and self.team_shape is not None and self.team_shape.scout:
+            roles = SCOUT_ROLES
+        if self.team_docs is not None and not self.team_docs.on:
+            roles = tuple(role for role in roles if role is not Role.DOCS)
+        requests = default_requests(policy, roles)
         return plan_route(policy, self.catalog, requests)
 
     def team_cards(

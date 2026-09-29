@@ -422,6 +422,7 @@ ENGLISH: dict[str, str] = {
     "role.senior": "Senior",
     "role.tester": "Tester",
     "role.docs": "Docs",
+    "role.scout": "Scout",
     "question.clarity": "How clear and actionable is this request for a coding agent (0-2)?",
     "question.gap_evidence": (
         "Does the request include concrete evidence, such as an error message, "
@@ -453,6 +454,10 @@ ENGLISH: dict[str, str] = {
         "{role}: {model} belongs to another provider; a team uses one provider ({provider})"
     ),
     "route.pin_lost": "{role} is pinned to {model}, but the route chose another model",
+    "route.pin_absent": (
+        "{role} is pinned to {model}, but {role} does not run in this shape; "
+        "drop the pin or the --shape"
+    ),
     "route.pins_rejected": "role pins cannot be honored",
     "provider.claude": "Claude team",
     "provider.codex": "GPT team",
@@ -658,6 +663,60 @@ ENGLISH: dict[str, str] = {
     "envelope.jev_failed": "Jev did not answer, the plain forecast is kept: {error}",
     "envelope.jev_tier": "Jev suggests the {tier} tier for the {role}",
     "envelope.failed": "Forecast unavailable, the launch goes ahead without one: {error}",
+    "scout.mode.native": "as a subagent in the session",
+    "scout.mode.launch": "as its own read-only launch",
+    "scout.shape_forced": "Shape: scout and senior (forced); the scout runs {mode}",
+    "scout.shape_auto": (
+        "Shape: scout and senior, because exploration is {share} of the forecast, above "
+        "{threshold}; the scout runs {mode}"
+    ),
+    "scout.shape_pinned": (
+        "Shape: scout and senior, because the scout is pinned; the scout runs {mode}"
+    ),
+    "scout.refused": "--shape scout applies to features, fixes and refactors",
+    "scout.refused_simple": "--shape scout needs a team; simple mode runs one agent",
+    "scout.refused_engine": "--shape scout needs a Claude or GPT team",
+    "scout.refused_routing": "--shape scout needs routing: the scout is a routed role",
+    "scout.pack": (
+        "{role} evidence pack: {tokens} of {budget} tokens, {facts} facts, {snippets} snippets, "
+        "edit set {edit}; cuanta cat {capsule}"
+    ),
+    "scout.pack_trimmed": (
+        "evidence pack trimmed to fit: {snippets} snippets and {facts} facts dropped; the edit "
+        "set is kept"
+    ),
+    "scout.pack_over": (
+        "evidence pack still {tokens} tokens after trimming, over its {budget}-token budget; "
+        "the edit set is kept"
+    ),
+    "scout.pack_invalid": "{count} evidence pack items did not match the working copy",
+    "scout.pack_fallback": (
+        "the {role} returned no evidence pack; the senior gets its reads and cuanta's edit set"
+    ),
+    "scout.pack_plan_edit": (
+        "the {role} confirmed no edit set; the senior uses cuanta's change plan: {paths}"
+    ),
+    "scout.leaks": "{role} read {count} files outside the pack and the edit set: {paths}",
+    "scout.named": "{role} edited files outside the edit set and named them: {paths}",
+    "scout.unnamed": (
+        "{role} edited files outside the edit set without naming them in its handoff: {paths}"
+    ),
+    "docs.requested": "Docs: on, the request asks for docs",
+    "docs.not_requested": "Docs: off, the request does not ask for docs",
+    "docs.trial": "Docs: off in trials",
+    "docs.forced_on": "Docs: on (runs.docs = on)",
+    "docs.forced_off": "Docs: off (runs.docs = off)",
+    "docs.pinned": "Docs: on, the docs role is pinned",
+    "docs.funds_repair": (
+        "repair budget: ${cap} is held for one repair turn, funded from the docs share (docs is "
+        "off)"
+    ),
+    "queue.warm_until": "warm prefix until {time}",
+    "queue.cold_since": "prefix cold since {time}; the next mandate writes it again",
+    "queue.warm_unknown": (
+        "warm prefix: unknown (needs Claude, a cache TTL saved for this auth mode and a recent "
+        "request)"
+    ),
     "route.policy_role": "{role} on {tier} because your policy uses {tier} for {purpose}",
     "route.instinct_scope": "Instinct picked {tier} for a {scope} request",
     "route.instinct_reach": (
@@ -668,6 +727,7 @@ ENGLISH: dict[str, str] = {
     "purpose.senior": "development",
     "purpose.tester": "testing",
     "purpose.docs": "documentation",
+    "purpose.scout": "exploration",
     "tier.economy": "economy",
     "tier.standard": "standard",
     "tier.premium": "premium",

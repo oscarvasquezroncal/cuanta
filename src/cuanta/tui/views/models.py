@@ -231,7 +231,8 @@ class ModelsView(VerticalScroll):
         event.stop()
         preset = Preset(event.value)
         for role, tier in PRESET_ROLES[preset].items():
-            self.query_one(f"#tier-{role.value}", Select).value = tier.value
+            if role in ROLES:
+                self.query_one(f"#tier-{role.value}", Select).value = tier.value
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id != "models-table":

@@ -39,6 +39,7 @@ from cuanta.tui.governor_text import governor_content
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.index_text import index_lines
 from cuanta.tui.read_efficiency_text import read_efficiency_content
+from cuanta.tui.scout_text import scout_content
 from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.screens.run_file import RunFileScreen
 from cuanta.tui.services import Services
@@ -170,7 +171,7 @@ class ResultScreen(Screen[None]):
                 TabPane(t("result.tab_consumption"), id="tab-consumption"),
                 VerticalScroll(id="result-consumption-scroll"),
             ):
-                yield from self._governor()
+                yield from self._panels()
                 yield Static(
                     read_efficiency_content(t, view.read_efficiency), id="result-read-efficiency"
                 )
@@ -178,6 +179,14 @@ class ResultScreen(Screen[None]):
                 yield DataTable(id="result-agents", cursor_type="none", zebra_stripes=True)
                 yield Static(self._consumption(), id="result-consumption")
         yield Footer()
+
+    def _panels(self) -> ComposeResult:
+        yield from self._scout()
+        yield from self._governor()
+
+    def _scout(self) -> ComposeResult:
+        if self.view.scout.shown:
+            yield Static(scout_content(self._t, self.view.scout), id="result-scout")
 
     def _governor(self) -> ComposeResult:
         if self.view.governor.shown:
@@ -492,6 +501,8 @@ class ResultScreen(Screen[None]):
             self.query_one("#result-governor", Static).update(
                 governor_content(self._t, view.governor)
             )
+        with suppress(NoMatches):
+            self.query_one("#result-scout", Static).update(scout_content(self._t, view.scout))
         self._paint_decision()
         if view.trial is not None:
             self._paint_trial()

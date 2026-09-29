@@ -299,7 +299,8 @@ def test_routed_mandate_passes_agents_by_file_and_audits_each_agent(
     monkeypatch.setenv("FAKE_CLAUDE_AGENTS_OUT", str(sent))
     run = _pounce(root, {**env, "FAKE_CLAUDE_AGENTS_OUT": str(sent)})
     agents = json.loads(sent.read_text(encoding="utf-8"))
-    assert set(agents) == {"architecture-analyst", "python-senior", "tester", "docs-updater"}
+    assert set(agents) == {"architecture-analyst", "python-senior", "tester"}
+    assert run["docs"] == {"on": False, "reason": "not_requested"}
     installed = (root / ".claude" / "agents" / "tester.md").read_text(encoding="utf-8")
     tester_prompt = agents["tester"]["prompt"]
     if not graph_available:
@@ -315,7 +316,6 @@ def test_routed_mandate_passes_agents_by_file_and_audits_each_agent(
     assert "Protected paths are readonly." in indexed_context
     assert "src/calc/__init__.py" in indexed_context
     assert agents["python-senior"]["model"] == "claude-opus-5-5"
-    assert agents["docs-updater"]["model"] == "claude-haiku-4-5"
     audit = {row["agent"]: row for row in run["audit"]}
     assert set(audit) == {*agents, "main"}
     assert all(row["status"] == "match" for row in audit.values()), audit

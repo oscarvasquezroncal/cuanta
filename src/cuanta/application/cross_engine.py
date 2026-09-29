@@ -13,7 +13,8 @@ from cuanta.application.forecast import (
     forecast_failure,
     publish_forecast,
 )
-from cuanta.application.routing import RoutePlan
+from cuanta.application.routing import RoutePlan, without_role
+from cuanta.application.scout import checker_prompt, read_budget, scout_prompt, senior_prompt
 from cuanta.application.steering import (
     GovernorSetup,
     Steering,
@@ -22,6 +23,7 @@ from cuanta.application.steering import (
     restart_left,
     resumable_thread,
     resume_prompt,
+    role_forecast,
     role_steering,
 )
 from cuanta.domain.agents import AgentDefinition, role_of
@@ -30,9 +32,22 @@ from cuanta.domain.change_plan import ChangePlan, guarded, plan_metrics
 from cuanta.domain.costs import CostSource, sum_costs
 from cuanta.domain.depth import DEFAULT_DEPTH, MAX_TURNS
 from cuanta.domain.engine import BUDGET_LIMIT_SUBTYPE, GOVERNOR_STOP_SUBTYPE, EngineOutcome
-from cuanta.domain.envelope import PIPELINE_SHAPE, is_fix
+from cuanta.domain.envelope import PIPELINE_SHAPE, SCOUT_SHAPE, is_fix
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.estimates import RunEstimate
+from cuanta.domain.evidence_pack import (
+    PackCheck,
+    SeniorScope,
+    change_digest,
+    check_pack,
+    fallback_pack,
+    leaked_reads,
+    outside_edits,
+    pack_handoff,
+    parse_pack,
+    render_pack,
+    scope_plan,
+)
 from cuanta.domain.governor import (
     RESUMED,
     ROTATED,
@@ -68,6 +83,7 @@ from cuanta.domain.role_budgets import (
     role_split,
 )
 from cuanta.domain.role_handoff import (
+    Fact,
     HandoffChain,
     HandoffStatus,
     RoleHandoff,
@@ -83,11 +99,23 @@ from cuanta.domain.role_handoff import (
 )
 from cuanta.domain.routing import Provider, Role, parse_provider
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, docs_only
+from cuanta.domain.scout import (
+    SCOUT_TOOLS,
+    DocsChoice,
+    DocsMode,
+    DocsReason,
+    ScoutMode,
+    docs_choice,
+)
+from cuanta.domain.scout_report import docs_payload, scout_payload
 from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.engine import Engine
 from cuanta.ports.progress import ProgressSink
 
 CROSS_ORDER = (Role.ANALYST, Role.SENIOR, Role.TESTER, Role.DOCS)
+SCOUT_ORDER = (Role.SCOUT, Role.SENIOR, Role.TESTER, Role.DOCS)
+TEAM_ROLES = frozenset({*CROSS_ORDER, *SCOUT_ORDER})
+READ_ONLY_ROLES = frozenset({Role.ANALYST, Role.SCOUT})
 CROSS_KIND = "cross"
 DEFAULT_TOOLS = ("Read", "Grep", "Glob", "Edit", "Write")
 WRITING_ROLES = frozenset({Role.SENIOR, Role.TESTER, Role.DOCS})
@@ -159,6 +187,15 @@ class SkippedRole:
 
 
 @dataclass(frozen=True, slots=True)
+class ScoutRecord:
+    run_id: str
+    capsule: str
+    check: PackCheck
+    senior: SeniorScope | None = None
+    mode: ScoutMode = ScoutMode.LAUNCH
+
+
+@dataclass(frozen=True, slots=True)
 class CrossReport:
     steps: tuple[CrossStep, ...]
     ok: bool
@@ -172,6 +209,8 @@ class CrossReport:
     handoffs: tuple[RoleHandoff, ...] = ()
     guard_role: str = ""
     governor: tuple[ReactionTaken, ...] = ()
+    scout: ScoutRecord | None = None
+    docs: DocsChoice | None = None
 
     @property
     def verification_outputs(self) -> tuple[str, ...]:
@@ -229,6 +268,13 @@ def cross_metrics(report: CrossReport) -> dict[str, object]:
     )
     if governor:
         base["governor"] = governor
+    if report.scout is not None:
+        scout = report.scout
+        base["scout"] = scout_payload(
+            scout.mode.value, scout.run_id, scout.capsule, scout.check, scout.senior
+        )
+    if report.docs is not None and report.docs.reason is not DocsReason.FORCED_ON:
+        base["docs"] = docs_payload(report.docs)
     if report.change_plan is None:
         return base
     engine = "claude" if all(step.engine == "claude" for step in report.steps) else "cross"
@@ -254,15 +300,24 @@ def guidance(
     verify: Sequence[str],
     partial: bool = False,
     no_builds: bool = False,
+    pack: bool = False,
 ) -> str:
     opener = " with Cuanta page (path and lines as start:end)" if index_tools else ""
     finder = " Use Cuanta find before Glob or Grep." if index_tools else ""
+    source = "the evidence pack" if pack else "the chain"
     lines = [
-        "READ ONLY WHAT IS NEEDED: the chain lists anchored facts as path:start-end. "
-        f"Open those ranges{opener} instead of whole files, and do not re-read files the chain "
+        f"READ ONLY WHAT IS NEEDED: {source} lists anchored facts as path:start-end. "
+        f"Open those ranges{opener} instead of whole files, and do not re-read files {source} "
         f"covers unless an anchor is marked stale.{finder}"
     ]
-    if partial:
+    if partial and pack:
+        lines.append(
+            "The scout's evidence pack is partial: it stopped early or returned no structured "
+            "pack. That does not block you: treat the request, the pack's anchored facts and its "
+            "edit set as the plan your instructions expect, fill any gap by opening only the "
+            "cited ranges, and do your part."
+        )
+    elif partial:
         lines.append(
             "An earlier role's handoff is partial: it stopped early or returned no structured "
             "handoff. That does not block you: treat the request, the anchored facts and the plan "
@@ -402,6 +457,11 @@ class _Pass:
     forecast: PlannedForecast | None = None
     governed: list[ReactionTaken] = field(default_factory=list)
     trailing: list[CrossStep] = field(default_factory=list)
+    order: tuple[Role, ...] = CROSS_ORDER
+    docs: DocsChoice | None = None
+    scout: ScoutRecord | None = None
+    before: dict[str, str | None] = field(default_factory=dict)
+    origin: Mapping[str, str] = field(default_factory=dict)
 
     def report(
         self, state: CompletionState, stopped: Message | None = None, guard_role: str = ""
@@ -417,7 +477,13 @@ class _Pass:
             handoffs=tuple(self.handoffs),
             guard_role=guard_role,
             governor=tuple(self.governed),
+            scout=self.scout,
+            docs=self.docs,
         )
+
+    @property
+    def scouted(self) -> bool:
+        return self.order == SCOUT_ORDER
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,7 +511,7 @@ class CrossEnginePipeline:
         checkpoint: Callable[[], Message | None] | None = None,
         estimator: Estimator | None = None,
         depth: str = "",
-        allocator: Callable[[RoutePlan, str, str, float, bool], RepairBudget] | None = None,
+        allocator: Callable[[RoutePlan, str, str, float, bool, bool], RepairBudget] | None = None,
         refresh_index: Callable[[], None] | None = None,
         change_plan: Callable[[MandateRequest], ChangePlan] | None = None,
         snapshot: Callable[[], Mapping[str, str]] | None = None,
@@ -465,7 +531,9 @@ class CrossEnginePipeline:
         governor: GovernorSetup | None = None,
         read_discipline: Callable[[str], bool] | None = None,
         read_max_lines: int = READ_LINE_LIMIT,
+        docs_mode: DocsMode = DocsMode.ON,
     ) -> None:
+        self._docs_mode = docs_mode
         self._read_discipline = read_discipline
         self._read_max_lines = read_max_lines
         self._governor = governor
@@ -633,18 +701,31 @@ class CrossEnginePipeline:
         protection: ChangePlan | None,
         baseline: Mapping[str, str],
     ) -> CrossReport:
+        order = SCOUT_ORDER if plan.route(Role.SCOUT) is not None else CROSS_ORDER
+        pinned = plan.route(Role.DOCS) is not None and Role.DOCS in plan.policy.role_models
+        docs = (
+            docs_choice(self._docs_mode, request, self._sandbox is not None, pinned)
+            if request.type != INVESTIGATION
+            else None
+        )
+        docs_off = docs is not None and not docs.on
+        if docs_off:
+            plan = without_role(plan, Role.DOCS)
         routed = tuple(
             role
-            for role in CROSS_ORDER
+            for role in order
             if (route := plan.route(role)) is not None and route.model is not None
         )
         verify = protection.verify if protection is not None else ()
         repairable = bool(verify) and self._verifier is not None
         split = (
-            self._allocator(plan, request.type, self._depth, self._budget, repairable)
+            self._allocator(plan, request.type, self._depth, self._budget, repairable, docs_off)
             if self._allocator is not None
             else role_split(
-                dict.fromkeys(routed), self._budget, is_fix(request.type) and repairable
+                dict.fromkeys(routed),
+                self._budget,
+                is_fix(request.type) and repairable,
+                docs_off=docs_off and repairable,
             )
         )
         reserve = split.repair_usd if repairable else 0.0
@@ -660,13 +741,23 @@ class CrossEnginePipeline:
             verify,
             handoff_budget(self._depth),
             repair_usd=reserve,
+            order=order,
+            docs=docs,
         )
+        if docs is not None and docs.reason is not DocsReason.FORCED_ON:
+            progress.publish(note(Status.INFO, docs.message))
         if reserve > 0:
-            key = "cross.repair_reserve_docs" if split.from_docs else "cross.repair_reserve"
+            key = (
+                "cross.repair_reserve"
+                if not split.from_docs
+                else "cross.repair_reserve_docs"
+                if is_fix(request.type)
+                else "docs.funds_repair"
+            )
             progress.publish(note(Status.INFO, msg(key, cap=f"{reserve:.4f}")))
         self.completed = state.steps
         definitions = self._definitions()
-        for role in CROSS_ORDER:
+        for role in order:
             halt = self._halt(state)
             if halt is not None:
                 return halt
@@ -735,7 +826,7 @@ class CrossEnginePipeline:
                 else msg("cross.role_budget", role=role.value)
             )
             return state.report(CompletionState.PARTIAL, reason)
-        read_only = role is Role.ANALYST or state.request.type == INVESTIGATION
+        read_only = role in READ_ONLY_ROLES or state.request.type == INVESTIGATION
         refusal = readonly_unavailable(route.engine) if read_only else None
         if refusal is not None:
             return state.report(CompletionState.FAILED, refusal)
@@ -768,7 +859,7 @@ class CrossEnginePipeline:
         definition: AgentDefinition | None,
         role_cap: float,
     ) -> LaunchSpec:
-        read_only = role is Role.ANALYST or state.request.type == INVESTIGATION
+        read_only = role in READ_ONLY_ROLES or state.request.type == INVESTIGATION
         native = role_cap
         state.progress.publish(
             started(
@@ -799,10 +890,15 @@ class CrossEnginePipeline:
             if state.protection is not None and read_only
             else state.protection
         )
+        scouted = state.scout if role is Role.SENIOR else None
+        if scouted is not None:
+            effective = scope_plan(state.protection, scouted.check.pack)
         indexed = self._index_tools(engine) if self._index_tools is not None else False
         disciplined = self._read_discipline(engine) if self._read_discipline is not None else False
         chain_text = render_chain(self._refresh(merge_chain(state.handoffs)), state.budget_tokens)
-        stable, volatile, packed = self._context(state.request, role, effective)
+        stable, volatile, packed = (
+            self._context(state.request, role, effective) if scouted is None else ("", "", False)
+        )
         partial = any(item.status is not HandoffStatus.DONE for item in state.handoffs)
         advice = guidance(
             role,
@@ -810,15 +906,22 @@ class CrossEnginePipeline:
             state.verify if not read_only else (),
             partial,
             engine in self._build_blocked,
+            scouted is not None,
         )
         if disciplined and engine != "claude":
             advice = f"{advice}\n{discipline_prompt(self._read_max_lines)}"
         body = definition.prompt if definition is not None else ""
+        prompt = (
+            self._scout_prompt(state, role, engine, body, stable, volatile, advice)
+            if state.scouted and role in {Role.SCOUT, Role.SENIOR, Role.TESTER}
+            else role_prompt(body, role, state.request, chain_text, stable, volatile, advice)
+        )
+        tools = SCOUT_TOOLS if role is Role.SCOUT else tools_of(definition)
         return LaunchSpec(
             kind=CROSS_KIND,
-            prompt=role_prompt(body, role, state.request, chain_text, stable, volatile, advice),
+            prompt=prompt,
             cwd=self._cwd,
-            allowed_tools=tools_of(definition) if engine == "claude" else (),
+            allowed_tools=tools if engine == "claude" else (),
             model=model,
             max_budget_usd=native,
             max_turns=self._max_turns if engine == "claude" else 0,
@@ -835,6 +938,168 @@ class CrossEnginePipeline:
             read_discipline=True if disciplined else None,
         )
 
+    def _scout_prompt(
+        self,
+        state: _Pass,
+        role: Role,
+        engine: str,
+        body: str,
+        stable: str,
+        volatile: str,
+        advice: str,
+    ) -> str:
+        request = request_block(state.request)
+        scouted = state.scout
+        if role is Role.SCOUT or scouted is None:
+            return scout_prompt(body, request, stable, volatile, advice)
+        pack = scouted.check.pack
+        if role is Role.SENIOR:
+            planned = role_forecast(state.forecast, Role.SENIOR)
+            reads = read_budget(pack, planned.stops.max_reads if planned is not None else 0)
+            return senior_prompt(body, request, pack, reads, advice)
+        later = [item for item in state.handoffs if item.role != Role.SCOUT.value]
+        chain = render_chain(self._refresh(merge_chain(later)), state.budget_tokens)
+        return checker_prompt(
+            body,
+            request,
+            chain,
+            self._digest(state),
+            pack.tests,
+            advice,
+            engine in self._build_blocked,
+        )
+
+    def _text(self, path: str) -> str | None:
+        lines = self._lines_of(path) if self._lines_of is not None else None
+        return "\n".join(lines) if lines is not None else None
+
+    def _digest(self, state: _Pass) -> str:
+        outputs = {path for item in state.rounds for path in item.outputs}
+        changed = tuple(path for path in _diff(state.origin, self._snap()) if path not in outputs)
+        return change_digest(changed, state.before, self._text)
+
+    def _scouted(
+        self,
+        state: _Pass,
+        turn: _Turn,
+        text: str,
+        reads: ReadRanges,
+        run_id: str,
+        stopped: str,
+    ) -> RoleHandoff:
+        protection = state.protection
+        planned = tuple(target.path for target in protection.edit) if protection else ()
+        parsed = parse_pack(text)
+        facts = tuple(Fact(path, start, end, "read by scout") for path, start, end in reads)
+        pack = parsed if parsed is not None else fallback_pack(text, facts, ())
+        if stopped:
+            pack = replace(pack, status=HandoffStatus.PARTIAL)
+        check = check_pack(pack, self._lines_of, planned)
+        digest, _, _ = self._capsules.put(render_pack(check.pack))
+        capsule = capsule_id(digest)
+        state.scout = ScoutRecord(run_id, capsule, check)
+        state.origin = dict(state.baseline)
+        state.before = (
+            {path: self._text(path) for path in check.pack.edit}
+            if self._lines_of is not None
+            else {}
+        )
+        self._pack_notes(state, turn.role, check, capsule, parsed is None)
+        return pack_handoff(
+            check,
+            turn.role.value,
+            engine=turn.engine,
+            model=turn.model,
+            run_id=run_id,
+            capsule=capsule,
+            verify=state.verify,
+            reason=stopped,
+        )
+
+    def _pack_notes(
+        self, state: _Pass, role: Role, check: PackCheck, capsule: str, fallback: bool
+    ) -> None:
+        pack = check.pack
+        publish = state.progress.publish
+        publish(
+            note(
+                Status.INFO,
+                msg(
+                    "scout.pack",
+                    role=role.value,
+                    tokens=f"{check.tokens:,}",
+                    budget=f"{check.budget:,}",
+                    facts=len(pack.facts),
+                    snippets=len(pack.snippets),
+                    edit=", ".join(pack.edit[:SHOWN_PATHS]) or "-",
+                    capsule=capsule,
+                ),
+            )
+        )
+        if fallback:
+            publish(note(Status.WARN, msg("scout.pack_fallback", role=role.value)))
+        if check.edit_from_plan:
+            paths = ", ".join(pack.edit[:SHOWN_PATHS])
+            publish(note(Status.WARN, msg("scout.pack_plan_edit", role=role.value, paths=paths)))
+        if check.invalid:
+            publish(note(Status.WARN, msg("scout.pack_invalid", count=check.invalid)))
+        if check.trimmed:
+            publish(
+                note(
+                    Status.INFO,
+                    msg(
+                        "scout.pack_trimmed",
+                        snippets=check.dropped_snippets,
+                        facts=check.dropped_facts,
+                    ),
+                )
+            )
+        if check.over_budget:
+            publish(
+                note(
+                    Status.WARN,
+                    msg(
+                        "scout.pack_over",
+                        tokens=f"{check.tokens:,}",
+                        budget=f"{check.budget:,}",
+                    ),
+                )
+            )
+
+    def _senior_scope(self, state: _Pass, handoff: RoleHandoff) -> None:
+        scouted = state.scout
+        if scouted is None:
+            return
+        pack = scouted.check.pack
+        steps = [step for step in state.steps if step.role is Role.SENIOR]
+        changed = tuple(dict.fromkeys(path for step in steps for path in step.changed_files))
+        reads = tuple(dict.fromkeys(path for step in steps for path in step.read_files))
+        earlier = scouted.senior
+        scope = SeniorScope(
+            pack.edit,
+            pack.files,
+            leaked_reads(reads, pack.edit, pack.files),
+            outside_edits(changed, pack.edit, handoff.plan.edit),
+        )
+        state.scout = replace(scouted, senior=scope)
+        known = (earlier.leaked or ()) if earlier is not None else ()
+        named = earlier.outside.named if earlier is not None else ()
+        unnamed = earlier.outside.unnamed if earlier is not None else ()
+        role = Role.SENIOR.value
+        leaked = tuple(path for path in scope.leaked or () if path not in known)
+        if leaked:
+            paths = ", ".join(leaked[:SHOWN_PATHS])
+            text = msg("scout.leaks", role=role, count=len(leaked), paths=paths)
+            state.progress.publish(note(Status.WARN, text))
+        fresh = tuple(path for path in scope.outside.named if path not in named)
+        if fresh:
+            paths = ", ".join(fresh[:SHOWN_PATHS])
+            state.progress.publish(note(Status.INFO, msg("scout.named", role=role, paths=paths)))
+        stray = tuple(path for path in scope.outside.unnamed if path not in unnamed)
+        if stray:
+            paths = ", ".join(stray[:SHOWN_PATHS])
+            state.progress.publish(note(Status.WARN, msg("scout.unnamed", role=role, paths=paths)))
+
     def _root_forecast(self, state: _Pass, turn: _Turn) -> _Turn:
         provider = parse_provider(turn.engine)
         if state.parent or provider is None or self._forecaster is None or self._new_run_id is None:
@@ -846,7 +1111,7 @@ class CrossEnginePipeline:
                 state.plan,
                 provider,
                 self._depth,
-                PIPELINE_SHAPE,
+                SCOUT_SHAPE if state.scouted else PIPELINE_SHAPE,
                 self._budget,
                 state.protection,
                 max_turns=self._max_turns if provider is Provider.CLAUDE else 0,
@@ -1074,17 +1339,22 @@ class CrossEnginePipeline:
         state.baseline = current
         clipped, capsule = self._capsule(text)
         reads = tuple(item for run_id in (*earlier, launch.run.id) for item in self._reads(run_id))
-        handoff = self._stamp(
-            build_handoff(
-                text,
-                role.value,
-                engine=turn.engine,
-                model=turn.model,
-                changed=(*changed, *unreadable),
-                reads=reads,
-                run_id=launch.run.id,
-                capsule=capsule,
-                stopped=subtype if budget_stop and not carried else "",
+        stopped = subtype if budget_stop and not carried else ""
+        handoff = (
+            self._scouted(state, turn, text, reads, launch.run.id, stopped)
+            if role is Role.SCOUT
+            else self._stamp(
+                build_handoff(
+                    text,
+                    role.value,
+                    engine=turn.engine,
+                    model=turn.model,
+                    changed=(*changed, *unreadable),
+                    reads=reads,
+                    run_id=launch.run.id,
+                    capsule=capsule,
+                    stopped=stopped,
+                )
             )
         )
         covered = _folded(chain.covered)
@@ -1123,13 +1393,17 @@ class CrossEnginePipeline:
                 msg("cross.done", run=launch.run.id),
             )
         )
+        if role is Role.SENIOR:
+            self._senior_scope(state, handoff)
         stop = self._settle(state, turn, handoff, changed, ok, budget_stop, carried, subtype)
         if stop is not None:
             return stop
         if role in WRITING_ROLES and changed and not docs_only(changed):
             handoff, stop = self._check(state, turn, handoff, ok or carried, cost)
+            if role is Role.SENIOR:
+                self._senior_scope(state, handoff)
             if stop is not None:
-                return stop
+                return replace(stop, scout=state.scout)
         state.handoffs.append(handoff)
         return None
 

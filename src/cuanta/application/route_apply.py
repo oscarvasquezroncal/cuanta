@@ -4,7 +4,13 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
-from cuanta.application.routing import RouteAdvisor, RouteInputs, RoutePlan, with_overrides
+from cuanta.application.routing import (
+    RouteAdvisor,
+    RouteInputs,
+    RoutePlan,
+    with_overrides,
+    without_role,
+)
 from cuanta.domain.agents import (
     AgentDefinition,
     AgentRoute,
@@ -13,6 +19,7 @@ from cuanta.domain.agents import (
     contextual_agents,
     guarded_agents,
     parse_agent,
+    with_scout,
 )
 from cuanta.domain.audit import MAIN_AGENT, AuditRow, audit
 from cuanta.domain.change_plan import ChangePlan
@@ -53,6 +60,8 @@ class RouteOptions:
     depth: str = ""
     scope: Choice | None = None
     risk: float | None = None
+    scout: bool = False
+    docs: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,7 +210,9 @@ class MandateRouting:
             policy = depth_capped(
                 policy, profile(parse_depth(options.depth), request.type).tier_cap
             )
-        plan = self._advisor.plan(policy, self.inputs(request, options.clarity, options))
+        plan = self.shaped(
+            self._advisor.plan(policy, self.inputs(request, options.clarity, options)), options
+        )
         pins = dict(options.role_models)
         issues = self._advisor.pin_issues(plan, pins, (engine,))
         if not issues and pins and engine != CLAUDE and policy.mode is not RouteMode.OFF:
@@ -240,7 +251,8 @@ class MandateRouting:
             for route in plan.routes
             if route.model is not None and route.role is not Role.ORCHESTRATOR
         }
-        agents = build_agents(self.definitions(), routes, graph_available)
+        definitions = with_scout(self.definitions()) if options.scout else self.definitions()
+        agents = build_agents(definitions, routes, graph_available)
         orchestrator = plan.route(Role.ORCHESTRATOR) or plan.route(Role.ANALYST)
         return Applied(
             plan,
@@ -255,6 +267,10 @@ class MandateRouting:
             env_override=override,
             unset=unset,
         )
+
+    def shaped(self, plan: RoutePlan, options: RouteOptions) -> RoutePlan:
+        found = self._advisor.scout_plan(plan) if options.scout else plan
+        return found if options.docs else without_role(found, Role.DOCS)
 
     def record(self, run_id: str, task_type: str, applied: Applied) -> None:
         if applied.active:

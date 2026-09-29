@@ -568,10 +568,11 @@ def test_the_scout_shape_hands_the_senior_a_pack_instead_of_rereads() -> None:
     result = envelope(replace(_tight(), shape=SCOUT_SHAPE))
     scout, senior, _ = result.roles
     assert scout.model == "scout-model"
+    assert scout.role is Role.SCOUT
     assert senior.buckets.handoff == SCOUT_PACK_TOKENS
     assert senior.buckets.exploration == 2_000 + TOKENS_PER_READ
     single = envelope(replace(_tight(), shape=SCOUT_SHAPE, roles=(_role(Role.ORCHESTRATOR),)))
-    assert [item.role for item in single.roles] == [Role.ANALYST, Role.SENIOR]
+    assert [item.role for item in single.roles] == [Role.SCOUT, Role.SENIOR]
     fallback = envelope(
         replace(_tight(), shape=SCOUT_SHAPE, roles=(_role(Role.SENIOR),), economy=None)
     )
@@ -606,3 +607,22 @@ def test_forecast_record_serializes_buckets_roles_and_numeric_features() -> None
     assert stored.cap_usd is None
     assert stored.source == ENVELOPE_SOURCE
     assert "margin_usd" not in json.loads(stored.features)
+
+
+def test_a_routed_scout_role_prices_the_exploration_and_the_pipeline_ignores_it() -> None:
+    roles = (
+        _role(Role.ANALYST),
+        _role(Role.SCOUT, CHEAP),
+        _role(Role.SENIOR, DEAR),
+        _role(Role.TESTER),
+    )
+    inputs = replace(_inputs(), roles=roles, economy=RoleModel("other-economy", MID))
+    scout, senior, tester = envelope(replace(inputs, shape=SCOUT_SHAPE)).roles
+    assert (scout.role, scout.model) == (Role.SCOUT, "scout-model")
+    assert scout.buckets.exploration == 2_000 + TOKENS_PER_READ + 6 * 1_000
+    assert scout.requests == CLAUDE_LAUNCH_REQUESTS[Role.SCOUT]
+    assert scout.fixed.tokens == fixed_prefix(Provider.CLAUDE, Role.SCOUT).tokens
+    assert senior.buckets.handoff == SCOUT_PACK_TOKENS
+    assert tester.role is Role.TESTER
+    pipeline = envelope(inputs).roles
+    assert [item.role for item in pipeline] == [Role.ANALYST, Role.SENIOR, Role.TESTER]

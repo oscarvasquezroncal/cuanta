@@ -107,6 +107,7 @@ if TYPE_CHECKING:
     from cuanta.application.models import ModelService, ProbeOutcome
     from cuanta.application.new_files import NewFileReview
     from cuanta.application.outcomes import RunOutcomes
+    from cuanta.application.queue import MandateQueue
     from cuanta.application.refresh import RefreshProject
     from cuanta.application.results import ResultQuery
     from cuanta.application.route_apply import MandateRouting
@@ -135,6 +136,7 @@ if TYPE_CHECKING:
     from cuanta.domain.role_budgets import OvershootMargins, RepairBudget
     from cuanta.domain.routing import CostRange, Provider, RoutingPolicy
     from cuanta.domain.sandbox import SandboxLaunch
+    from cuanta.domain.scout import DocsChoice, ShapeChoice
     from cuanta.domain.shells import Shell
     from cuanta.domain.terminal import TerminalReport
     from cuanta.ports.engine import Engine
@@ -1023,6 +1025,112 @@ class Container:
         plan = self.route_advisor(ledger).plan(policy, inputs)
         return plan, cost_range(similar_costs(ledger.runs(), task_type, depth))
 
+    def docs_choice(self, request: MandateRequest, options: MandateOptions) -> DocsChoice | None:
+        from cuanta.domain.mandate import INVESTIGATION
+        from cuanta.domain.routing import Role
+        from cuanta.domain.scout import docs_choice, has_pin, parse_docs_mode
+
+        if options.simple or request.type == INVESTIGATION:
+            return None
+        return docs_choice(
+            parse_docs_mode(self.config.docs_mode),
+            request,
+            options.sandbox,
+            has_pin(options.route.role_models, Role.DOCS),
+        )
+
+    def shape_plan(self, plan: RoutePlan, shape: ShapeChoice, docs: DocsChoice | None) -> RoutePlan:
+        from cuanta.application.routing import without_role
+        from cuanta.domain.routing import Role
+
+        found = self.route_advisor(self.shared_ledger()).scout_plan(plan) if shape.scout else plan
+        return without_role(found, Role.DOCS) if docs is not None and not docs.on else found
+
+    def team_shape(
+        self, request: MandateRequest, options: MandateOptions, cross_engine: bool = False
+    ) -> ShapeChoice:
+        from cuanta.application.mandate_flow import launch_turns, resolve_budget
+        from cuanta.application.routing import with_overrides
+        from cuanta.domain.change_plan import apply_overrides
+        from cuanta.domain.errors import CuantaError, DomainFailure
+        from cuanta.domain.mandate import INVESTIGATION, Shape
+        from cuanta.domain.messages import english
+        from cuanta.domain.routing import RouteMode, parse_provider
+        from cuanta.domain.scout import (
+            ScoutMode,
+            ShapeChoice,
+            choose_shape,
+            eligible,
+            exploration_share,
+            parse_forced_shape,
+            parse_scout_mode,
+            pinned_shape,
+            scout_refusal,
+        )
+        from cuanta.domain.team import runs_per_role
+
+        threshold = self.config.scout_threshold
+        forced = parse_forced_shape(options.shape)
+        engine = options.engine or self.config.engine
+        provider = parse_provider(engine)
+        route = options.route
+        routed = with_overrides(self.routing_policy(), route.mode).mode is not RouteMode.OFF
+        refusal = scout_refusal(request.type, forced, options.simple, provider is not None, routed)
+        if refusal is not None:
+            raise DomainFailure(english(refusal[0]), refusal[1])
+        per_role = cross_engine or runs_per_role(engine, True)
+        mode = ScoutMode.LAUNCH if per_role else parse_scout_mode(self.config.scout_mode)
+        if forced is not None or provider is None:
+            return choose_shape(request.type, forced, None, threshold, mode)
+        by_pin = pinned_shape(route.role_models)
+        if by_pin is not None and routed and not options.simple and request.type != INVESTIGATION:
+            return ShapeChoice(by_pin, threshold=threshold, mode=mode, pinned=True)
+        if not routed or not eligible(request.type, options.simple):
+            return choose_shape(request.type, None, None, threshold, mode)
+        plan, _ = self.plan_route(
+            request.type,
+            request.what,
+            request.where,
+            route.mode,
+            route.preset,
+            dict(route.role_models),
+            clarity=route.clarity,
+            depth=options.depth,
+            scope=route.scope,
+            risk=route.risk,
+            engine=engine,
+        )
+        docs = self.docs_choice(request, options)
+        plan = self.shape_plan(plan, ShapeChoice(Shape.PIPELINE), docs)
+        try:
+            forecast = self.team_forecast(
+                request.type,
+                plan,
+                provider,
+                options.depth,
+                Shape.PIPELINE.value,
+                resolve_budget(options, request.type, self.config.budget_usd),
+                apply_overrides(self.change_plan(request), options.plan_overrides),
+                native=not per_role,
+                model="" if per_role else options.model,
+                max_turns=0
+                if per_role
+                else launch_turns(options, request.type, engine, self.config.max_turns),
+            )
+        except (CuantaError, ValueError):
+            return choose_shape(request.type, None, None, threshold, mode)
+        buckets = forecast.envelope.buckets
+        share = exploration_share(buckets.exploration, buckets.total)
+        return choose_shape(request.type, None, share, threshold, mode)
+
+    def shaped_options(
+        self, request: MandateRequest, options: MandateOptions, cross_engine: bool = False
+    ) -> tuple[MandateOptions, ShapeChoice]:
+        choice = self.team_shape(request, options, cross_engine)
+        if not choice.scout:
+            return options, choice
+        return replace(options, shape=choice.shape.value, scout_mode=choice.mode.value), choice
+
     def prompt_assistant(self, ledger: Ledger) -> PromptAssistant:
         from cuanta.application.assistant import PromptAssistant
 
@@ -1071,6 +1179,17 @@ class Container:
 
         return Drafts(FileDraftStore(self.cuanta_dir() / "drafts"), self.clock.now_iso)
 
+    def mandate_queue(self) -> MandateQueue:
+        from cuanta.adapters.storage.queue_file import FileQueueStore
+        from cuanta.application.init_project import ensure_cuanta_dir
+        from cuanta.application.queue import MandateQueue
+
+        return MandateQueue(
+            FileQueueStore(self.cuanta_dir()),
+            self.clock.now_iso,
+            lambda: ensure_cuanta_dir(self.state_workspace()),
+        )
+
     def estimate_shapes(self, runs: Sequence[Run]) -> dict[str, str]:
         from cuanta.application.results import stored_shape
         from cuanta.application.run_reports import RunReports
@@ -1105,6 +1224,7 @@ class Container:
         cap: float,
         shape: str = "pipeline",
         repair: bool = True,
+        docs_off: bool = False,
     ) -> Estimate:
         from cuanta.adapters.system.prices import load_prices
         from cuanta.application.estimate import estimate
@@ -1120,6 +1240,7 @@ class Container:
             shape,
             self.estimate_shapes(runs),
             repair,
+            docs_off,
         )
 
     def plan_sizes(self, plan: ChangePlan) -> PlanSizes:
@@ -1197,11 +1318,17 @@ class Container:
         )
 
     def role_budget(
-        self, plan: RoutePlan, task_type: str, depth: str, cap: float, repair: bool = True
+        self,
+        plan: RoutePlan,
+        task_type: str,
+        depth: str,
+        cap: float,
+        repair: bool = True,
+        docs_off: bool = False,
     ) -> RepairBudget:
         from cuanta.domain.role_budgets import RepairBudget
 
-        found = self.team_estimate(plan, task_type, depth, cap, repair=repair)
+        found = self.team_estimate(plan, task_type, depth, cap, repair=repair, docs_off=docs_off)
         shares = {cost.role: cost.share for cost in found.roles if cost.share > 0}
         return RepairBudget(shares, found.repair_usd, found.repair_from_docs)
 
@@ -1265,6 +1392,7 @@ class Container:
     ) -> CrossEnginePipeline:
         from cuanta.application.cross_engine import CrossEnginePipeline
         from cuanta.application.run_reports import RunReports
+        from cuanta.domain.scout import parse_docs_mode
 
         reports = RunReports(self.state_workspace())
 
@@ -1311,6 +1439,7 @@ class Container:
             governor=self.governor_setup(ledger),
             read_discipline=self.pipeline_read_discipline,
             read_max_lines=self.config.read_max_lines,
+            docs_mode=parse_docs_mode(self.config.docs_mode),
         )
 
     def governor_setup(self, ledger: Ledger | None = None) -> GovernorSetup:
@@ -1683,6 +1812,7 @@ class Container:
     def mandate_flow(self, ledger: Ledger, sandbox: SandboxLaunch | None = None) -> MandateFlow:
         from cuanta.application.mandate_flow import MandateFlow
         from cuanta.application.spectrum import Selection
+        from cuanta.domain.scout import parse_docs_mode
         from cuanta.domain.spectrum import View
 
         def summarize(run_id: str) -> tuple[dict[str, int], float | None]:
@@ -1721,6 +1851,9 @@ class Container:
             forecaster=self.forecaster(ledger),
             governor=self.governor_setup(ledger),
             pipeline_read_discipline=self.config.pipeline_read_discipline,
+            docs_mode=parse_docs_mode(self.config.docs_mode),
+            lines_of=self.project_lines,
+            capsules=self.capsule_store(),
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -2210,6 +2343,7 @@ class Container:
             self.prefix_query(),
             self.config.engine,
             self.clock.now_iso,
+            lambda: len(self.mandate_queue().entries()),
         )
 
     def prefix_query(self) -> PrefixQuery:

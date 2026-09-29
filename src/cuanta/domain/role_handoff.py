@@ -228,6 +228,26 @@ def _facts(value: object) -> tuple[Fact, ...]:
     return tuple(item for item in found if item is not None)
 
 
+def anchored_facts(value: object) -> tuple[Fact, ...]:
+    return _facts(value)
+
+
+def handoff_texts(value: object, limit: int = ITEM_LIMIT) -> tuple[str, ...]:
+    return _texts(value, limit)
+
+
+def handoff_paths(value: object) -> tuple[str, ...]:
+    return _paths(value)
+
+
+def handoff_status(value: object, fallback: HandoffStatus) -> HandoffStatus:
+    return _status(value, fallback)
+
+
+def clip_text(value: object, limit: int = ITEM_LIMIT) -> str:
+    return _clip(value, limit)
+
+
 def _plan(value: object) -> HandoffPlan:
     if not isinstance(value, dict):
         return HandoffPlan()

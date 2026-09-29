@@ -234,6 +234,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
 
     from cuanta.application.results import run_markdown
     from cuanta.bootstrap import Container
+    from cuanta.cli.commands.mandate import scout_rows
     from cuanta.cli.document import Document, Hint, KeyValues, Line, MarkdownText, Verbatim
     from cuanta.cli.fmt import usd
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
@@ -301,6 +302,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
             "useful_count": view.read_efficiency.useful_count,
         },
         "governor": governor_payload(view.governor),
+        "scout": asdict(view.scout) if view.scout.shown else None,
     }
     if markdown:
         text = run_markdown(view)
@@ -351,6 +353,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         ),
         *_trial_rows(view.trial),
         *_governor_rows(view),
+        *scout_rows(view.scout),
     )
     blocks: list[Block] = [KeyValues(rows)]
     if view.trial is not None and view.trial.trial.guard_tripped:
