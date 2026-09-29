@@ -1,6 +1,7 @@
 # Teams
 
-A pipeline mandate runs as a team of roles: analyst, senior, tester and docs. A team uses one
+A pipeline mandate runs as a team of roles: analyst, senior, tester and docs, or, in the
+[scout and senior shape](#scout--senior), a scout in place of the analyst. A team uses one
 provider, Claude or GPT (Codex), and each role can use a different, current model from that
 provider. Teams that mix providers were retired after 0.4.0; see [Retired: mixed teams](#retired-mixed-teams).
 
@@ -38,6 +39,7 @@ Each role asks for a tier, and the provider's default model for that tier fills 
 | Senior | premium | standard |
 | Tester | standard | standard |
 | Docs | economy | economy |
+| Scout | economy | economy |
 
 The Claude team's main session (the orchestrator) runs on standard as well.
 
@@ -77,6 +79,8 @@ Every pin is honored or refused before anything launches, with the reason:
 - the model belongs to the other provider, for example
   `senior: codex:gpt-6-sol belongs to another provider; a team uses one provider (claude)`
   (in Spanish, `un equipo usa un solo proveedor`);
+- the pinned role does not run in the chosen shape, for example an analyst pin with
+  `--shape scout` or a scout pin with `--shape pipeline`;
 - the route chose a different model.
 
 ## How each team runs
@@ -168,10 +172,10 @@ commands before they start.
 
 ## Budgets that finish
 
-- **Shares.** Each role has a floor (analyst 12%, senior 20%, tester 8%, docs 4% of the cap). The
-  rest is split by the planned cost of each role, or by the median cost of earlier runs once every
-  role has three completed runs with the same engine, model, task type and depth. Later roles' shares
-  are reserved before a role starts, and unspent money flows forward.
+- **Shares.** Each role has a floor (analyst and scout 12%, senior 20%, tester 8%, docs 4% of the
+  cap). The rest is split by the planned cost of each role, or by the median cost of earlier runs
+  once every role has three completed runs with the same engine, model, task type and depth. Later
+  roles' shares are reserved before a role starts, and unspent money flows forward.
 - **Soft stop.** A Claude role's native cap sits below its share by that model's overshoot in
   dollars: the 90th percentile of how far its earlier runs went past their native cap (about one
   request), or $0.08 until the model has three such runs. The cap never drops below half the share.
@@ -285,7 +289,8 @@ exploration, writing, verification, handoff), each role's forecast and stop rule
 - **Fixes.** Bug and fix mandates are sized from fix history only, and the writer gets a planned
   repair turn. A team of separate launches holds a repair share for it: 15% of the cap when docs
   runs, or docs's share when docs is off. The repair turn gets that share plus the writer's
-  left-over.
+  left-over. A feature whose docs is off holds docs's share the same way (see
+  [Docs is optional](#docs-is-optional)).
 - **Stored with the run.** Every launched mandate stores its forecast before it starts, keyed by
   the run (the first role's run for a team of separate launches). The actual is the run's recorded
   cost; a cost that is not known stays n/a and is left out of the numbers.
@@ -301,6 +306,115 @@ exploration, writing, verification, handoff), each role's forecast and stop rule
 
 cuanta snapshots the working copy after every role. A change to a protected path stops the pipeline
 before the next role starts and names the role that made it.
+
+## Scout & senior
+
+A feature or a fix whose reading dominates its cost runs in the scout and senior shape: a cheap,
+read-only scout explores and hands the senior a short evidence pack, so the senior spends its
+premium tokens on the change, not on exploring.
+
+- **When.** Before launch, cuanta forecasts the mandate in the pipeline shape. When the forecast's
+  exploration bucket is above `runs.scout_threshold` (0.35) of its tokens (start, exploration,
+  writing, verification and handoff together), the mandate runs as scout and senior; otherwise the
+  pipeline stays. Refactors and investigations keep their shape. `--shape scout` or
+  `--shape pipeline` forces it (`--shape single|pipeline` still chooses an investigation's shape).
+  A pin decides it too: `--role-model analyst=...` keeps the pipeline, `--role-model scout=...`
+  runs the scout shape, so a pin never depends on the forecast. `--shape scout` is refused for
+  investigations, with `--simple`, on opencode and with `--route off`, where no scout could run.
+  The dry run and the Team step say which shape runs and why, and `--json` adds a `shape` object
+  (`pinned` is true when a pin chose it). The app's run keeps the shape its Team step showed.
+- **Scout.** The `scout` role, on the economy tier (`haiku`, `gpt-6-luna`); pin it with
+  `--role-model scout=...`. It is read-only (Read, Grep and Glob on
+  Claude; the `read-only` sandbox on Codex) and runs with the index tools and the read discipline of
+  the other team roles. It ends with an evidence pack in JSON: `file:line` facts, the few snippets
+  the change needs, risks, test links and the confirmed edit set, the files the senior may edit.
+- **The pack.** cuanta drops facts and snippets whose lines are not in the working copy and paths
+  that leave the project, replaces each snippet's text with the lines of its range in the working
+  copy, so the senior never reads a snippet the scout made up, caps each section (40 facts, 12 snippets of 40 lines, 8 risks, 12 tests)
+  and trims the pack to about 6,000 tokens: snippets first, from the last, then facts beyond the
+  first twelve. The edit set is never trimmed; a pack still over its budget says so. When the scout
+  confirms no edit set, the senior gets the change plan's; when it returns no pack, the senior gets
+  the ranges it read. The pack is stored as a capsule (`cuanta cat cap:...`) and Result's
+  Consumption tab shows it in a "Scout and senior" panel ("Explorador y senior"), as do
+  `cuanta runs show` and `--json` (`scout`).
+- **Senior.** It receives the request, the pack and the edit set, and no transcript of the scout.
+  Its prompt carries a read budget from the forecast's stop rules, never fewer reads than the edit
+  set has files plus two. Every read outside the pack's
+  files and the edit set counts as exploration leak: the governor counts it live, and Result lists
+  the files. The senior may edit a file outside the edit set only when it must and names it in its
+  handoff's `plan.edit`; Result flags every such edit, named or not.
+- **Then.** cuanta runs its checks, as after any writing role. The tester gets the diff of the
+  changed files against their text before the senior, the scout's test links and
+  `cuanta test --affected`, and is told not to explore again. On Windows a GPT tester runs no tests
+  (see below).
+- **Claude team.** `runs.scout_mode = native` (the default until the bench picks) runs the scout as a
+  subagent of the one Claude session: the main agent is told to call the scout first, pass the senior
+  only the pack and its edit set, and give the tester the changed files and `cuanta test --affected`.
+  cuanta cannot step in between subagents, so it trims nothing there; it reads the pack from the
+  session afterwards for Result and counts the dispatched prompt tokens of the scout, senior and
+  tester. The edits it flags are the changed files the senior subagent wrote with its own edit
+  tools (Edit, Write, MultiEdit, NotebookEdit) outside the edit set; the tester's test files, the
+  docs-updater's edits and changes made through shell commands are not counted. A run where the
+  main agent never called the scout says so in Result (`scout.dispatched` is false). Leaks are not
+  measured in a native session. `runs.scout_mode = launch` runs the scout as its own read-only
+  launch, then one launch per role, as below. `--cross-engine` always launches the scout. Each run
+  records its mode (`scout.mode`).
+- **GPT team.** A read-only `gpt-6-luna` scout launch, then the senior launch with the pack, through
+  the per-role runner; the run records `launch` as its mode. Codex's own subagents stay off.
+
+### Docs is optional
+
+The docs role runs only when the request asks for docs: one of docs, documentation, documentación,
+documentar, documenta, documente, documenten, README, CHANGELOG, guide, guides, guía, guías,
+docstring, docstrings, release notes or notas de la versión, as whole words in any case and with or
+without accents, in its WHAT, WHERE or TESTS. WHY, CONSTRAINTS and OUT OF SCOPE are not read, so
+"keep the CHANGELOG in sync" in CONSTRAINTS leaves docs off, and the bare word "document" does not
+count (`document.querySelector`). It never runs in trials, the isolated copies of `--sandbox`.
+Pinning the docs role (`--role-model docs=...`) asks for it: docs then runs, in trials and with
+`runs.docs = off` too. The start of the run says which applies. `runs.docs = on` runs docs always,
+as before; `off` never, unless pinned.
+When docs is off, a team of separate launches holds the docs share as its repair reserve, for
+features as for fixes, and a native Claude session is told not to call the docs-updater.
+
+## Warm queue
+
+Mandates queued together run back to back, so each one after the first finds its prompt prefix
+(system prompt, tools, project rules and agents) still in the cache and reads it instead of writing
+it again.
+
+- **Queue.** `cuanta queue add` takes the options of `cuanta mandate` (`--type`, `--what`,
+  `--engine`, `--model`, `--max-budget-usd`, `--depth`, `--sandbox` and the rest) and checks them
+  when it queues: an unknown option, a missing field or a bad choice is refused then, because the
+  queue runs unattended. Global options such as `--json` and `--project` belong to the queue command
+  and are not stored; paths such as `--evidence` are read when the mandate runs. The queue lives in
+  `.cuanta/queue.json`, and its ids (`q1`, `q2`, ...) are never reused. The file keeps each
+  mandate's options as typed, the request text included, until the mandate finishes green or is
+  cleared, whatever `privacy.store_prompts` says: the queue needs them to run it later. Each write
+  holds `.cuanta/queue.write.lock` for a moment, so a `queue add` from another shell during a run
+  is never lost.
+- **Order.** `cuanta queue list` shows the order `queue run` uses. Mandates on the same engine and
+  model run together, and `--sandbox` mandates form their own group: each isolated copy has its own
+  folder, which Claude Code puts in its prompt, so a copy probably does not share a warm prefix with
+  the project. The groups follow the order in which their first mandate was queued, and each group
+  keeps the queue order. A mandate without `--model` groups with the others on that engine's
+  default model. `--preset`, `--depth` and role pins do not split a group, although they can change
+  the models a mandate's roles run on. Inside a mandate the roles keep their order.
+- **Run.** `cuanta queue run` shows the order and asks first; `--yes` skips the question, and without
+  a terminal the command only shows the order. Each mandate runs as `cuanta mandate` would, with its
+  own cap, depth, shape and isolated copy, and never stops to ask. A mandate that finishes green
+  leaves the queue. The run stops at the first failed mandate and keeps it and the rest queued;
+  `--keep-going` runs the rest and keeps only the failures. One `queue run` at a time per project: a
+  second one is refused while `.cuanta/queue.lock` exists, and a crashed run's lock can be deleted.
+  Before each mandate, the run reads the queue again and skips one that has left it since the list
+  was shown (another run finished it, or `queue clear` removed it): it shows as "no longer queued"
+  and is not launched. `queue clear` removes only the mandates it listed when it asked.
+- **Warm prefix.** `queue list`, `queue run` (after each mandate) and the app's Home show "warm
+  prefix until HH:MM" ("prefijo caliente hasta HH:MM"): the last Claude request plus the saved cache
+  TTL (`cache.ttl_s`, measured by `cuanta probe cache-ttl`). It is unknown when no TTL is saved for
+  the current auth mode, on Codex, and before a Claude request that used the cache. Home shows the
+  line only while mandates are queued. A `queue.json` that cannot be read shows "Mandate queue
+  unreadable" ("Cola de mandatos ilegible") on Home instead, and `cuanta queue list` names the
+  problem.
 
 ## The Windows limitation
 
