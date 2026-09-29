@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Block, Document
     from cuanta.domain.estimates import RunEstimate
+    from cuanta.domain.governor_report import BlockedCalls
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.routing import Provider
@@ -614,7 +615,10 @@ def run_cross_engine(
         blocks.append(Line(english(report.stopped), Status.WARN))
     if isolated is not None:
         blocks.extend(sandbox_blocks(isolated))
-    payload = cross_payload(report)
+    blocked = container.blocked_calls(
+        container.shared_ledger(), [step.run_id for step in report.steps]
+    )
+    payload = cross_payload(report, blocked)
     if isolated is not None:
         payload["sandbox"] = sandbox_payload(isolated)
     ok = report.ok and not guard_tripped(isolated)
@@ -674,7 +678,19 @@ def cross_blocks(report: "CrossReport", budget: float, title: str) -> "list[Bloc
 
     rows: list[tuple[str, ...]] = []
     for step in report.steps:
-        state = "repair" if step.repair else "salvaged" if step.salvaged else "ok"
+        state = (
+            "repair"
+            if step.repair
+            else "salvaged"
+            if step.salvaged
+            else "stopped"
+            if step.stopped
+            else "resumed"
+            if step.resumed
+            else "rotated"
+            if step.rotated
+            else "ok"
+        )
         rows.append(
             (
                 step.role.value,
@@ -734,9 +750,17 @@ def cross_blocks(report: "CrossReport", budget: float, title: str) -> "list[Bloc
     return blocks
 
 
-def cross_payload(report: "CrossReport") -> dict[str, object]:
+def cross_payload(
+    report: "CrossReport", blocked: "BlockedCalls | None" = None
+) -> dict[str, object]:
+    from cuanta.domain.governor_report import (
+        discipline_modes,
+        governor_payload,
+        governor_summary,
+    )
     from cuanta.domain.messages import english
 
+    modes = discipline_modes((step.role.value, step.read_discipline) for step in report.steps)
     return {
         "experimental": True,
         "ok": report.ok,
@@ -786,9 +810,14 @@ def cross_payload(report: "CrossReport") -> dict[str, object]:
                 "changed_files": list(step.changed_files),
                 "unreadable_files": list(step.unreadable_files),
                 "index_tools": step.index_tools,
+                "rotated": step.rotated,
+                "stopped": step.stopped,
+                "resumed": step.resumed,
+                "read_discipline": step.read_discipline or None,
             }
             for step in report.steps
         ],
+        "governor": governor_payload(governor_summary(report.governor, modes, blocked)),
     }
 
 
@@ -971,6 +1000,7 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
     from cuanta.cli.document import Document, Hint, KeyValues, MarkdownText, MascotBlock, Panel
     from cuanta.cli.fmt import compact, percent, usd
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
+    from cuanta.domain.governor_report import governor_payload, governor_summary
     from cuanta.domain.guarantees import budget_stop_reason
     from cuanta.domain.messages import english
     from cuanta.domain.voice import Mood
@@ -1017,7 +1047,11 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
         blocks.append(Hint(f"report saved: {report.report_path} · cuanta runs show {run.id}"))
     if isolated is not None:
         blocks.extend(sandbox_blocks(isolated))
-    payload = {**report_payload(report), "report_text": report.text}
+    payload = {
+        **report_payload(report),
+        "report_text": report.text,
+        "governor": governor_payload(governor_summary(report.governor)),
+    }
     if isolated is not None:
         payload["sandbox"] = sandbox_payload(isolated)
     ok = report.ok and not guard_tripped(isolated)

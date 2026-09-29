@@ -3,9 +3,10 @@ from __future__ import annotations
 import math
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from cuanta.domain.routing import Role
+from cuanta.domain.pricing import base_model
+from cuanta.domain.routing import Role, percentile
 
 ROLE_FLOOR = 0.05
 ROLE_FLOORS: Mapping[Role, float] = {
@@ -15,11 +16,10 @@ ROLE_FLOORS: Mapping[Role, float] = {
     Role.DOCS: 0.04,
 }
 OPTIONAL_ROLES = frozenset({Role.DOCS})
-DEFAULT_MARGIN = 0.10
-MIN_MARGIN = 0.05
-MAX_MARGIN = 0.25
-MARGIN_SAFETY = 1.25
 MIN_SAMPLES = 3
+USD_MARGIN_FALLBACK = 0.08
+USD_MARGIN_PERCENTILE = 0.9
+NATIVE_CAP_FLOOR = 0.5
 REPAIR_FRACTION = 0.15
 
 
@@ -31,13 +31,54 @@ class RepairBudget:
 
 
 @dataclass(frozen=True, slots=True)
-class Overrun:
+class Overshoot:
+    model: str
     cap_usd: float
     cost_usd: float
 
     @property
-    def ratio(self) -> float:
-        return max(0.0, self.cost_usd - self.cap_usd) / self.cap_usd if self.cap_usd > 0 else 0.0
+    def usd(self) -> float:
+        return max(0.0, self.cost_usd - self.cap_usd)
+
+
+def usd_margin(overshoots: Sequence[float], minimum: int = MIN_SAMPLES) -> float:
+    values = [value for value in overshoots if math.isfinite(value) and value >= 0]
+    found = percentile(values, USD_MARGIN_PERCENTILE) if len(values) >= minimum else None
+    return USD_MARGIN_FALLBACK if found is None else found
+
+
+@dataclass(frozen=True, slots=True)
+class OvershootMargins:
+    samples: Mapping[str, tuple[float, ...]] = field(default_factory=dict)
+    aliases: Mapping[str, str] = field(default_factory=dict)
+
+    def key(self, model: str) -> str:
+        name = base_model(model)
+        return self.aliases.get(name, name)
+
+    def usd(self, model: str) -> float:
+        return usd_margin(self.samples.get(self.key(model), ()))
+
+    def count(self, model: str) -> int:
+        return len(self.samples.get(self.key(model), ()))
+
+
+def overshoot_margins(
+    overshoots: Iterable[Overshoot], aliases: Mapping[str, str] | None = None
+) -> OvershootMargins:
+    names = {base_model(name): alias for name, alias in (aliases or {}).items()}
+    empty = OvershootMargins(aliases=names)
+    grouped: dict[str, list[float]] = {}
+    for item in overshoots:
+        if item.cap_usd > 0 and math.isfinite(item.cost_usd):
+            grouped.setdefault(empty.key(item.model), []).append(item.usd)
+    return OvershootMargins({key: tuple(values) for key, values in grouped.items()}, names)
+
+
+def native_cap(share: float, margin_usd: float) -> float:
+    if share <= 0:
+        return 0.0
+    return max(share * NATIVE_CAP_FLOOR, share - max(margin_usd, 0.0))
 
 
 def floor_fraction(role: Role) -> float:
@@ -87,18 +128,6 @@ def history_weights(
             return None
         weights[role] = statistics.median(values)
     return weights or None
-
-
-def learned_margin(overruns: Sequence[Overrun], minimum: int = MIN_SAMPLES) -> float:
-    ratios = sorted(item.ratio for item in overruns if item.cap_usd > 0)
-    if len(ratios) < minimum:
-        return DEFAULT_MARGIN
-    index = min(len(ratios) - 1, math.ceil(0.9 * len(ratios)) - 1)
-    return min(MAX_MARGIN, max(MIN_MARGIN, ratios[index] * MARGIN_SAFETY))
-
-
-def soft_cap(share: float, margin: float) -> float:
-    return max(0.0, share * (1.0 - min(max(margin, 0.0), MAX_MARGIN)))
 
 
 def floors_usd(roles: Iterable[Role], cap: float) -> float:

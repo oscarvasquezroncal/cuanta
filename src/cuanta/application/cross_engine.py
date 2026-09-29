@@ -7,16 +7,46 @@ from typing import Protocol
 
 from cuanta.application.engine_run import EngineLauncher, Launch, LaunchSpec
 from cuanta.application.estimate import Estimator
-from cuanta.application.forecast import Forecaster, forecast_failure, publish_forecast
+from cuanta.application.forecast import (
+    Forecaster,
+    PlannedForecast,
+    forecast_failure,
+    publish_forecast,
+)
 from cuanta.application.routing import RoutePlan
+from cuanta.application.steering import (
+    GovernorSetup,
+    Steering,
+    codex_finish_prompt,
+    codex_steering,
+    restart_left,
+    resumable_thread,
+    resume_prompt,
+    role_steering,
+)
 from cuanta.domain.agents import AgentDefinition, role_of
 from cuanta.domain.capsules import capsule_id
 from cuanta.domain.change_plan import ChangePlan, guarded, plan_metrics
 from cuanta.domain.costs import CostSource, sum_costs
 from cuanta.domain.depth import DEFAULT_DEPTH, MAX_TURNS
+from cuanta.domain.engine import BUDGET_LIMIT_SUBTYPE, GOVERNOR_STOP_SUBTYPE, EngineOutcome
 from cuanta.domain.envelope import PIPELINE_SHAPE, is_fix
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.estimates import RunEstimate
+from cuanta.domain.governor import (
+    RESUMED,
+    ROTATED,
+    SALVAGED,
+    SKIPPED,
+    ReactionKind,
+    ReactionTaken,
+)
+from cuanta.domain.governor_report import (
+    BEST_EFFORT,
+    HOOKS,
+    discipline_modes,
+    governor_metrics,
+)
 from cuanta.domain.guarantees import readonly_unavailable
 from cuanta.domain.mandate import (
     INLINE_EVIDENCE_LIMIT,
@@ -27,14 +57,15 @@ from cuanta.domain.mandate import (
 from cuanta.domain.messages import Message, msg
 from cuanta.domain.pack import ContextPack
 from cuanta.domain.progress import Status, finished, note, started
+from cuanta.domain.read_discipline import READ_LINE_LIMIT, discipline_prompt
 from cuanta.domain.role_budgets import (
-    DEFAULT_MARGIN,
     OPTIONAL_ROLES,
+    OvershootMargins,
     RepairBudget,
     floor_fraction,
     floors_usd,
+    native_cap,
     role_split,
-    soft_cap,
 )
 from cuanta.domain.role_handoff import (
     HandoffChain,
@@ -99,6 +130,10 @@ class CrossStep:
     changed_files: tuple[str, ...] = ()
     unreadable_files: tuple[str, ...] = ()
     index_tools: bool = False
+    rotated: bool = False
+    stopped: bool = False
+    resumed: bool = False
+    read_discipline: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +171,7 @@ class CrossReport:
     verifications: tuple[VerificationRound, ...] = ()
     handoffs: tuple[RoleHandoff, ...] = ()
     guard_role: str = ""
+    governor: tuple[ReactionTaken, ...] = ()
 
     @property
     def verification_outputs(self) -> tuple[str, ...]:
@@ -187,6 +223,12 @@ def cross_metrics(report: CrossReport) -> dict[str, object]:
     }
     if report.guard_role:
         base["guard_role"] = report.guard_role
+    governor = governor_metrics(
+        report.governor,
+        discipline_modes((step.role.value, step.read_discipline) for step in report.steps),
+    )
+    if governor:
+        base["governor"] = governor
     if report.change_plan is None:
         return base
     engine = "claude" if all(step.engine == "claude" for step in report.steps) else "cross"
@@ -316,6 +358,19 @@ def _folded(paths: Sequence[str]) -> dict[str, str]:
     return {path.casefold(): path for path in paths}
 
 
+def _finished_turn(outcome: EngineOutcome) -> bool:
+    answer = outcome.result
+    if answer is None or not answer.text.strip():
+        return False
+    return outcome.ok or (outcome.exit_code == 0 and answer.subtype == BUDGET_LIMIT_SUBTYPE)
+
+
+def _discipline(turn: _Turn) -> str:
+    if turn.spec.read_discipline is not True:
+        return ""
+    return HOOKS if turn.engine == "claude" else BEST_EFFORT
+
+
 def final_state(
     skipped: bool, verification: VerificationRound | None, salvaged: bool = False
 ) -> CompletionState:
@@ -333,7 +388,7 @@ class _Pass:
     baseline: Mapping[str, str]
     routed: tuple[Role, ...]
     shares: Mapping[Role, float]
-    margin: float
+    margins: OvershootMargins
     verify: tuple[str, ...]
     budget_tokens: int
     steps: list[CrossStep] = field(default_factory=list)
@@ -344,6 +399,9 @@ class _Pass:
     parent: str = ""
     last_round: VerificationRound | None = None
     repair_usd: float = 0.0
+    forecast: PlannedForecast | None = None
+    governed: list[ReactionTaken] = field(default_factory=list)
+    trailing: list[CrossStep] = field(default_factory=list)
 
     def report(
         self, state: CompletionState, stopped: Message | None = None, guard_role: str = ""
@@ -358,6 +416,7 @@ class _Pass:
             verifications=tuple(self.rounds),
             handoffs=tuple(self.handoffs),
             guard_role=guard_role,
+            governor=tuple(self.governed),
         )
 
 
@@ -397,13 +456,19 @@ class CrossEnginePipeline:
         verifier: VerifyCommands | None = None,
         lines_of: LinesOf | None = None,
         reads_of: Callable[[str], ReadRanges] | None = None,
-        margin: Callable[[], float] | None = None,
+        margin: Callable[[], OvershootMargins] | None = None,
         index_tools: Callable[[str], bool] | None = None,
         new_files: NewFileGuard | None = None,
         build_blocked: frozenset[str] = frozenset(),
         forecaster: Forecaster | None = None,
         new_run_id: Callable[[], str] | None = None,
+        governor: GovernorSetup | None = None,
+        read_discipline: Callable[[str], bool] | None = None,
+        read_max_lines: int = READ_LINE_LIMIT,
     ) -> None:
+        self._read_discipline = read_discipline
+        self._read_max_lines = read_max_lines
+        self._governor = governor
         self._forecaster = forecaster
         self._new_run_id = new_run_id
         self._build_blocked = build_blocked
@@ -496,14 +561,24 @@ class CrossEnginePipeline:
             return handoff
         return replace(handoff, facts=refresh_facts(handoff.facts, self._lines_of))
 
-    def _launch(self, turn: _Turn, spec: LaunchSpec) -> Launch:
+    def _launch(self, turn: _Turn, spec: LaunchSpec, steering: Steering | None = None) -> Launch:
         engine = turn.launcher.engine
         self._active = engine
         if self._halted:
             engine.cancel()
+
+        def started(run_id: str) -> None:
+            self._started(run_id)
+            if steering is not None:
+                steering.started(run_id)
+
         try:
+            if steering is None:
+                return turn.launcher.launch(
+                    self._isolated(spec, turn.engine), lambda _: None, self._started
+                )
             return turn.launcher.launch(
-                self._isolated(spec, turn.engine), lambda _: None, self._started
+                replace(self._isolated(spec, turn.engine), steer=True), steering, started
             )
         finally:
             self._active = None
@@ -581,7 +656,7 @@ class CrossEnginePipeline:
             baseline,
             routed,
             split.shares,
-            self._margin() if self._margin is not None else DEFAULT_MARGIN,
+            self._margin() if self._margin is not None else OvershootMargins(),
             verify,
             handoff_budget(self._depth),
             repair_usd=reserve,
@@ -706,7 +781,7 @@ class CrossEnginePipeline:
                 note(Status.INFO, msg("cross.share", role=role.value, cap=f"{role_cap:.4f}"))
             )
             if engine == "claude":
-                native = soft_cap(role_cap, state.margin)
+                native = native_cap(role_cap, state.margins.usd(model))
                 state.progress.publish(
                     note(
                         Status.INFO,
@@ -714,7 +789,7 @@ class CrossEnginePipeline:
                             "cross.native_cap",
                             role=role.value,
                             cap=f"{native:.4f}",
-                            margin=f"{state.margin * 100:.0f}",
+                            margin=f"{role_cap - native:.4f}",
                             share=f"{role_cap:.4f}",
                         ),
                     )
@@ -725,6 +800,7 @@ class CrossEnginePipeline:
             else state.protection
         )
         indexed = self._index_tools(engine) if self._index_tools is not None else False
+        disciplined = self._read_discipline(engine) if self._read_discipline is not None else False
         chain_text = render_chain(self._refresh(merge_chain(state.handoffs)), state.budget_tokens)
         stable, volatile, packed = self._context(state.request, role, effective)
         partial = any(item.status is not HandoffStatus.DONE for item in state.handoffs)
@@ -735,6 +811,8 @@ class CrossEnginePipeline:
             partial,
             engine in self._build_blocked,
         )
+        if disciplined and engine != "claude":
+            advice = f"{advice}\n{discipline_prompt(self._read_max_lines)}"
         body = definition.prompt if definition is not None else ""
         return LaunchSpec(
             kind=CROSS_KIND,
@@ -754,6 +832,7 @@ class CrossEnginePipeline:
             change_plan=effective,
             stable_prefix=packed,
             index_tools=indexed,
+            read_discipline=True if disciplined else None,
         )
 
     def _root_forecast(self, state: _Pass, turn: _Turn) -> _Turn:
@@ -777,7 +856,193 @@ class CrossEnginePipeline:
             state.progress.publish(note(Status.WARN, forecast_failure(error)))
         else:
             publish_forecast(state.progress, stored)
+            state.forecast = stored
         return replace(turn, spec=replace(turn.spec, run_id=run_id))
+
+    def _steering(self, state: _Pass, turn: _Turn) -> Steering | None:
+        if turn.engine not in {"claude", "codex"}:
+            return None
+        steer = role_steering if turn.engine == "claude" else codex_steering
+        return steer(
+            self._governor,
+            turn.launcher,
+            turn.spec,
+            turn.role,
+            turn.role_cap,
+            state.forecast,
+            state.progress,
+        )
+
+    def _steered(self, state: _Pass, turn: _Turn) -> tuple[_Turn, Launch, tuple[str, ...]]:
+        steering = self._steering(state, turn)
+        launch = self._launch(turn, turn.spec, steering)
+        if steering is None:
+            return turn, launch, ()
+        follow = (
+            self._rotate(state, turn, launch, steering)
+            if turn.engine == "claude"
+            else self._resume(state, turn, launch, steering)
+        )
+        state.governed.extend(steering.taken)
+        return follow if follow is not None else (turn, launch, ())
+
+    def _resume(
+        self, state: _Pass, turn: _Turn, launch: Launch, steering: Steering
+    ) -> tuple[_Turn, Launch, tuple[str, ...]] | None:
+        if steering.stopped is None:
+            return None
+        role = turn.role.value
+        result = launch.outcome.result
+        thread = result.session_id if result is not None else ""
+        if self._halted or not resumable_thread(thread) or not turn.launcher.resumable():
+            steering.settle(SALVAGED)
+            state.progress.publish(note(Status.WARN, msg("governor.resume_unavailable", role=role)))
+            return None
+        state.progress.publish(note(Status.INFO, msg("governor.resuming", role=role)))
+        cost = launch.run.cost_usd
+        state.parent = state.parent or launch.run.id
+        left = max(turn.role_cap - (cost or 0.0), 0.0)
+        spec = replace(
+            turn.spec,
+            prompt=codex_finish_prompt(_diff(state.baseline, self._snap())),
+            resume_session=thread,
+            run_id="",
+            parent_id=state.parent,
+            estimate=None,
+            pipeline_budget_usd=0.0,
+            max_budget_usd=left,
+        )
+        resumed = self._launch(turn, spec)
+        if not _finished_turn(resumed.outcome):
+            steering.settle(SALVAGED)
+            state.spent = sum_costs((state.spent, resumed.run.cost_usd))
+            state.trailing.append(
+                CrossStep(
+                    turn.role,
+                    turn.engine,
+                    turn.model,
+                    resumed.run.id,
+                    False,
+                    resumed.run.cost_usd,
+                    "",
+                    resumed.run.cost_source,
+                    left,
+                    left,
+                    index_tools=turn.spec.index_tools is True,
+                    resumed=True,
+                    read_discipline=_discipline(turn),
+                )
+            )
+            state.progress.publish(note(Status.WARN, msg("governor.resume_failed", role=role)))
+            return None
+        steering.settle(RESUMED)
+        state.spent = sum_costs((state.spent, cost))
+        self._record_cap(launch.run.id, turn.spec.max_budget_usd, turn.role_cap)
+        if self._save_metrics is not None and cost is not None:
+            self._save_metrics(launch.run.id, {"governor_stop_estimate_usd": round(cost, 6)})
+        clipped, _ = self._capsule(result.text if result is not None else "")
+        state.steps.append(
+            CrossStep(
+                turn.role,
+                turn.engine,
+                turn.model,
+                launch.run.id,
+                True,
+                cost,
+                clipped,
+                launch.run.cost_source,
+                turn.role_cap,
+                turn.spec.max_budget_usd,
+                index_tools=turn.spec.index_tools is True,
+                stopped=True,
+                read_discipline=_discipline(turn),
+            )
+        )
+        state.progress.publish(
+            note(
+                Status.INFO,
+                msg("governor.resumed", role=role, cost=f"{cost or 0.0:.4f}", left=f"{left:.4f}"),
+            )
+        )
+        return replace(turn, spec=spec, role_cap=left), resumed, (launch.run.id,)
+
+    def _rotate(
+        self, state: _Pass, turn: _Turn, launch: Launch, steering: Steering
+    ) -> tuple[_Turn, Launch, tuple[str, ...]] | None:
+        checkpoint = steering.checkpoint
+        if checkpoint is None:
+            return None
+        cost = launch.run.cost_usd
+        result = launch.outcome.result
+        left = restart_left(turn.role_cap, cost) if cost is not None else 0.0
+        if (
+            self._halted
+            or not launch.outcome.ok
+            or launch.outcome.late_results > 0
+            or result is None
+            or not result.text.strip()
+            or left <= REPAIR_MINIMUM_USD
+        ):
+            state.progress.publish(
+                note(Status.WARN, msg("governor.rotation_skipped", role=turn.role.value))
+            )
+            steering.settle(SKIPPED, ReactionKind.ROTATE)
+            return None
+        steering.settle(ROTATED, ReactionKind.ROTATE)
+        text, _ = self._capsule(result.text)
+        state.spent = sum_costs((state.spent, cost))
+        state.parent = state.parent or launch.run.id
+        if self._save_metrics is not None:
+            self._save_metrics(
+                launch.run.id,
+                {
+                    "native_cap_usd": turn.spec.max_budget_usd,
+                    "role_share_usd": turn.role_cap,
+                    "rotation_saving_usd": round(checkpoint.saving_usd, 6),
+                },
+            )
+        state.steps.append(
+            CrossStep(
+                turn.role,
+                turn.engine,
+                turn.model,
+                launch.run.id,
+                True,
+                cost,
+                text,
+                launch.run.cost_source,
+                turn.role_cap,
+                turn.spec.max_budget_usd,
+                index_tools=turn.spec.index_tools is True,
+                rotated=True,
+                read_discipline=_discipline(turn),
+            )
+        )
+        native = native_cap(left, state.margins.usd(turn.model))
+        state.progress.publish(
+            note(
+                Status.INFO,
+                msg(
+                    "governor.rotated",
+                    role=turn.role.value,
+                    left=f"{left:.4f}",
+                    cap=f"{native:.4f}",
+                    saving=f"{checkpoint.saving_usd:.4f}",
+                ),
+            )
+        )
+        spec = replace(
+            turn.spec,
+            prompt=resume_prompt(turn.spec.prompt, text),
+            max_budget_usd=native,
+            run_id="",
+            parent_id=state.parent,
+            estimate=None,
+            pipeline_budget_usd=0.0,
+        )
+        steering.restart()
+        fresh = self._launch(turn, spec, steering)
+        return replace(turn, spec=spec, role_cap=left), fresh, (launch.run.id,)
 
     def _perform(self, state: _Pass, turn: _Turn) -> CrossReport | None:
         role = turn.role
@@ -789,7 +1054,7 @@ class CrossEnginePipeline:
             if created:
                 state.progress.publish(note(Status.INFO, msg("cross.prepared", count=len(created))))
         turn = self._root_forecast(state, turn)
-        launch = self._launch(turn, turn.spec)
+        turn, launch, earlier = self._steered(state, turn)
         self._record_cap(launch.run.id, turn.spec.max_budget_usd, turn.role_cap)
         state.parent = state.parent or launch.run.id
         outcome = launch.outcome
@@ -798,8 +1063,8 @@ class CrossEnginePipeline:
         text = outcome.result.text if outcome is not None and outcome.result else ""
         cost = launch.run.cost_usd
         state.spent = sum_costs((state.spent, cost))
-        budget_stop = not ok and "budget" in subtype
-        carried = budget_stop and turn.engine != "claude"
+        budget_stop = not ok and ("budget" in subtype or subtype == GOVERNOR_STOP_SUBTYPE)
+        carried = budget_stop and turn.engine != "claude" and subtype != GOVERNOR_STOP_SUBTYPE
         if created and self._new_files is not None:
             self._new_files.settle(created)
         unreadable = self._unreadable(state, turn, hidden)
@@ -808,7 +1073,7 @@ class CrossEnginePipeline:
         changed = _diff(state.baseline, current)
         state.baseline = current
         clipped, capsule = self._capsule(text)
-        reads = self._reads(launch.run.id)
+        reads = tuple(item for run_id in (*earlier, launch.run.id) for item in self._reads(run_id))
         handoff = self._stamp(
             build_handoff(
                 text,
@@ -845,8 +1110,12 @@ class CrossEnginePipeline:
             changed,
             unreadable,
             turn.spec.index_tools is True,
+            resumed=bool(turn.spec.resume_session),
+            read_discipline=_discipline(turn),
         )
         state.steps.append(step)
+        state.steps.extend(state.trailing)
+        state.trailing.clear()
         state.progress.publish(
             finished(
                 f"cross-{role.value}",
@@ -887,7 +1156,8 @@ class CrossEnginePipeline:
         return unreadable
 
     def _overrun(self, state: _Pass, turn: _Turn, cost: float | None) -> float:
-        if turn.engine == "claude" or cost is None or turn.role_cap <= 0:
+        capped = turn.role_cap > 0 or bool(turn.spec.resume_session)
+        if turn.engine == "claude" or cost is None or not capped:
             return 0.0
         overrun = max(0.0, cost - turn.role_cap)
         if overrun > 0:
@@ -1041,7 +1311,9 @@ class CrossEnginePipeline:
             turn.spec,
             prompt=repair_prompt(turn.spec.prompt, found.results),
             max_budget_usd=(
-                soft_cap(left_share, state.margin) if turn.engine == "claude" else left_share
+                native_cap(left_share, state.margins.usd(turn.model))
+                if turn.engine == "claude"
+                else left_share
             ),
             parent_id=state.parent,
             estimate=None,
@@ -1077,6 +1349,7 @@ class CrossEnginePipeline:
                 changed_files=changed,
                 unreadable_files=unreadable,
                 index_tools=repair.index_tools is True,
+                read_discipline=_discipline(turn),
             )
         )
         handoff = replace(

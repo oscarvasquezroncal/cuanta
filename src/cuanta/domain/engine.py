@@ -9,6 +9,7 @@ PIPELINE_AGENTS = ("architecture-analyst", "senior", "tester", "docs-updater")
 TURN_LIMIT_SUBTYPE = "error_max_turns"
 BUDGET_LIMIT_SUBTYPE = "error_max_budget_usd"
 COST_UNKNOWN_SUBTYPE = "error_cost_unknown"
+GOVERNOR_STOP_SUBTYPE = "error_governor_stop"
 
 
 COMMAND_LINE_LIMIT = 30_000
@@ -139,6 +140,8 @@ class EngineRequest:
     setting_sources: tuple[str, ...] | None = None
     strict_guard: bool = False
     index_server: tuple[str, ...] = ()
+    stream_input: bool = False
+    resume_session: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +150,7 @@ class EngineOutcome:
     result: RunResult | None
     tool_calls: int
     stderr_tail: str = ""
+    late_results: int = 0
 
     @property
     def ok(self) -> bool:

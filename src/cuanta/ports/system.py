@@ -36,6 +36,7 @@ class ProcessRunner(Protocol):
         env: Mapping[str, str] | None = None,
         stdin_text: str | None = None,
         unset: Sequence[str] = (),
+        keep_stdin: bool = False,
     ) -> StreamHandle: ...
 
 
@@ -49,6 +50,10 @@ class StreamHandle(Protocol):
     def terminate(self) -> None: ...
 
     def close(self) -> None: ...
+
+    def send(self, text: str) -> bool: ...
+
+    def end_input(self) -> None: ...
 
 
 class Clock(Protocol):

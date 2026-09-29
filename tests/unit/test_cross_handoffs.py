@@ -24,14 +24,17 @@ from cuanta.application.cross_engine import (
 from cuanta.application.engine_run import EngineLauncher
 from cuanta.application.routing import RoutePlan
 from cuanta.application.verification import Verifier
+from cuanta.cli.commands.mandate import cross_payload
 from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest, RunResult
+from cuanta.domain.governor_report import HOOKS
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.progress import ProgressEvent
 from cuanta.domain.role_budgets import (
     REPAIR_FRACTION,
+    OvershootMargins,
     RepairBudget,
     allocate_budget,
     floor_fraction,
@@ -162,6 +165,7 @@ class Harness:
     saved: dict[str, Mapping[str, object]] = field(default_factory=dict)
     reserve: float = 0.0
     repairs: list[bool] = field(default_factory=list)
+    discipline: Callable[[str], bool] | None = None
 
     def allocate(
         self, plan: RoutePlan, kind: str, depth: str, cap: float, repair: bool
@@ -210,10 +214,13 @@ class Harness:
             verifier=self.verifier,
             lines_of=lines(work),
             reads_of=lambda run_id: self.reads.get(run_id, ()),
-            margin=lambda: self.margin,
+            margin=lambda: OvershootMargins(
+                {f"model-{role.value}": (self.margin,) * 3 for role in ROLES}
+            ),
             index_tools=lambda engine: engine in self.index_engines,
             new_files=self.guard,
             checkpoint=self.checkpoint,
+            read_discipline=self.discipline,
         )
 
     def run(
@@ -357,6 +364,33 @@ def test_a_failed_check_gets_one_repair_then_passes(tmp_path: Path) -> None:
     assert "senior gets one repair turn" in " ".join(recorder.texts())
     assert report.state is CompletionState.COMPLETE
     assert report.spent_usd == pytest.approx(0.45)
+
+
+def test_a_disciplined_senior_keeps_its_read_discipline_through_a_repair_round(
+    tmp_path: Path,
+) -> None:
+    seed(tmp_path)
+    failing = (VerifyResult("npm run build", 1, 2.0, ("src/layout.ts:1 Type error",)),)
+    script = {
+        "senior": [
+            Act(cost=0.1, writes={"src/layout.ts": "broken\n"}),
+            Act(cost=0.05, writes={"src/layout.ts": "fixed\n"}),
+        ]
+    }
+    team = {Role.ANALYST: "claude", Role.SENIOR: "claude", Role.TESTER: "claude"}
+    harness = Harness(
+        tmp_path, script, verify_results=[failing], discipline=lambda engine: engine == "claude"
+    )
+    report, _ = harness.run(team)
+    senior = [step for step in report.steps if step.role is Role.SENIOR]
+    assert [(step.repair, step.read_discipline) for step in senior] == [
+        (False, HOOKS),
+        (True, HOOKS),
+    ]
+    modes = {"analyst": HOOKS, "senior": HOOKS, "tester": HOOKS}
+    assert cross_metrics(report)["governor"] == {"reactions": [], "read_discipline": modes}
+    governor = cross_payload(report)["governor"]
+    assert isinstance(governor, dict) and governor["read_discipline"] == modes
 
 
 def test_a_fix_without_docs_funds_its_repair_turn_from_the_docs_share(tmp_path: Path) -> None:
@@ -680,7 +714,7 @@ def test_codex_overruns_are_charged_to_the_remainder_and_shown(tmp_path: Path) -
     assert report.steps[2].budget_usd == pytest.approx(0.2)
 
 
-def test_claude_native_caps_sit_below_the_share_by_the_learned_margin(tmp_path: Path) -> None:
+def test_claude_native_caps_sit_below_the_share_by_the_model_overshoot(tmp_path: Path) -> None:
     seed(tmp_path)
     harness = Harness(
         tmp_path,
@@ -689,10 +723,24 @@ def test_claude_native_caps_sit_below_the_share_by_the_learned_margin(tmp_path: 
         margin=0.2,
         shares={Role.ANALYST: 0.5, Role.SENIOR: 0.5},
     )
-    report, _ = harness.run({Role.ANALYST: "claude", Role.SENIOR: "codex"})
-    assert [step.native_cap_usd for step in report.steps] == pytest.approx([0.4, 0.9])
+    report, recorder = harness.run({Role.ANALYST: "claude", Role.SENIOR: "codex"})
+    assert [step.native_cap_usd for step in report.steps] == pytest.approx([0.3, 0.9])
     requests = [request.max_budget_usd for request in harness.actors["claude"].requests]
-    assert requests == pytest.approx([0.4])
+    assert requests == pytest.approx([0.3])
+    assert "analyst native cap $0.3000, $0.2000 below its $0.5000 share" in recorder.texts()
+
+
+def test_a_large_overshoot_never_takes_more_than_half_a_claude_share(tmp_path: Path) -> None:
+    seed(tmp_path)
+    harness = Harness(
+        tmp_path,
+        {},
+        budget=1.0,
+        margin=0.4,
+        shares={Role.ANALYST: 0.5, Role.SENIOR: 0.5},
+    )
+    report, _ = harness.run({Role.ANALYST: "claude", Role.SENIOR: "codex"})
+    assert report.steps[0].native_cap_usd == pytest.approx(0.25)
 
 
 @dataclass

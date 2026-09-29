@@ -4,6 +4,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, replace
 from typing import Any, cast
 
+from cuanta.domain.read_discipline import READ_LINE_LIMIT
+
 DEFAULT_PORT = 4318
 
 
@@ -40,6 +42,8 @@ class Config:
     instinct_share_paths: bool = False
     instinct_envelope: bool = False
     read_discipline: bool = False
+    pipeline_read_discipline: bool = True
+    read_max_lines: int = READ_LINE_LIMIT
     index_tools: bool = False
     pipeline_index_tools: bool = True
     index_enabled: bool = True
@@ -61,6 +65,8 @@ KEY_MAP: dict[str, str] = {
     "ui.mandate_layout": "mandate_layout",
     "runs.session": "run_session",
     "runs.read_discipline": "read_discipline",
+    "runs.pipeline_read_discipline": "pipeline_read_discipline",
+    "runs.read_max_lines": "read_max_lines",
     "runs.index_tools": "index_tools",
     "runs.pipeline_index_tools": "pipeline_index_tools",
     "runs.index_enabled": "index_enabled",
@@ -183,6 +189,9 @@ def layer_from_table(table: Mapping[str, object]) -> dict[str, object]:
         del layer["mandate_layout"]
     if layer.get("git_workflow") not in (None, *GIT_WORKFLOWS):
         del layer["git_workflow"]
+    lines = layer.get("read_max_lines")
+    if isinstance(lines, int) and lines < 1:
+        del layer["read_max_lines"]
     return layer
 
 

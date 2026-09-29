@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import stat
 import sys
@@ -14,6 +15,7 @@ from cuanta.application.session_profile import record_hook_event
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.read_discipline import (
     POST_CONTEXT,
+    READ_LINE_LIMIT,
     ReadDisciplineDecision,
     decide_read_discipline,
 )
@@ -57,7 +59,9 @@ def _string(data: Mapping[str, object], name: str, default: str = "") -> str:
     return value
 
 
-def hook_decision(payload: Mapping[str, object], root: Path) -> tuple[ReadDisciplineDecision, str]:
+def hook_decision(
+    payload: Mapping[str, object], root: Path, line_limit: int = READ_LINE_LIMIT
+) -> tuple[ReadDisciplineDecision, str]:
     root = root.resolve()
     cwd = _contained(root, _string(payload, "cwd", str(root)))
     if not cwd.is_dir():
@@ -81,7 +85,8 @@ def hook_decision(payload: Mapping[str, object], root: Path) -> tuple[ReadDiscip
             file_characters = len(text)
     if tool == "Read" and not relative:
         raise ValueError("Read requires a contained file path")
-    return decide_read_discipline(tool, inputs, file_lines, file_characters), relative
+    decision = decide_read_discipline(tool, inputs, file_lines, file_characters, line_limit)
+    return decision, relative
 
 
 def _log(
@@ -112,7 +117,9 @@ def _log(
         container.close()
 
 
-def hook_output(payload: object, root: Path, mode: str) -> dict[str, object]:
+def hook_output(
+    payload: object, root: Path, mode: str, line_limit: int = READ_LINE_LIMIT
+) -> dict[str, object]:
     if mode not in {"pre", "post"}:
         raise ValueError("Hook mode must be pre or post")
     event = "PreToolUse" if mode == "pre" else "PostToolUse"
@@ -120,7 +127,7 @@ def hook_output(payload: object, root: Path, mode: str) -> dict[str, object]:
         data = _object(payload)
         if _string(data, "hook_event_name", event) != event:
             raise ValueError("Hook event does not match the selected mode")
-        decision, relative = hook_decision(data, root)
+        decision, relative = hook_decision(data, root, line_limit)
     except (OSError, ValueError):
         if mode == "post":
             return {}
@@ -142,14 +149,26 @@ def hook_output(payload: object, root: Path, mode: str) -> dict[str, object]:
     return {"hookSpecificOutput": specific}
 
 
+def line_limit(arguments: list[str]) -> int | None:
+    if not arguments:
+        return READ_LINE_LIMIT
+    if len(arguments) != 1 or re.fullmatch(r"[0-9]+", arguments[0]) is None:
+        return None
+    limit = int(arguments[0])
+    return limit if limit >= 1 else None
+
+
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in {"pre", "post"}:
+    if len(sys.argv) < 2 or sys.argv[1] not in {"pre", "post"}:
+        return 2
+    limit = line_limit(sys.argv[2:])
+    if limit is None:
         return 2
     try:
         payload: object = json.load(sys.stdin)
     except (ValueError, OSError):
         payload = None
-    result = hook_output(payload, Path.cwd(), sys.argv[1])
+    result = hook_output(payload, Path.cwd(), sys.argv[1], limit)
     if result:
         sys.stdout.write(stable_json(result))
     return 0

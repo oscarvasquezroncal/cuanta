@@ -12,6 +12,7 @@ from cuanta.domain.anatomy import AnatomyReport, analyze_anatomy
 from cuanta.domain.cache import FirstRequestCache, cache_message
 from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
 from cuanta.domain.estimates import estimate_error
+from cuanta.domain.governor_report import GovernorSummary, blocked_calls, parse_governor
 from cuanta.domain.index_metrics import IndexMetrics
 from cuanta.domain.ledger import Run
 from cuanta.domain.mandate import INVESTIGATION, MandateRequest, Shape
@@ -117,6 +118,7 @@ class ResultView:
     index: IndexMetrics = field(default_factory=IndexMetrics)
     anatomy: AnatomyReport = field(default_factory=AnatomyReport)
     read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
+    governor: GovernorSummary = field(default_factory=GovernorSummary)
 
     @property
     def decidable(self) -> bool:
@@ -328,6 +330,7 @@ class ResultQuery:
                     root for owner in (run, *roles) for root in self._read_reporting.roots(owner)
                 ),
             ),
+            governor=parse_governor(meta.get("governor"), blocked_calls(index_events)),
         )
 
     def _roles(self, run: Run) -> tuple[Run, ...]:

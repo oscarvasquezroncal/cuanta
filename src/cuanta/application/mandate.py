@@ -13,6 +13,8 @@ from cuanta.domain.change_plan import ChangePlan, plan_metrics
 from cuanta.domain.detection import Stack
 from cuanta.domain.engine import AssistantText, EngineEvent, RunResult, ToolCall
 from cuanta.domain.errors import DomainFailure
+from cuanta.domain.governor import ReactionTaken
+from cuanta.domain.governor_report import governor_metrics
 from cuanta.domain.graph_policy import graphless_prompt
 from cuanta.domain.instinct import SCOPES, Choice, scope_hint_line
 from cuanta.domain.ledger import Capsule, Run, Snapshot
@@ -118,6 +120,7 @@ class MandateReport:
     single: bool = False
     prompt_chars: int = 0
     change_plan: ChangePlan | None = None
+    governor: tuple[ReactionTaken, ...] = ()
 
 
 class MandateService:
@@ -353,6 +356,9 @@ def report_payload(report: MandateReport) -> dict[str, object]:
             for row in report.audit
         ],
     }
+    governor = governor_metrics(report.governor)
+    if governor:
+        payload["governor"] = governor
     if report.change_plan is not None:
         payload.update(plan_metrics(report.change_plan, report.changed_files, run.engine))
     return payload

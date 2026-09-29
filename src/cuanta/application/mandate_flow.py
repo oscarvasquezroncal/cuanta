@@ -14,6 +14,7 @@ from cuanta.application.forecast import (
 from cuanta.application.instinct import DecisionScope
 from cuanta.application.mandate import Composed, MandateReport, MandateService, allowed_tools
 from cuanta.application.route_apply import Applied, MandateRouting, RouteOptions
+from cuanta.application.steering import GovernorSetup, observed, session_steering
 from cuanta.domain.agents import role_of
 from cuanta.domain.change_plan import ChangePlan, apply_overrides
 from cuanta.domain.depth import (
@@ -208,7 +209,11 @@ class MandateFlow:
         learn_run: Callable[[str], None] | None = None,
         pipeline_index_tools: bool = False,
         forecaster: Forecaster | None = None,
+        governor: GovernorSetup | None = None,
+        pipeline_read_discipline: bool = False,
     ) -> None:
+        self._pipeline_read_discipline = pipeline_read_discipline
+        self._governor = governor
         self._forecaster = forecaster
         self._pipeline_index_tools = pipeline_index_tools
         self._learn_run = learn_run
@@ -350,6 +355,14 @@ class MandateFlow:
             index_tools=(
                 True
                 if claude and applied is not None and applied.agents and self._pipeline_index_tools
+                else None
+            ),
+            read_discipline=(
+                True
+                if claude
+                and applied is not None
+                and applied.agents
+                and self._pipeline_read_discipline
                 else None
             ),
         )
@@ -518,14 +531,19 @@ class MandateFlow:
                     f"{name} lacks flags cuanta needs: {', '.join(missing)}", f"upgrade {name}"
                 )
             self._record_forecast(prepared, progress)
+            steering = session_steering(
+                self._governor, prepared.launcher, prepared.spec, prepared.forecast, progress
+            )
             report = self._service.run(
                 prepared.composed,
                 prepared.launcher,
-                prepared.spec,
+                prepared.spec if steering is None else replace(prepared.spec, steer=True),
                 progress,
                 self._summarize,
-                observer,
+                observer if steering is None else observed(observer, steering),
             )
+            if steering is not None:
+                report = replace(report, governor=tuple(steering.taken))
         finally:
             self._active = None
         applied = prepared.applied

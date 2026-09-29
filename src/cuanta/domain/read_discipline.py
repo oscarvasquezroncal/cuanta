@@ -38,20 +38,32 @@ def _raw_test(command: str) -> bool:
     )
 
 
+def discipline_prompt(max_lines: int = READ_LINE_LIMIT) -> str:
+    return (
+        "READ DISCIPLINE (best effort: this engine cannot enforce it): never read a file of more "
+        f"than {max_lines} lines whole; read a line range, or use Cuanta page when you have it. "
+        "Never search file contents across the whole tree; give a path, a glob or a file type. "
+        "Never run test commands yourself (pytest, npm test, npx jest or vitest); cuanta runs "
+        "the tests."
+    )
+
+
 def decide_read_discipline(
     tool_name: str,
     tool_input: Mapping[str, object],
     file_lines: int = 0,
     file_characters: int = 0,
+    line_limit: int = READ_LINE_LIMIT,
 ) -> ReadDisciplineDecision:
     if (
         tool_name == "Read"
-        and file_lines > READ_LINE_LIMIT
+        and file_lines > line_limit
         and not (_positive(tool_input.get("offset")) and _positive(tool_input.get("limit")))
     ):
         return ReadDisciplineDecision(
             "deny",
-            "Large Read blocked: use an explicit offset and limit or the cuanta page tool.",
+            "Large Read blocked: pass an explicit offset and limit, or use the cuanta page tool "
+            "when you have it.",
             avoided_tokens=max(0, (file_characters + 3) // 4),
         )
     if tool_name == "Grep":

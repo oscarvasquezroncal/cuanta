@@ -207,6 +207,7 @@ def native(ledger: MemoryLedger, service: StubService, forecasting: bool) -> Man
     flow._routing = None
     flow._learn_run = None
     flow._forecaster = forecaster(ledger) if forecasting else None
+    flow._governor = None
     return flow
 
 

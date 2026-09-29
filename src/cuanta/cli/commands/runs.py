@@ -237,6 +237,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
     from cuanta.cli.document import Document, Hint, KeyValues, Line, MarkdownText, Verbatim
     from cuanta.cli.fmt import usd
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
+    from cuanta.domain.governor_report import governor_payload
     from cuanta.domain.messages import english, msg
     from cuanta.domain.overhead import overhead_messages, overhead_payload
 
@@ -299,6 +300,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
             "read_count": view.read_efficiency.read_count,
             "useful_count": view.read_efficiency.useful_count,
         },
+        "governor": governor_payload(view.governor),
     }
     if markdown:
         text = run_markdown(view)
@@ -348,6 +350,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
             for item in view.verification
         ),
         *_trial_rows(view.trial),
+        *_governor_rows(view),
     )
     blocks: list[Block] = [KeyValues(rows)]
     if view.trial is not None and view.trial.trial.guard_tripped:
@@ -361,6 +364,36 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
     if view.report_path:
         blocks.append(Hint(f"report: {view.report_path} · cuanta runs open {run.id}"))
     return Document(blocks=tuple(blocks), payload=payload)
+
+
+def _governor_rows(view: "ResultView") -> tuple[tuple[str, str], ...]:
+    summary = view.governor
+    if not summary.shown:
+        return ()
+    saved = summary.saved_usd
+    value = "n/a" if saved is None else f"${saved:.4f} (estimate)"
+    rows = [("governor", f"{len(summary.reactions)} reactions · saving {value}")]
+    rows.extend(
+        (
+            f"governor {entry.role}",
+            f"+{entry.at_s:.1f} s {entry.kind}"
+            + (f" {entry.outcome}" if entry.outcome else "")
+            + ("" if entry.sent else " (not delivered)"),
+        )
+        for entry in summary.reactions
+    )
+    blocked = summary.blocked
+    if blocked is not None and blocked.total:
+        rows.append(
+            (
+                "blocked calls",
+                f"{blocked.reads} reads, {blocked.searches} searches, {blocked.tests} tests"
+                f" · ~{blocked.tokens:,} tokens avoided",
+            )
+        )
+    if summary.best_effort:
+        rows.append(("read discipline", f"best effort for {', '.join(summary.best_effort)}"))
+    return tuple(rows)
 
 
 def _decision_rows(view: "ResultView") -> tuple[tuple[str, str], ...]:

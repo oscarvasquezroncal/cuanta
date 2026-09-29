@@ -118,3 +118,34 @@ def test_opencode_step_cap_reaps_an_engine_and_its_children(
     while _alive(child) and time.monotonic() < deadline:
         time.sleep(0.1)
     assert not _alive(child)
+
+
+def test_closing_a_stream_stops_the_tree_before_a_prompt_blocked_on_stdin(tmp_path: Path) -> None:
+    script = tmp_path / "deaf.py"
+    marker = tmp_path / "grandchild.pid"
+    script.write_text(
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(25)'], "
+        "stdin=sys.stdin, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid))\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(25)\n",
+        encoding="utf-8",
+    )
+    stream = SubprocessRunner().stream(
+        [sys.executable, str(script), str(marker)],
+        cwd=tmp_path,
+        stdin_text="x" * 4_000_000,
+        keep_stdin=True,
+    )
+    assert next(stream.lines()) == "ready"
+    time.sleep(0.5)
+    closer = threading.Thread(target=stream.close, daemon=True)
+    closer.start()
+    closer.join(timeout=15)
+    assert not closer.is_alive()
+    grandchild = int(marker.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 5
+    while _alive(grandchild) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not _alive(grandchild)
