@@ -104,7 +104,10 @@ the fix mandates of `cuanta loop --engine codex`: each fix runs as one Codex ses
 
 Codex can already run subagents in one session, each on its own model (contract CX-11). cuanta does
 not use them yet: a child's token usage appears only in its own rollout file, not in the JSONL that
-`codex exec` prints, so cuanta would count the parent's cost and miss the children's.
+`codex exec` prints, so cuanta would count the parent's cost and miss the children's. A Codex role
+can also spawn a subagent on its own: in the recorded mixed-teams fix trial the senior did, and the
+child spent about $0.84 that the ledger never saw. cuanta therefore launches and resumes every Codex
+role with `--config features.multi_agent=false` and `--config features.multi_agent_v2=false`.
 
 The app caps a GPT team with the Team step's cap. From the command line, a GPT team's whole run is
 capped by `--max-budget-usd`, else the `--depth` cap, else the `budget.usd` setting, else the normal
@@ -169,8 +172,9 @@ commands before they start.
   rest is split by the planned cost of each role, or by the median cost of earlier runs once every
   role has three completed runs with the same engine, model, task type and depth. Later roles' shares
   are reserved before a role starts, and unspent money flows forward.
-- **Soft stop.** A Claude role's native cap sits below its share by a margin learned from measured
-  overruns, 10% until there are enough of them.
+- **Soft stop.** A Claude role's native cap sits below its share by that model's overshoot in
+  dollars: the 90th percentile of how far its earlier runs went past their native cap (about one
+  request), or $0.08 until the model has three such runs. The cap never drops below half the share.
 - **A budget stop is partial, not fatal.** cuanta saves a salvage handoff from what the role read and
   the pipeline continues when the remainder still covers the next roles' floors.
 - **Optional roles.** Docs, and the tester once verification has passed, are skipped with a recorded
@@ -184,6 +188,74 @@ commands before they start.
 A run ends in one of four states, shown in the result, `cuanta runs show` and `cuanta costs`:
 complete; complete with optional roles skipped; partial; failed. The cost per accepted change counts
 every attempt.
+
+## Governor
+
+While a Claude role runs, cuanta reads its stream and projects its spend: the cost of the next
+requests from the context each one rereads, and whether the cap arrives before the plan's edits are
+done.
+
+- **Stream-json input.** When the installed Claude Code lists `--input-format` in its help, cuanta
+  launches each Claude role of a team of separate launches, and the session of a native Claude team,
+  with `--input-format stream-json`. The prompt goes in as one stream-json user message, stdin stays
+  open until the run's result, and cuanta closes it then (contract CC-12). Other launches keep
+  plain-text stdin. Without the flag, the launch is the same as before, and the soft stop and
+  salvage above still end a role that reaches its cap.
+- **Finish now.** When a role has spent 85% of its share, when two more requests would reach its
+  native cap, or when the projection says the cap arrives before the plan is done and is at most four
+  requests away, cuanta sends one turn: "termina ahora: aplica lo que está completo, escribe el
+  handoff y lista lo que falta". The projection waits for three requests of the running agent, so
+  its context growth is measured, not guessed from the first request. The turn asks for the JSON
+  handoff, with status partial when work remains. Claude reads it between tool calls, after at most
+  one more tool call. It is sent once per role. When it cannot be sent, the progress shows it, and
+  the native cap and salvage stop the role instead.
+- **A native Claude team.** The whole session is governed against the mandate's cap. The finish
+  turn reaches the main agent only: a subagent that is running when it is sent finishes its own work
+  first, and the main agent reads the turn when that subagent returns. cuanta cannot cut a subagent
+  short.
+- **Rotation.** In a team of separate launches, when a fresh session costs less than continuing,
+  cuanta asks the role for a checkpoint handoff, ends that session and starts the role again with its
+  prompt and the checkpoint. The comparison is the remaining requests rereading the current context
+  at the cache-read price, against one checkpoint request plus the role's fixed prefix written once
+  and reread. A role rotates at most once, never after it has spent 85% of its share, and does not
+  restart when the checkpoint leaves 15% of its share or less; its checkpoint is then its handoff.
+  The result lists both launches, the first marked as rotated, and that run stores the estimated
+  saving as `rotation_saving_usd`.
+- **Codex stop and finish.** Codex reports no spend while it runs (contract CX-10), so cuanta
+  estimates a Codex role's spend from its completed items and elapsed time: the role's forecast per
+  request, and the model's median cost per second over at least three earlier finished runs. When
+  the estimate reaches 85% of the role's share, or two more items would reach it, cuanta ends the
+  process tree with the same teardown a stop uses. When the installed `codex exec resume --help`
+  shows the `exec resume` usage with a `SESSION_ID`, and lists `--json`, `--config`, `--model` and
+  `--skip-git-repo-check`, it then runs
+  `codex exec resume <thread> -` (the sandbox as `-c sandbox_mode=...`, the working folder as the
+  process's; contract CX-12) with one short finish turn that lists the files changed in the working
+  copy, and asks for the handoff. Work still running at the stop is lost. The stopped launch is
+  recorded with the estimated cost, labelled as an estimate, never zero. When the thread cannot be
+  resumed, or the finish turn fails, the stopped role is salvaged as a role that hit its cap: a
+  partial handoff from the changed files, and the pipeline continues when the remainder covers the
+  next floors. The governor checks the estimate at each Codex event; a single long item is not
+  interrupted.
+- **Read discipline, on by default in teams.** Every Claude role of a team of separate launches, and
+  the session of a native Claude team whose profile cuanta generates, runs with cuanta's
+  `PreToolUse`/`PostToolUse` hooks (contracts CC-10 and CC-11): a `Read` of a file above
+  `runs.read_max_lines` lines (400) without an offset and limit is blocked and pointed to a line
+  range, or the Cuanta page tool when the role has it; a content `Grep` over the whole tree without a path, glob or type is blocked; raw test
+  commands (pytest, npm test, npx jest or vitest and the like) run as `cuanta test`. Each blocked call
+  is logged with the tokens the read would have cost (file size ÷ 4). A team role's own settings file
+  is generated even in a full session so the hooks apply. `runs.pipeline_read_discipline = false`
+  turns this off; single launches keep `runs.read_discipline` (off by default). Codex cannot run
+  these hooks, so a Codex role gets the same rules in its prompt only, labelled best effort.
+- **The Result panel.** The Consumption tab of a governed run shows a governor panel ("Gobernador"
+  in Spanish): each reaction with the seconds since the role started, the spend and the limit, the
+  trigger and its outcome; the estimated saving (a rotation's saving once it restarted, and a Codex
+  stop's projected overrun past the role's limit, n/a when the plan gives no end, such as a role
+  that has used its planned requests before its first planned edit; a finish turn saves no dollars,
+  since the native cap bounds the role either way); the blocked calls with the tokens avoided; and
+  which roles had the read discipline enforced or best effort. Below 30 rows the Result screen
+  scrolls, and its tabs keep at least 16 rows. `cuanta runs show --json` and `cuanta mandate --json`
+  add a `governor` object with the same facts; the mandate's own JSON leaves `blocked` null for a
+  native session, whose blocked calls `runs show` counts from the ledger.
 
 ## Forecast before launch
 
