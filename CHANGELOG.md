@@ -8,7 +8,8 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 Teams by provider: a mandate's team runs on Claude or GPT (Codex), with a current model per role.
 A forecast envelope before launch: P50, P90, margin and verdict, stored with each run and
-calibrated against its actual cost.
+calibrated against its actual cost. A governor that watches each role while it runs and finishes it
+before its share runs out.
 
 ### Added
 - Default models per provider and tier in `model_tiers.toml`: Claude `haiku`, `sonnet`, `opus`;
@@ -31,12 +32,40 @@ calibrated against its actual cost.
 - `instinct.envelope` (off by default) asks Jev, with consent, to adjust the forecast from a
   numbers-only summary. The call is priced first and capped, and its answer is weighted by its track
   record.
+- A governor for team roles. It reads each role's live stream and projects its spend. A Claude role
+  launches with `--input-format stream-json` when the installed help lists it, and gets one turn,
+  "termina ahora: aplica lo que está completo, escribe el handoff y lista lo que falta", at 85% of
+  its share, two requests before its cap, or when, after three requests, the projection puts the
+  cap at most four requests away and before the plan is done. Without the flag the launch is
+  unchanged and the cap and salvage stop the role. A Claude role of a team of separate launches
+  restarts once in a fresh session with a checkpoint handoff when that costs less than continuing.
+  A native Claude team is governed as one session against the mandate cap; the main agent reads the
+  finish turn when the running subagent returns.
+- A Codex role is stopped when its estimated spend (items, elapsed time, and the model's cost per
+  second in earlier runs) reaches 85% of its share. cuanta then resumes the thread with
+  `codex exec resume` for a short finish turn that lists the changed files, when the installed
+  resume help allows it; otherwise the role is salvaged. The stopped launch's cost is recorded as an
+  estimate, never zero.
+- Result's Consumption tab shows a governor panel ("Gobernador" in Spanish) with each reaction, its
+  time, spend and limit, the estimated saving, the blocked calls with the tokens avoided, and which
+  roles had the read discipline enforced or best effort. `cuanta runs show --json` and
+  `cuanta mandate --json` add a `governor` object; team steps add `rotated`, `stopped`, `resumed` and
+  `read_discipline`. Below 30 rows the Result screen scrolls so its tabs keep room.
+- `runs.read_max_lines` (400) sets the line count above which a `Read` without a range is blocked.
 
 ### Changed
 - `--role-model role=model` pins a model within the team's provider; a pin to the other provider is
   refused before launch with the reason. `--cross-engine` now runs each role as its own launch on the
   same provider.
 - The tester asks for the standard tier instead of premium.
+- A Claude role's native cap now sits that model's P90 overshoot in dollars below its share ($0.08
+  until three overshoots are recorded, never under half the share), instead of a proportional cut
+  that left small shares, such as a GSAP fix's senior, without room to finish.
+- Read discipline is on by default for team roles (`runs.pipeline_read_discipline`): Claude roles
+  run cuanta's hooks, which block unbounded large reads and whole-tree content searches and send raw
+  test commands to `cuanta test`, logging each blocked call with the tokens it would have cost. A
+  team role's settings file is generated even in a full session so the hooks apply. Codex roles get
+  the rules in their prompt, as best effort. Single launches keep `runs.read_discipline` off.
 - On Windows, a GPT team's tester stays on Codex and is told not to run node, npm or npx commands
   (builds or tests); cuanta runs the checks itself between roles.
 - Team recommends a provider, not a preset, from measured cost per accepted change. Codex pipeline
