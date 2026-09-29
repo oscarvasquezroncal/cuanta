@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules, strict_tools
 from cuanta.domain.graph_policy import GRAPH_REFERENCE, graphless_prompt
 from cuanta.domain.routing import Role
+from cuanta.domain.scout import SCOUT_AGENT, SCOUT_DESCRIPTION, SCOUT_TOOLS, scout_agent_prompt
 from cuanta.domain.stable import stable_json
 
 FENCE = "---"
@@ -34,8 +35,10 @@ ROLE_NAMES: Mapping[str, Role] = {
     "architecture-analyst": Role.ANALYST,
     "tester": Role.TESTER,
     "docs-updater": Role.DOCS,
+    "scout": Role.SCOUT,
 }
 SENIOR_SUFFIX = "-senior"
+READ_ONLY_ROLES = frozenset({Role.ANALYST, Role.SCOUT})
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +177,7 @@ def guarded_agents(agents: AgentsPlan, plan: ChangePlan) -> AgentsPlan:
         return agents
     protected: dict[str, dict[str, object]] = {}
     for name, original in agents.agents.items():
-        readonly = plan.read_only or agents.roles.get(name) is Role.ANALYST
+        readonly = plan.read_only or agents.roles.get(name) in READ_ONLY_ROLES
         effective = replace(plan, read_only=readonly)
         allowed = strict_tools(effective)
         declared = original.get("tools")
@@ -234,3 +237,17 @@ def indexed_agents(agents: AgentsPlan) -> AgentsPlan:
             )
         enriched[name] = spec
     return AgentsPlan(enriched, agents.roles)
+
+
+def scout_definition() -> AgentDefinition:
+    return AgentDefinition(
+        SCOUT_AGENT,
+        {"description": SCOUT_DESCRIPTION, "tools": list(SCOUT_TOOLS)},
+        scout_agent_prompt(),
+    )
+
+
+def with_scout(definitions: Sequence[AgentDefinition]) -> tuple[AgentDefinition, ...]:
+    if any(role_of(item.name) is Role.SCOUT for item in definitions):
+        return tuple(definitions)
+    return (*definitions, scout_definition())

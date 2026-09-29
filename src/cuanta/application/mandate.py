@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 
 from cuanta.application.engine_run import EngineLauncher, LaunchSpec
@@ -33,6 +33,8 @@ from cuanta.domain.mandate import (
 from cuanta.domain.messages import english, msg
 from cuanta.domain.progress import Status, note
 from cuanta.domain.report import strip_preamble
+from cuanta.domain.scout import DocsChoice
+from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, docs_payload
 from cuanta.domain.testing import GatewayStatus
 from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.ledger import Ledger
@@ -121,6 +123,8 @@ class MandateReport:
     prompt_chars: int = 0
     change_plan: ChangePlan | None = None
     governor: tuple[ReactionTaken, ...] = ()
+    scout: Mapping[str, object] | None = None
+    docs: DocsChoice | None = None
 
 
 class MandateService:
@@ -359,6 +363,10 @@ def report_payload(report: MandateReport) -> dict[str, object]:
     governor = governor_metrics(report.governor)
     if governor:
         payload["governor"] = governor
+    if report.scout is not None:
+        payload[SCOUT_KEY] = dict(report.scout)
+    if report.docs is not None:
+        payload[DOCS_KEY] = docs_payload(report.docs)
     if report.change_plan is not None:
         payload.update(plan_metrics(report.change_plan, report.changed_files, run.engine))
     return payload

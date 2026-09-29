@@ -65,7 +65,7 @@ def test_the_gpt_team_preview_forecasts_the_per_role_pipeline(
     assert envelope["cap_usd"] == data["budget_usd"]
     roles = envelope["roles"]
     assert data["verify"] == []
-    assert [row["role"] for row in roles] == ["analyst", "senior", "tester", "docs"]
+    assert [row["role"] for row in roles] == ["analyst", "senior", "tester"]
     assert not any(row["repair"] for row in roles)
     assert {row["model"] for row in roles} == {
         row["model"] for row in data["roles"] if row["model"] is not None

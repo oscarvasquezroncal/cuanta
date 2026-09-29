@@ -225,6 +225,7 @@ The single most sensible next request, as a filled REQUEST block. Propose only; 
 class Shape(StrEnum):
     SINGLE = "single"
     PIPELINE = "pipeline"
+    SCOUT = "scout"
 
 
 def parse_shape(text: str) -> Shape:

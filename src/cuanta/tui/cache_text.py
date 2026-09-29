@@ -10,6 +10,7 @@ from cuanta.domain.cache import (
     PrefixState,
     PrefixWindow,
 )
+from cuanta.domain.queue import warm_known, warm_message
 from cuanta.tui.i18n import Catalog
 
 
@@ -38,3 +39,25 @@ def prefix_content(t: Catalog, window: PrefixWindow) -> Content:
     key = "cache.prefix_warm" if window.state is PrefixState.WARM else "cache.prefix_cold"
     style = "$success" if window.state is PrefixState.WARM else "$warning"
     return Content.styled(t(key, time=clock_time(window.until)), style)
+
+
+def queue_unreadable_content(t: Catalog) -> Content:
+    return Content.assemble(
+        (t("home.queue_unreadable"), "$warning"),
+        "\n",
+        (t("home.queue_list_command"), "$accent"),
+    )
+
+
+def queue_content(t: Catalog, count: int, window: PrefixWindow) -> Content:
+    style = "$text-muted"
+    if warm_known(window):
+        style = "$success" if window.state is PrefixState.WARM else "$warning"
+    time = clock_time(window.until) if window.until is not None else ""
+    return Content.assemble(
+        (t("home.queue", count=count), "bold"),
+        " · ",
+        (t.message(warm_message(window, time)), style),
+        "\n",
+        (t("home.queue_command"), "$accent"),
+    )

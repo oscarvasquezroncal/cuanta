@@ -208,3 +208,24 @@ def test_project_sandbox_contract(tmp_path: Path) -> None:
     assert sandbox.remove(copy)
     assert not copy.slot.exists()
     assert (origin / target).is_file()
+
+
+def test_queue_store_contract(tmp_path: Path) -> None:
+    from cuanta.adapters.storage.queue_file import FileQueueStore
+    from cuanta.domain.queue import QueueEntry
+    from cuanta.ports.queue import QueueStore
+
+    store: QueueStore = FileQueueStore(tmp_path / ".cuanta")
+    assert store.entries() == ()
+    first = store.append(("--what", "one"), "2026-09-29T19:00:00Z")
+    second = store.append(("--what", "two"), "2026-09-29T19:01:00Z")
+    assert isinstance(first, QueueEntry) and first.id != second.id
+    assert store.entries() == (first, second)
+    assert store.remove({first.id}) == (first.id,)
+    assert store.entries() == (second,)
+    assert store.claim()
+    assert not store.claim()
+    store.release()
+    assert store.claim()
+    store.release()
+    assert store.lock_file()

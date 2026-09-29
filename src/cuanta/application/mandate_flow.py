@@ -14,8 +14,10 @@ from cuanta.application.forecast import (
 from cuanta.application.instinct import DecisionScope
 from cuanta.application.mandate import Composed, MandateReport, MandateService, allowed_tools
 from cuanta.application.route_apply import Applied, MandateRouting, RouteOptions
+from cuanta.application.scout import SessionWatch, session_scout, watched
 from cuanta.application.steering import GovernorSetup, observed, session_steering
 from cuanta.domain.agents import role_of
+from cuanta.domain.capsules import capsule_id
 from cuanta.domain.change_plan import ChangePlan, apply_overrides
 from cuanta.domain.depth import (
     DEFAULT_DEPTH,
@@ -30,6 +32,7 @@ from cuanta.domain.detection import GraphMode, Stack
 from cuanta.domain.engine import EngineEvent
 from cuanta.domain.errors import CuantaError, DomainFailure, NotAvailable
 from cuanta.domain.estimates import RunEstimate
+from cuanta.domain.evidence_pack import LinesOf
 from cuanta.domain.guarantees import readonly_unavailable
 from cuanta.domain.mandate import (
     INVESTIGATION,
@@ -48,9 +51,22 @@ from cuanta.domain.mandate import (
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pack import ContextPack
 from cuanta.domain.progress import Status, finished, note, started
-from cuanta.domain.routing import Role, RoleRoute, parse_provider
+from cuanta.domain.routing import Provider, Role, RoleRoute, parse_provider
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, sandbox_launch
+from cuanta.domain.scout import (
+    DocsChoice,
+    DocsMode,
+    DocsReason,
+    ScoutMode,
+    docs_choice,
+    docs_off_line,
+    has_pin,
+    parse_forced_shape,
+    scout_refusal,
+    scout_session_block,
+)
 from cuanta.domain.team import runs_per_role
+from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.engine import Engine
 from cuanta.ports.progress import ProgressSink
 
@@ -81,12 +97,30 @@ class MandateOptions:
     keep_copy: bool = False
     estimate: RunEstimate | None = None
     plan_overrides: tuple[tuple[str, str], ...] = ()
+    scout_mode: str = ""
+
+
+def scout_launch(options: MandateOptions, task_type: str) -> bool:
+    return (
+        not options.simple
+        and task_type != INVESTIGATION
+        and parse_shape(options.shape) is Shape.SCOUT
+        and options.scout_mode == ScoutMode.LAUNCH.value
+    )
 
 
 def per_role_run(options: MandateOptions, task_type: str, default_engine: str) -> bool:
     single = single_context(task_type, options.simple, parse_shape(options.shape))
     pipeline = not options.simple and not single
-    return runs_per_role(options.engine or default_engine, pipeline)
+    engine = options.engine or default_engine
+    claude_launch = parse_provider(engine) is Provider.CLAUDE and scout_launch(options, task_type)
+    return runs_per_role(engine, pipeline) or claude_launch
+
+
+def has_scout(applied: Applied | None) -> bool:
+    if applied is None or applied.agents is None:
+        return False
+    return Role.SCOUT in applied.agents.roles.values()
 
 
 def isolated(spec: LaunchSpec, sandbox: SandboxLaunch | None, claude: bool) -> LaunchSpec:
@@ -139,6 +173,8 @@ class Prepared:
     applied: Applied | None = None
     forecast: PlannedForecast | None = None
     forecast_error: Message | None = None
+    scout: bool = False
+    docs: DocsChoice | None = None
 
 
 def display_command(parts: tuple[str, ...], prompt: str) -> str:
@@ -211,7 +247,13 @@ class MandateFlow:
         forecaster: Forecaster | None = None,
         governor: GovernorSetup | None = None,
         pipeline_read_discipline: bool = False,
+        docs_mode: DocsMode = DocsMode.ON,
+        lines_of: LinesOf | None = None,
+        capsules: CapsuleStore | None = None,
     ) -> None:
+        self._docs_mode = docs_mode
+        self._lines_of = lines_of
+        self._capsules = capsules
         self._pipeline_read_discipline = pipeline_read_discipline
         self._governor = governor
         self._forecaster = forecaster
@@ -256,6 +298,15 @@ class MandateFlow:
 
     def _validate(self, request: MandateRequest, options: MandateOptions) -> None:
         validate(request)
+        engine = options.engine or self._default_engine
+        refusal = scout_refusal(
+            request.type,
+            parse_forced_shape(options.shape),
+            options.simple,
+            parse_provider(engine) is not None,
+        )
+        if refusal is not None:
+            raise DomainFailure(english(refusal[0]), refusal[1])
         if self._refresh_index is not None:
             self._refresh_index()
         if not options.simple and self._has_agents is not None and not self._has_agents():
@@ -293,7 +344,9 @@ class MandateFlow:
         else:
             tools = allowed_tools(self._stack(), graph_available)
         launcher = self._launchers(engine)
-        route = replace(options.route, depth=options.depth) if options.depth else options.route
+        route, wanted, docs = self._route(
+            request, options, claude and not single and not investigation
+        )
         applied = (
             self._routing.apply(request, route, engine_name, graph_available)
             if self._routing is not None and not options.simple
@@ -387,7 +440,7 @@ class MandateFlow:
             command,
             options.simple,
             options.route.clarity,
-            extra,
+            "\n".join(part for part in (extra, self._team_block(applied, wanted, docs)) if part),
             shape,
             graph_available,
             self._packed_prompt(pack, ""),
@@ -403,8 +456,41 @@ class MandateFlow:
             launcher,
             spec,
             applied,
-            *self._forecast(request.type, applied, engine_name, options, base, protection),
+            *self._forecast(
+                request.type,
+                applied,
+                engine_name,
+                options,
+                base,
+                protection,
+                Shape.SCOUT.value if wanted and has_scout(applied) else base.shape,
+            ),
+            scout=wanted and has_scout(applied),
+            docs=docs,
         )
+
+    def _route(
+        self, request: MandateRequest, options: MandateOptions, native: bool
+    ) -> tuple[RouteOptions, bool, DocsChoice | None]:
+        route = replace(options.route, depth=options.depth) if options.depth else options.route
+        if not native or options.simple:
+            return route, False, None
+        trial = options.sandbox or self._sandbox is not None
+        docs = docs_choice(
+            self._docs_mode, request, trial, has_pin(options.route.role_models, Role.DOCS)
+        )
+        scout = parse_shape(options.shape) is Shape.SCOUT
+        return replace(route, scout=scout, docs=docs.on), scout, docs
+
+    def _team_block(self, applied: Applied | None, scout: bool, docs: DocsChoice | None) -> str:
+        if applied is None or applied.agents is None:
+            return ""
+        docs_on = docs is None or docs.on
+        if scout and has_scout(applied):
+            return scout_session_block(docs_on)
+        if docs is not None and not docs_on:
+            return docs_off_line()
+        return ""
 
     def _forecast(
         self,
@@ -414,20 +500,22 @@ class MandateFlow:
         options: MandateOptions,
         spec: LaunchSpec,
         protection: ChangePlan | None,
+        shape: str = "",
     ) -> tuple[PlannedForecast | None, Message | None]:
         provider = parse_provider(engine_name)
         if self._forecaster is None or applied is None or provider is None or options.simple:
             return None, None
+        shape = shape or spec.shape
         try:
             planned = self._forecaster.plan(
                 task_type,
                 applied.plan,
                 provider,
                 options.depth,
-                spec.shape,
+                shape,
                 spec.max_budget_usd,
                 protection,
-                native=spec.shape == Shape.PIPELINE.value,
+                native=shape in {Shape.PIPELINE.value, Shape.SCOUT.value},
                 model=options.model,
                 max_turns=spec.max_turns,
             )
@@ -534,16 +622,24 @@ class MandateFlow:
             steering = session_steering(
                 self._governor, prepared.launcher, prepared.spec, prepared.forecast, progress
             )
+            if prepared.docs is not None and prepared.docs.reason is not DocsReason.FORCED_ON:
+                progress.publish(note(Status.INFO, prepared.docs.message))
+            watch = SessionWatch() if prepared.scout else None
+            sink = watched(observer, watch) if watch is not None else observer
             report = self._service.run(
                 prepared.composed,
                 prepared.launcher,
                 prepared.spec if steering is None else replace(prepared.spec, steer=True),
                 progress,
                 self._summarize,
-                observer if steering is None else observed(observer, steering),
+                sink if steering is None else observed(sink, steering),
             )
             if steering is not None:
                 report = replace(report, governor=tuple(steering.taken))
+            if watch is not None:
+                report = replace(report, scout=self._session_scout(prepared, watch, report))
+            if prepared.docs is not None and prepared.docs.reason is not DocsReason.FORCED_ON:
+                report = replace(report, docs=prepared.docs)
         finally:
             self._active = None
         applied = prepared.applied
@@ -559,6 +655,21 @@ class MandateFlow:
         if self._learn_run is not None:
             self._learn_run(report.run.id)
         return report
+
+    def _session_scout(
+        self, prepared: Prepared, watch: SessionWatch, report: MandateReport
+    ) -> dict[str, object]:
+        plan = prepared.spec.change_plan
+        planned = tuple(target.path for target in plan.edit) if plan is not None else ()
+        return session_scout(
+            watch, self._lines_of, planned, report.changed_files, self._store, report.run.id
+        )
+
+    def _store(self, text: str) -> str:
+        if self._capsules is None:
+            return ""
+        digest, _, _ = self._capsules.put(text)
+        return capsule_id(digest)
 
     def _record_forecast(self, prepared: Prepared, progress: ProgressSink) -> None:
         planned = prepared.forecast

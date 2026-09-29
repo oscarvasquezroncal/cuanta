@@ -17,7 +17,7 @@ from textual.timer import Timer
 from textual.widgets import Button, Checkbox, Input, Label, Select, Static, TextArea
 
 from cuanta.application.assistant import Improvement
-from cuanta.application.cross_engine import CROSS_ORDER
+from cuanta.application.cross_engine import TEAM_ROLES
 from cuanta.application.estimate import Estimate
 from cuanta.application.intake import Understanding
 from cuanta.application.mandate_flow import MandateOptions, MandatePreview
@@ -48,6 +48,7 @@ from cuanta.domain.mandate import (
 from cuanta.domain.messages import msg
 from cuanta.domain.models import ModelEntry
 from cuanta.domain.routing import ENGINE_ORDER, Provider
+from cuanta.domain.scout import eligible
 from cuanta.domain.team import ProviderAdvice, RoleCard, advice_message, runs_per_role
 from cuanta.tui.cache_text import prefix_content
 from cuanta.tui.fmt import money
@@ -156,6 +157,7 @@ class MandateWizard(Vertical):
         self.understanding: Understanding | None = None
         self.plan: RoutePlan | None = None
         self.estimate: Estimate | None = None
+        self.scout_launch = False
         self.proposal: Improvement | None = None
         self.forge_ready = True
         self.simple = False
@@ -166,6 +168,7 @@ class MandateWizard(Vertical):
         self._autosave: Timer | None = None
         self._team_lock = asyncio.Lock()
         self._team_revision = 0
+        self._shaped_revision = -1
         self.change_plan: ChangePlan | None = None
         self._plan_overrides: dict[str, str] = {}
         self._change_revision = 0
@@ -473,6 +476,19 @@ class MandateWizard(Vertical):
         if self.custom_cap:
             return parse_cap(self.query_one("#wiz-budget", Input).value)
         return profile(parse_depth(self.depth), self.kind).cost_cap_usd
+
+    def decided(self, options: MandateOptions) -> MandateOptions:
+        choice = self.estimate.shape if self.estimate is not None else None
+        if (
+            choice is None
+            or options.shape
+            or options.route.role_models
+            or self._shaped_revision != self._team_revision
+            or not (choice.scout or eligible(self.kind, options.simple))
+        ):
+            return options
+        mode = choice.mode.value if choice.scout else options.scout_mode
+        return replace(options, shape=choice.shape.value, scout_mode=mode)
 
     def options(self) -> MandateOptions:
         chosen = self.query_one("#wiz-engine", Select).value
@@ -863,7 +879,7 @@ class MandateWizard(Vertical):
             )
             return
         story = self.story or self.request().what
-        options = self.options()
+        options = self.decided(self.options())
         pinned = bool(options.route.role_models)
         shown = self.estimate.bounds if self.estimate is not None and not pinned else None
         self.post_message(self.Launch(self.request(), replace(options, estimate=shown)))
@@ -1259,7 +1275,8 @@ class MandateWizard(Vertical):
             return
         widgets: list[Horizontal] = []
         selects: list[Select[str]] = []
-        routes = [route for route in plan.routes if not self.per_role or route.role in CROSS_ORDER]
+        self.scout_launch = estimate.shape is not None and estimate.shape.launch
+        routes = [route for route in plan.routes if not self.per_role or route.role in TEAM_ROLES]
         for route in routes:
             model = route.model.id if route.model else t("wizard.engine_default")
             tier = t(f"models.tier_{route.tier.value}") if route.tier else "–"
@@ -1313,12 +1330,29 @@ class MandateWizard(Vertical):
             return
         self.plan = plan
         self.estimate = estimate
+        self._shaped_revision = revision
         self.query_one("#team-simple-note").display = False
         cards.display = True
         self.query_one("#wiz-estimate", Static).update(self._estimate_content(estimate))
         self._paint_summary()
 
     def _estimate_content(self, estimate: Estimate) -> Content:
+        found = self._forecast_content(estimate)
+        lines = [
+            Content.styled(self._t.message(message), "$accent")
+            for message in (
+                estimate.shape.message if estimate.shape is not None else None,
+                estimate.docs.message
+                if estimate.docs is not None and not estimate.docs.on
+                else None,
+            )
+            if message is not None
+        ]
+        if not lines:
+            return found
+        return Content("\n").join((*lines, found))
+
+    def _forecast_content(self, estimate: Estimate) -> Content:
         t = self._t
         text = t.message(estimate.message)
         if estimate.over:
@@ -1353,7 +1387,7 @@ class MandateWizard(Vertical):
 
     @property
     def per_role(self) -> bool:
-        return runs_per_role(self.engine, self.pipeline)
+        return runs_per_role(self.engine, self.pipeline) or (self.pipeline and self.scout_launch)
 
     @property
     def run_note(self) -> str:
@@ -1580,7 +1614,9 @@ class MandateWizard(Vertical):
     @work(thread=True, exclusive=True, group="wizard-preview", exit_on_error=False)
     def load_preview(self) -> None:
         try:
-            preview = self._services.preview_mandate(self.request(), 0, self.options())
+            preview = self._services.preview_mandate(
+                self.request(), 0, self.decided(self.options())
+            )
         except Exception as error:
             self._call(self.app.notify, str(error), severity="error")
             return

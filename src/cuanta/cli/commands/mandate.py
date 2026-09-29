@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.routing import Provider
+    from cuanta.domain.scout import DocsChoice, ShapeChoice
+    from cuanta.domain.scout_report import ScoutSummary
 
 TEAM_BUDGET_USD = 1.0
 
@@ -54,6 +56,7 @@ class MandateArgs:
     shape: str = ""
     sandbox: bool = False
     keep: bool = False
+    scout_mode: str = ""
 
 
 def mandate_command(
@@ -137,7 +140,11 @@ def mandate_command(
         str,
         typer.Option(
             "--shape",
-            help="Investigations: single (one context, default) or pipeline (analyst subagent).",
+            help=(
+                "Investigations: single (one context, default) or pipeline (analyst subagent). "
+                "Features and fixes: pipeline or scout (scout and senior); omitted, the forecast "
+                "picks."
+            ),
         ),
     ] = "",
     sandbox: Annotated[
@@ -281,7 +288,12 @@ def _options(args: MandateArgs) -> "MandateOptions":
         shape=args.shape,
         sandbox=args.sandbox,
         keep_copy=args.keep,
+        scout_mode=args.scout_mode,
     )
+
+
+def mandate_options(args: MandateArgs) -> "MandateOptions":
+    return _options(args)
 
 
 def _prepare(
@@ -317,6 +329,8 @@ def run_mandate_core(
 
 
 def run_mandate(session: Session, args: MandateArgs) -> "Document":
+    from dataclasses import replace
+
     from cuanta.application.mandate_flow import display_command
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Document, Line, Verbatim
@@ -327,14 +341,17 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
         options = _options(args)
         built = _build_request(session, container.mandate_service(container.shared_ledger()), args)
         request = built[0]
+        options, choice = container.shaped_options(request, options, args.cross_engine)
+        args = replace(args, shape=options.shape, scout_mode=options.scout_mode)
         per_role = _per_role(container, args, options, request.type)
         if args.dry_run and per_role:
-            return preview_per_role(container, args, request)
+            return preview_per_role(container, args, request, choice)
         if args.dry_run:
             _, prepared = _prepare(session, container, args, built)
             composed = prepared.composed
             shown = display_command(composed.command, composed.prompt)
-            team = tuple(Line(line, Status.INFO) for line in team_lines(prepared))
+            lines = [*team_lines(prepared), *shape_lines(choice, prepared.docs)]
+            team = tuple(Line(line, Status.INFO) for line in lines)
             forecast = tuple(forecast_blocks(prepared.forecast, prepared.forecast_error))
             copy_note = (
                 (Line("isolated copy: not created in a dry run", Status.INFO),)
@@ -356,14 +373,16 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
                     "command": list(composed.command),
                     "scope_hint": composed.hint.option,
                     "engine": prepared.engine_name,
-                    "team": team_lines(prepared),
+                    "team": lines,
                     "agents_file": prepared.spec.agents_file or None,
                     "model": prepared.spec.model or None,
                     "envelope": forecast_payload(prepared.forecast),
+                    "shape": choice.payload(),
+                    "docs": docs_json(prepared.docs),
                 },
             )
         if per_role:
-            return run_cross_engine(session, container, args, request)
+            return run_cross_engine(session, container, args, request, choice)
         if args.sandbox:
             return run_sandbox(session, container, args, built)
         report = run_mandate_core(session, container, args, built=built)
@@ -448,8 +467,8 @@ def _provider(container: "Container", args: MandateArgs) -> "Provider":
 
 
 def _team_plan(
-    container: "Container", args: MandateArgs, request: "MandateRequest"
-) -> "tuple[MandateOptions, RoutePlan, Provider, float]":
+    container: "Container", args: MandateArgs, request: "MandateRequest", choice: "ShapeChoice"
+) -> "tuple[MandateOptions, RoutePlan, Provider, float, DocsChoice | None]":
     from cuanta.domain.errors import DomainFailure
     from cuanta.domain.messages import english, msg
 
@@ -466,6 +485,8 @@ def _team_plan(
         depth=options.depth,
         engine=provider.value,
     )
+    docs = container.docs_choice(request, options)
+    plan = container.shape_plan(plan, choice, docs)
     issues = container.route_advisor(container.shared_ledger()).pin_issues(
         plan, roles, (provider.value,)
     )
@@ -474,7 +495,7 @@ def _team_plan(
             english(msg("route.pins_rejected")), "; ".join(english(item) for item in issues)
         )
     budget = team_budget(container, args, options, request.type, provider)
-    return options, plan, provider, budget
+    return options, plan, provider, budget, docs
 
 
 def per_role_title(provider: "Provider") -> str:
@@ -509,19 +530,19 @@ def team_turns(container: "Container", options: "MandateOptions", task_type: str
 
 
 def preview_per_role(
-    container: "Container", args: MandateArgs, request: "MandateRequest"
+    container: "Container", args: MandateArgs, request: "MandateRequest", choice: "ShapeChoice"
 ) -> "Document":
     from cuanta.application.forecast import forecast_failure
     from cuanta.cli.document import Document, Line
     from cuanta.cli.fmt import usd
-    from cuanta.domain.envelope import PIPELINE_SHAPE
+    from cuanta.domain.envelope import PIPELINE_SHAPE, SCOUT_SHAPE
     from cuanta.domain.errors import CuantaError
     from cuanta.domain.messages import english, msg
     from cuanta.domain.progress import Status
     from cuanta.domain.routing import Provider, Role
 
-    options, plan, provider, budget = _team_plan(container, args, request)
-    lines = per_role_lines(container, plan, provider)
+    options, plan, provider, budget, docs = _team_plan(container, args, request, choice)
+    lines = [*per_role_lines(container, plan, provider), *shape_lines(choice, docs)]
     lines.append(f"spend cap {usd(budget)}" if budget > 0 else "spend cap: none")
     lines.append(estimate_line(container.run_estimate(plan, request.type, options.depth)))
     protection = container.change_plan(request)
@@ -539,7 +560,7 @@ def preview_per_role(
             plan,
             provider,
             options.depth,
-            PIPELINE_SHAPE,
+            SCOUT_SHAPE if choice.scout else PIPELINE_SHAPE,
             budget,
             protection,
             max_turns=turns,
@@ -570,23 +591,31 @@ def preview_per_role(
             ],
             "verify": list(verify),
             "envelope": forecast_payload(planned),
+            "shape": choice.payload(),
+            "docs": docs_json(docs),
         },
     )
 
 
 def run_cross_engine(
-    session: Session, container: "Container", args: MandateArgs, request: "MandateRequest"
+    session: Session,
+    container: "Container",
+    args: MandateArgs,
+    request: "MandateRequest",
+    choice: "ShapeChoice",
 ) -> "Document":
     from cuanta.cli.document import Document, Line
     from cuanta.domain.messages import english
     from cuanta.domain.progress import Note, Status
     from cuanta.domain.routing import Provider
 
-    options, plan, provider, budget = _team_plan(container, args, request)
-    if provider is Provider.CLAUDE:
+    options, plan, provider, budget, docs = _team_plan(container, args, request, choice)
+    if provider is Provider.CLAUDE and (args.cross_engine or not choice.launch):
         session.presenter.publish(Note(Status.WARN, "cross-engine pipeline (experimental)"))
     session.presenter.publish(Note(Status.INFO, per_role_title(provider)))
-    publish_cross_team(session, container, request, plan, options.depth, budget)
+    for line in shape_lines(choice, None):
+        session.presenter.publish(Note(Status.INFO, line))
+    publish_cross_team(session, container, request, plan, options.depth, budget, docs)
     guess = container.run_estimate(plan, request.type, options.depth)
     session.presenter.publish(Note(Status.INFO, estimate_line(guess)))
     max_turns = team_turns(container, options, request.type)
@@ -611,6 +640,7 @@ def run_cross_engine(
         )
         report = pipeline.run(request, plan, session.presenter)
     blocks = cross_blocks(report, budget, per_role_title(provider))
+    blocks.extend(Line(line, Status.INFO) for line in scout_lines(cross_summary(report)))
     if report.stopped is not None:
         blocks.append(Line(english(report.stopped), Status.WARN))
     if isolated is not None:
@@ -632,6 +662,7 @@ def publish_cross_team(
     plan: "RoutePlan",
     depth: str,
     budget: float,
+    docs: "DocsChoice | None" = None,
 ) -> None:
     from cuanta.domain.messages import english, msg
     from cuanta.domain.progress import Note, Status
@@ -643,7 +674,8 @@ def publish_cross_team(
     )
 
     verify = container.change_plan(request).verify
-    shares = container.role_budget(plan, request.type, depth, budget, bool(verify)).shares
+    docs_off = docs is not None and not docs.on
+    shares = container.role_budget(plan, request.type, depth, budget, bool(verify), docs_off).shares
     for card in team_cards(
         plan.routes,
         shares,
@@ -818,7 +850,88 @@ def cross_payload(
             for step in report.steps
         ],
         "governor": governor_payload(governor_summary(report.governor, modes, blocked)),
+        "scout": cross_scout(report),
+        "docs": docs_json(report.docs),
     }
+
+
+def cross_scout(report: "CrossReport") -> dict[str, object] | None:
+    from cuanta.domain.scout_report import scout_payload
+
+    scout = report.scout
+    if scout is None:
+        return None
+    return scout_payload(scout.mode.value, scout.run_id, scout.capsule, scout.check, scout.senior)
+
+
+def cross_summary(report: "CrossReport") -> "ScoutSummary":
+    from cuanta.domain.scout_report import parse_scout
+
+    return parse_scout(cross_scout(report), docs_json(report.docs))
+
+
+def docs_json(docs: "DocsChoice | None") -> dict[str, object] | None:
+    from cuanta.domain.scout import DocsReason
+    from cuanta.domain.scout_report import docs_payload
+
+    if docs is None or docs.reason is DocsReason.FORCED_ON:
+        return None
+    return docs_payload(docs)
+
+
+def shape_lines(choice: "ShapeChoice", docs: "DocsChoice | None") -> list[str]:
+    from cuanta.domain.messages import english
+    from cuanta.domain.scout import DocsReason
+
+    lines = [english(choice.message)] if choice.message is not None else []
+    if docs is not None and docs.reason is not DocsReason.FORCED_ON:
+        lines.append(english(docs.message))
+    return lines
+
+
+def scout_lines(summary: "ScoutSummary") -> list[str]:
+    return [f"{label}: {value}" for label, value in scout_rows(summary)]
+
+
+def scout_rows(summary: "ScoutSummary") -> tuple[tuple[str, str], ...]:
+    rows: list[tuple[str, str]] = []
+    if summary.mode:
+        rows.append(
+            (
+                "evidence pack",
+                f"{summary.tokens:,}/{summary.budget:,} tokens · {summary.facts} facts · "
+                f"{summary.snippets} snippets · scout {summary.mode} · {summary.capsule or '-'}",
+            )
+        )
+        rows.append(("edit set", ", ".join(summary.edit_set) or "-"))
+        if not summary.dispatched:
+            rows.append(("scout", "never dispatched by the main agent: no pack was captured"))
+        if summary.trimmed:
+            rows.append(
+                (
+                    "pack trimmed",
+                    f"{summary.dropped_snippets} snippets and {summary.dropped_facts} facts "
+                    "dropped",
+                )
+            )
+        if summary.over_budget:
+            rows.append(("pack over budget", f"{summary.tokens:,} tokens"))
+        if summary.senior_checked:
+            leaks = (
+                ", ".join(summary.leaked) or "none"
+                if summary.leaks_known
+                else "not measured in a native session"
+            )
+            rows.append(("senior reads outside the pack", leaks))
+            if summary.outside_named:
+                rows.append(("edits outside the set, named", ", ".join(summary.outside_named)))
+            if summary.outside_unnamed:
+                rows.append(
+                    ("edits outside the set, not named", ", ".join(summary.outside_unnamed))
+                )
+    if summary.docs:
+        rows.append(("docs", f"{summary.docs} ({summary.docs_reason.replace('_', ' ')})"))
+    return tuple(rows)
 
 
 def team_lines(prepared: "Prepared") -> list[str]:
@@ -1003,6 +1116,7 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
     from cuanta.domain.governor_report import governor_payload, governor_summary
     from cuanta.domain.guarantees import budget_stop_reason
     from cuanta.domain.messages import english
+    from cuanta.domain.scout_report import parse_scout
     from cuanta.domain.voice import Mood
 
     run = report.run
@@ -1031,6 +1145,7 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
         *budget_rows,
         ("utilization", f"{index} (heuristic v1)"),
         *audit_rows(report),
+        *scout_rows(parse_scout(report.scout, docs_json(report.docs))),
     )
     panel = Panel(
         "purr" if report.ok else "hiss",

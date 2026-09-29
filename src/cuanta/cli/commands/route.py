@@ -16,9 +16,9 @@ PRESETS = ("save", "balanced", "best")
 
 def parse_role_models(values: list[str]) -> dict[str, str]:
     from cuanta.domain.errors import DomainFailure
-    from cuanta.domain.routing import ROLES
+    from cuanta.domain.routing import ALL_ROLES
 
-    names = {role.value for role in ROLES}
+    names = {role.value for role in ALL_ROLES}
     pinned: dict[str, str] = {}
     for value in values:
         role, _, model = value.partition("=")

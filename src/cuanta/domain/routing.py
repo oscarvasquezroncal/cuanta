@@ -20,6 +20,7 @@ class Role(StrEnum):
     SENIOR = "senior"
     TESTER = "tester"
     DOCS = "docs"
+    SCOUT = "scout"
 
 
 class Provider(StrEnum):
@@ -27,7 +28,9 @@ class Provider(StrEnum):
     CODEX = "codex"
 
 
-ROLES = tuple(Role)
+ROLES = (Role.ORCHESTRATOR, Role.ANALYST, Role.SENIOR, Role.TESTER, Role.DOCS)
+SCOUT_ROLES = (Role.ORCHESTRATOR, Role.SCOUT, Role.SENIOR, Role.TESTER, Role.DOCS)
+ALL_ROLES = tuple(Role)
 ENGINE_ORDER = ("claude", "codex", "opencode")
 PROVIDERS = tuple(Provider)
 DEFAULT_ROLE_TIERS: Mapping[Role, Tier] = {
@@ -36,6 +39,7 @@ DEFAULT_ROLE_TIERS: Mapping[Role, Tier] = {
     Role.SENIOR: Tier.PREMIUM,
     Role.TESTER: Tier.STANDARD,
     Role.DOCS: Tier.ECONOMY,
+    Role.SCOUT: Tier.ECONOMY,
 }
 DEFAULT_CAP = Tier.PREMIUM
 DEFAULT_MIN_CONFIDENCE = 0.6
@@ -56,6 +60,7 @@ PRESET_ROLES: Mapping[Preset, Mapping[Role, Tier]] = {
         Role.SENIOR: Tier.STANDARD,
         Role.TESTER: Tier.STANDARD,
         Role.DOCS: Tier.ECONOMY,
+        Role.SCOUT: Tier.ECONOMY,
     },
     Preset.BALANCED: DEFAULT_ROLE_TIERS,
     Preset.BEST: {
@@ -64,6 +69,7 @@ PRESET_ROLES: Mapping[Preset, Mapping[Role, Tier]] = {
         Role.SENIOR: Tier.PREMIUM,
         Role.TESTER: Tier.PREMIUM,
         Role.DOCS: Tier.STANDARD,
+        Role.SCOUT: Tier.STANDARD,
     },
 }
 PRESET_CAPS: Mapping[Preset, Tier] = {
@@ -171,7 +177,7 @@ def apply_preset(policy: RoutingPolicy, preset: Preset) -> RoutingPolicy:
         policy,
         preset=preset,
         roles=dict(PRESET_ROLES[preset]),
-        caps=replace(policy.caps, max_tier=dict.fromkeys(ROLES, cap)),
+        caps=replace(policy.caps, max_tier=dict.fromkeys(ALL_ROLES, cap)),
     )
 
 
@@ -343,7 +349,9 @@ def pin_issues(
             issues.append(msg("route.pin_unknown", role=role.value, model=reference))
         elif entry.engine not in engines:
             issues.append(foreign_pin(role, entry, engines))
-        elif route is None or route.model is None or route.model.key != entry.key:
+        elif route is None:
+            issues.append(msg("route.pin_absent", role=role.value, model=entry.key))
+        elif route.model is None or route.model.key != entry.key:
             issues.append(msg("route.pin_lost", role=role.value, model=entry.key))
     return tuple(issues)
 
@@ -381,10 +389,10 @@ def roles_that_run(task_type: str, simple: bool = False) -> tuple[Role, ...]:
 
 
 def depth_capped(policy: RoutingPolicy, cap: Tier) -> RoutingPolicy:
-    ceilings = {role: min(policy.caps.ceiling(role), cap, key=tier_rank) for role in ROLES}
+    ceilings = {role: min(policy.caps.ceiling(role), cap, key=tier_rank) for role in ALL_ROLES}
     frontier = policy.caps.frontier and cap is Tier.FRONTIER
     caps = replace(policy.caps, max_tier=ceilings, frontier=frontier)
-    roles = {role: min(policy.tier_for(role), ceilings[role], key=tier_rank) for role in ROLES}
+    roles = {role: min(policy.tier_for(role), ceilings[role], key=tier_rank) for role in ALL_ROLES}
     return replace(policy, caps=caps, roles=roles)
 
 

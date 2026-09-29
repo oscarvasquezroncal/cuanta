@@ -14,6 +14,7 @@ ROLE_FLOORS: Mapping[Role, float] = {
     Role.SENIOR: 0.20,
     Role.TESTER: 0.08,
     Role.DOCS: 0.04,
+    Role.SCOUT: 0.12,
 }
 OPTIONAL_ROLES = frozenset({Role.DOCS})
 MIN_SAMPLES = 3
@@ -165,7 +166,13 @@ def role_split(
     cap: float,
     fix: bool,
     floors: Mapping[Role, float] | None = None,
+    docs_off: bool = False,
 ) -> RepairBudget:
+    if docs_off:
+        docs_free: dict[Role, float | None] = {
+            role: value for role, value in costs.items() if role is not Role.DOCS
+        }
+        return repair_budget(docs_free, cap, False, floors)
     if fix:
         return repair_budget(costs, cap, Role.DOCS in costs, floors)
     return RepairBudget(allocate_budget(costs, cap, floors), 0.0, False)

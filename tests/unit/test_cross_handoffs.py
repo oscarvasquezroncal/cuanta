@@ -42,6 +42,8 @@ from cuanta.domain.role_budgets import (
 )
 from cuanta.domain.role_handoff import VerifyResult
 from cuanta.domain.routing import ROLES, Role, RoleRoute, RoutingPolicy
+from cuanta.domain.sandbox import SandboxLaunch
+from cuanta.domain.scout import DocsMode
 from tests.fakes import FakeRunner, FakeStream
 
 REQUEST = MandateRequest(type="feature", what="add canonical", why="seo", out_of_scope="secrets")
@@ -165,12 +167,16 @@ class Harness:
     saved: dict[str, Mapping[str, object]] = field(default_factory=dict)
     reserve: float = 0.0
     repairs: list[bool] = field(default_factory=list)
+    docs_off: list[bool] = field(default_factory=list)
     discipline: Callable[[str], bool] | None = None
+    docs_mode: DocsMode = DocsMode.ON
+    sandbox: SandboxLaunch | None = None
 
     def allocate(
-        self, plan: RoutePlan, kind: str, depth: str, cap: float, repair: bool
+        self, plan: RoutePlan, kind: str, depth: str, cap: float, repair: bool, docs_off: bool
     ) -> RepairBudget:
         self.repairs.append(repair)
+        self.docs_off.append(docs_off)
         return RepairBudget(self.shares or {}, self.reserve, False)
 
     def verifier(
@@ -221,6 +227,8 @@ class Harness:
             new_files=self.guard,
             checkpoint=self.checkpoint,
             read_discipline=self.discipline,
+            docs_mode=self.docs_mode,
+            sandbox=self.sandbox,
         )
 
     def run(

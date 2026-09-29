@@ -7,6 +7,9 @@ from typing import Any, cast
 from cuanta.domain.read_discipline import READ_LINE_LIMIT
 
 DEFAULT_PORT = 4318
+SCOUT_MODES = ("native", "launch")
+DOCS_MODES = ("auto", "on", "off")
+DEFAULT_SCOUT_THRESHOLD = 0.35
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +51,9 @@ class Config:
     pipeline_index_tools: bool = True
     index_enabled: bool = True
     pack_enabled: bool = True
+    scout_mode: str = "native"
+    scout_threshold: float = DEFAULT_SCOUT_THRESHOLD
+    docs_mode: str = "auto"
 
 
 KEY_MAP: dict[str, str] = {
@@ -71,6 +77,9 @@ KEY_MAP: dict[str, str] = {
     "runs.pipeline_index_tools": "pipeline_index_tools",
     "runs.index_enabled": "index_enabled",
     "runs.pack_enabled": "pack_enabled",
+    "runs.scout_mode": "scout_mode",
+    "runs.scout_threshold": "scout_threshold",
+    "runs.docs": "docs_mode",
     "git.workflow": "git_workflow",
     "ui.onboarded": "onboarded",
     "listener.port": "port",
@@ -192,6 +201,13 @@ def layer_from_table(table: Mapping[str, object]) -> dict[str, object]:
     lines = layer.get("read_max_lines")
     if isinstance(lines, int) and lines < 1:
         del layer["read_max_lines"]
+    if layer.get("scout_mode") not in (None, *SCOUT_MODES):
+        del layer["scout_mode"]
+    if layer.get("docs_mode") not in (None, *DOCS_MODES):
+        del layer["docs_mode"]
+    threshold = layer.get("scout_threshold")
+    if isinstance(threshold, float) and not 0.0 < threshold <= 1.0:
+        del layer["scout_threshold"]
     return layer
 
 

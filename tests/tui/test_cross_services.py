@@ -15,10 +15,11 @@ from cuanta.domain.change_plan import ChangePlan
 from cuanta.domain.config import Config
 from cuanta.domain.errors import NotAvailable
 from cuanta.domain.ledger import Run
-from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.mandate import MandateRequest, Shape
 from cuanta.domain.messages import english, msg
 from cuanta.domain.pricing import PriceTable
 from cuanta.domain.routing import Role, RoutingPolicy
+from cuanta.domain.scout import ShapeChoice
 from cuanta.tui.services import ContainerServices, cross_report
 
 if TYPE_CHECKING:
@@ -87,9 +88,12 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
         cap: float,
         shape: str = "pipeline",
         repair: bool = True,
+        docs_off: bool = False,
     ) -> Estimate:
         reserves.append(repair)
-        return estimate(plan, (), PriceTable({}), task_type, depth, cap, shape, None, repair)
+        return estimate(
+            plan, (), PriceTable({}), task_type, depth, cap, shape, None, repair, docs_off
+        )
 
     def team_forecast(*args: object, **kwargs: object) -> PlannedForecast:
         raise ValueError("the code index is being written")
@@ -100,6 +104,9 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
         team_estimate=team_estimate,
         change_plan=lambda request: ChangePlan(),
         team_forecast=team_forecast,
+        shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
+        docs_choice=lambda request, options: None,
+        shape_plan=lambda plan, shape, docs: plan,
         close=lambda: None,
     )
     services = ContainerServices(tmp_path)

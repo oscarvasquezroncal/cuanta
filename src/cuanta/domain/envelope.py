@@ -10,6 +10,7 @@ from cuanta.domain.cache import PrefixState
 from cuanta.domain.cache_probe import ONE_HOUR_WRITE_FACTOR
 from cuanta.domain.costs import median, sum_costs
 from cuanta.domain.depth import TOKENS_PER_READ, Depth, DepthProfile, profile
+from cuanta.domain.evidence_pack import PACK_TOKENS
 from cuanta.domain.ledger import Forecast
 from cuanta.domain.mandate import Shape
 from cuanta.domain.messages import Message, keyed, msg
@@ -21,7 +22,7 @@ from cuanta.domain.routing import Provider, Role, percentile
 
 SINGLE_SHAPE = Shape.SINGLE.value
 PIPELINE_SHAPE = Shape.PIPELINE.value
-SCOUT_SHAPE = "scout"
+SCOUT_SHAPE = Shape.SCOUT.value
 ENVELOPE_SOURCE = "envelope"
 JEV_SOURCE = "envelope+jev"
 
@@ -38,6 +39,7 @@ CLAUDE_FIXED: Mapping[Role, int] = {
     Role.SENIOR: 47_900,
     Role.TESTER: 47_900,
     Role.DOCS: 34_800,
+    Role.SCOUT: 19_500,
 }
 CLAUDE_MAIN_FIXED = 35_600
 CLAUDE_SUBAGENT_FIXED: Mapping[Role, int] = {
@@ -45,13 +47,14 @@ CLAUDE_SUBAGENT_FIXED: Mapping[Role, int] = {
     Role.SENIOR: 18_200,
     Role.TESTER: 18_400,
     Role.DOCS: 14_300,
+    Role.SCOUT: 14_000,
 }
 CODEX_FIXED = 20_000
 FIVE_MINUTE_TTL_S = 300
 DISPATCH_TOKENS = 300
 HANDOFF_TOKENS: Mapping[Role, int] = {Role.SENIOR: 160, Role.TESTER: 450, Role.DOCS: 660}
 DEFAULT_HANDOFF = 450
-SCOUT_PACK_TOKENS = 6_000
+SCOUT_PACK_TOKENS = PACK_TOKENS
 SENIOR_READ_FILES = 2
 TESTER_READ_FILES = 3
 MAIN_READ_FILES = 6
@@ -67,12 +70,14 @@ CLAUDE_LAUNCH_REQUESTS: Mapping[Role, int] = {
     Role.SENIOR: 4,
     Role.TESTER: 5,
     Role.DOCS: 13,
+    Role.SCOUT: 6,
 }
 CLAUDE_SUBAGENT_REQUESTS: Mapping[Role, int] = {
     Role.ANALYST: 3,
     Role.SENIOR: 8,
     Role.TESTER: 5,
     Role.DOCS: 17,
+    Role.SCOUT: 3,
 }
 BASE_REQUESTS = 4
 REQUESTS_PER_READ = 1
@@ -89,6 +94,7 @@ READ_SLACK = 2
 LARGE_READ_SHARE = 0.5
 EXPLORATION_DOMINANCE = 0.5
 SHALLOWER: Mapping[Depth, Depth] = {Depth.DEEP: Depth.NORMAL, Depth.NORMAL: Depth.QUICK}
+EXPLORERS = frozenset({Role.ANALYST, Role.SCOUT})
 
 
 class Verdict(StrEnum):
@@ -379,30 +385,28 @@ def _single_works(inputs: EnvelopeInputs) -> tuple[_Work, ...]:
 
 
 def _scout_chain(inputs: EnvelopeInputs) -> tuple[RoleInput, ...]:
+    scout = next((item for item in inputs.roles if item.role is Role.SCOUT), None)
     analyst = next((item for item in inputs.roles if item.role is Role.ANALYST), None)
-    model = inputs.economy or (analyst.model if analyst is not None else None)
     writers = tuple(
-        item for item in inputs.roles if item.role not in {Role.ORCHESTRATOR, Role.ANALYST}
+        item for item in inputs.roles if item.role not in {Role.ORCHESTRATOR, *EXPLORERS}
     )
     if not writers and inputs.roles:
         writers = (replace(inputs.roles[0], role=Role.SENIOR),)
+    if scout is not None:
+        return (scout, *writers)
+    model = inputs.economy or (analyst.model if analyst is not None else None)
     if model is None:
         return _pipeline_chain(inputs)
-    scout = (
-        replace(analyst, model=model, cheaper=None)
-        if analyst is not None
-        else RoleInput(Role.ANALYST, model)
-    )
-    return (scout, *writers)
+    return (RoleInput(Role.SCOUT, model), *writers)
 
 
 def _pipeline_chain(inputs: EnvelopeInputs) -> tuple[RoleInput, ...]:
-    chain = tuple(item for item in inputs.roles if item.role is not Role.ORCHESTRATOR)
+    chain = tuple(item for item in inputs.roles if item.role not in {Role.ORCHESTRATOR, Role.SCOUT})
     return chain or inputs.roles[:1]
 
 
 def _handoff(role: Role, previous: Role, scout: bool, depth: DepthProfile) -> int:
-    if scout and previous is Role.ANALYST:
+    if scout and previous is Role.SCOUT:
         return SCOUT_PACK_TOKENS
     return min(HANDOFF_TOKENS.get(role, DEFAULT_HANDOFF), handoff_budget(depth.depth.value))
 
@@ -427,7 +431,7 @@ def _senior_files(provider: Provider, edited: Sequence[int]) -> int:
 def _chain_work(
     inputs: EnvelopeInputs, source: RoleInput, explored: bool, scout: bool
 ) -> tuple[tuple[int, ...], int, int, int, bool]:
-    if source.role is Role.ANALYST:
+    if source.role in EXPLORERS:
         return _explore(inputs), 0, 0, 0, False
     if source.role is Role.TESTER:
         return _tester_files(inputs), 0, TEST_WRITE_TOKENS, 1, False
@@ -453,7 +457,7 @@ def _chain_works(inputs: EnvelopeInputs, chain: Sequence[RoleInput], scout: bool
     subagent = _subagents(inputs)
     for index, source in enumerate(chain):
         files, edits, written, rounds, explores = _chain_work(inputs, source, explored, scout)
-        explored = explored or source.role is Role.ANALYST
+        explored = explored or source.role in EXPLORERS
         handoff_in = (
             _handoff(source.role, chain[index - 1].role, scout, inputs.depth) if index else 0
         )

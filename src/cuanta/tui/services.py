@@ -12,7 +12,7 @@ from cuanta.application.assistant import Improvement
 from cuanta.application.bench import BenchResult
 from cuanta.application.cat_capsule import CapsuleView
 from cuanta.application.cross_engine import (
-    CROSS_ORDER,
+    TEAM_ROLES,
     CrossEnginePipeline,
     CrossReport,
     request_block,
@@ -72,6 +72,7 @@ from cuanta.domain.models import ModelEntry
 from cuanta.domain.progress import ProgressEvent
 from cuanta.domain.real_costs import CostReport
 from cuanta.domain.routing import RoutingPolicy, parse_provider
+from cuanta.domain.scout import ShapeChoice
 from cuanta.domain.team import (
     ProviderAdvice,
     RoleCard,
@@ -133,6 +134,9 @@ def role_plan(container: Container, request: MandateRequest, options: MandateOpt
         risk=route.risk,
         engine=engine,
     )
+    plan = container.shape_plan(
+        plan, ShapeChoice(parse_shape(options.shape)), container.docs_choice(request, options)
+    )
     issues = container.route_advisor(container.shared_ledger()).pin_issues(plan, roles, (engine,))
     if issues:
         raise DomainFailure(
@@ -149,7 +153,7 @@ def role_preview(request: MandateRequest, plan: RoutePlan, engine: str) -> Manda
         scope="",
         confidence=0.0,
         roles=tuple(
-            route for route in plan.routes if route.model is not None and route.role in CROSS_ORDER
+            route for route in plan.routes if route.model is not None and route.role in TEAM_ROLES
         ),
         per_role=True,
     )
@@ -486,6 +490,7 @@ class ContainerServices:
     ) -> MandatePreview:
         container = self._container()
         try:
+            options, _ = container.shaped_options(request, options)
             engine = options.engine or container.config.engine
             if per_role_run(options, request.type, container.config.engine):
                 return role_preview(request, role_plan(container, request, options), engine)
@@ -504,6 +509,7 @@ class ContainerServices:
     ) -> MandateReport:
         container = self._container()
         try:
+            options, _ = container.shaped_options(request, options)
             if per_role_run(options, request.type, container.config.engine):
                 return self._run_cross(container, request, options, progress)
             if options.sandbox:
@@ -918,6 +924,7 @@ class ContainerServices:
         container = self._container()
         route = options.route
         try:
+            options, choice = container.shaped_options(request, options)
             plan, _ = container.plan_route(
                 request.type,
                 request.what,
@@ -931,6 +938,8 @@ class ContainerServices:
                 risk=route.risk,
                 engine=options.engine or container.config.engine,
             )
+            docs = container.docs_choice(request, options)
+            plan = container.shape_plan(plan, choice, docs)
             cap = resolve_budget(options, request.type, container.config.budget_usd)
             shape = options.simple or single_context(
                 request.type, options.simple, parse_shape(options.shape)
@@ -943,8 +952,18 @@ class ContainerServices:
             protection = apply_overrides(
                 self._compiled_plan(container, request), options.plan_overrides
             )
-            estimate = container.team_estimate(
-                plan, request.type, options.depth, cap, shaped, bool(protection.verify)
+            estimate = replace(
+                container.team_estimate(
+                    plan,
+                    request.type,
+                    options.depth,
+                    cap,
+                    shaped,
+                    bool(protection.verify),
+                    docs is not None and not docs.on,
+                ),
+                shape=choice,
+                docs=docs,
             )
             per_role = per_role_run(options, request.type, container.config.engine)
             try:
@@ -953,7 +972,7 @@ class ContainerServices:
                     plan,
                     provider,
                     options.depth,
-                    shaped,
+                    Shape.SCOUT.value if choice.scout else shaped,
                     cap,
                     protection,
                     native=shaped == Shape.PIPELINE.value and not per_role,
@@ -981,7 +1000,8 @@ class ContainerServices:
     ) -> tuple[RoleCard, ...]:
         container = self._container()
         try:
-            if per_role_run(options, task_type, container.config.engine):
+            launch = estimate.shape is not None and estimate.shape.launch
+            if launch or per_role_run(options, task_type, container.config.engine):
                 shares = {cost.role: cost.share for cost in estimate.roles if cost.share > 0}
                 return team_cards(
                     plan.routes,

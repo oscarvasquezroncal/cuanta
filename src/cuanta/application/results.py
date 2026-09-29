@@ -34,6 +34,7 @@ from cuanta.domain.report import (
     unified_diff,
 )
 from cuanta.domain.sandbox import trial_folder
+from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, ScoutSummary, parse_scout
 from cuanta.domain.spectrum import changed_paths, resolve_agents
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.workspace import Workspace
@@ -119,6 +120,7 @@ class ResultView:
     anatomy: AnatomyReport = field(default_factory=AnatomyReport)
     read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
     governor: GovernorSummary = field(default_factory=GovernorSummary)
+    scout: ScoutSummary = field(default_factory=ScoutSummary)
 
     @property
     def decidable(self) -> bool:
@@ -331,6 +333,7 @@ class ResultQuery:
                 ),
             ),
             governor=parse_governor(meta.get("governor"), blocked_calls(index_events)),
+            scout=parse_scout(meta.get(SCOUT_KEY), meta.get(DOCS_KEY)),
         )
 
     def _roles(self, run: Run) -> tuple[Run, ...]:

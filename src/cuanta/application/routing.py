@@ -28,6 +28,7 @@ from cuanta.domain.routing import (
     plan_route,
     policy_reason,
     raise_for_risk,
+    route_role,
 )
 from cuanta.ports.ledger import Ledger
 
@@ -63,6 +64,26 @@ class RoutePlan:
 
     def route(self, role: Role) -> RoleRoute | None:
         return next((route for route in self.routes if route.role is role), None)
+
+
+def without_role(plan: RoutePlan, role: Role) -> RoutePlan:
+    if plan.route(role) is None:
+        return plan
+    return replace(
+        plan,
+        requests=tuple(item for item in plan.requests if item.role is not role),
+        routes=tuple(item for item in plan.routes if item.role is not role),
+    )
+
+
+def _in_place[T: (RoleRequest, RoleRoute)](items: Sequence[T], added: T) -> tuple[T, ...]:
+    kept = [item for item in items if item.role is not Role.ANALYST]
+    place = next(
+        (index for index, item in enumerate(items) if item.role is Role.ANALYST),
+        sum(1 for item in items if item.role is Role.ORCHESTRATOR),
+    )
+    kept.insert(min(place, len(kept)), added)
+    return tuple(kept)
 
 
 def tiers_allowed(policy: RoutingPolicy, role: Role) -> tuple[str, ...]:
@@ -102,6 +123,23 @@ class RouteAdvisor:
         self._catalog = catalog
         self._ledger = ledger
         self._clock_iso = clock_iso
+
+    def scout_plan(self, plan: RoutePlan) -> RoutePlan:
+        if plan.route(Role.SCOUT) is not None:
+            return plan
+        policy = plan.policy
+        tier = policy.tier_for(Role.SCOUT)
+        request = RoleRequest(Role.SCOUT, tier, policy_reason(Role.SCOUT, tier))
+        route = (
+            RoleRoute(Role.SCOUT, tier, None, None, msg("route.off"))
+            if policy.mode is RouteMode.OFF
+            else route_role(policy, tuple(self._catalog()), request)
+        )
+        return replace(
+            plan,
+            requests=_in_place(plan.requests, request),
+            routes=_in_place(plan.routes, route),
+        )
 
     def pin_issues(
         self, plan: RoutePlan, pins: Mapping[str, str], engines: Sequence[str]

@@ -20,6 +20,7 @@ from cuanta.domain.routing import (
     gated,
     learned_tier,
     parse_policy,
+    pin_issues,
     plan_route,
     raise_for_risk,
     route_role,
@@ -126,6 +127,16 @@ def test_pinned_models_win() -> None:
     route = route_role(policy, CATALOG, request(Role.TESTER, Tier.PREMIUM))
     assert route.model is not None and route.model.id == "gpt-5.6-luna"
     assert "pinned by you" in english(route.reason)
+
+
+def test_a_pinned_role_that_does_not_run_is_absent_not_rerouted() -> None:
+    policy = RoutingPolicy()
+    routes = (route_role(policy, CATALOG, request(Role.SENIOR, Tier.PREMIUM)),)
+    [absent] = pin_issues({Role.ANALYST: "claude:sonnet"}, CATALOG, routes, ("claude",))
+    assert "analyst does not run in this shape" in english(absent)
+    assert "chose another model" not in english(absent)
+    [lost] = pin_issues({Role.SENIOR: "claude:sonnet"}, CATALOG, routes, ("claude",))
+    assert "the route chose another model" in english(lost)
 
 
 def test_low_confidence_falls_back_to_the_policy_default() -> None:

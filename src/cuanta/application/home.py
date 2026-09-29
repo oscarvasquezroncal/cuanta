@@ -9,6 +9,7 @@ from cuanta.application.doctor import CheckResult, Doctor, DoctorReport, result
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.consumption import daily_tokens, window_start
 from cuanta.domain.detection import ForgeState
+from cuanta.domain.errors import EnvironmentFailure
 from cuanta.domain.ledger import Run
 from cuanta.domain.messages import msg
 from cuanta.domain.progress import Status
@@ -28,6 +29,8 @@ class HomeSnapshot:
     forge_version: str
     prefix: PrefixWindow = UNKNOWN_PREFIX
     costs: CostReport | None = None
+    queued: int = 0
+    queue_unreadable: bool = False
 
     @property
     def initialized(self) -> bool:
@@ -64,8 +67,10 @@ class HomeQuery:
         prefix: PrefixQuery,
         engine: str,
         now_iso: Callable[[], str],
+        queued: Callable[[], int] | None = None,
     ) -> None:
         self._now_iso = now_iso
+        self._queued = queued
         self._doctor = doctor
         self._ledger_factory = ledger_factory
         self._has_ledger = has_ledger
@@ -73,6 +78,14 @@ class HomeQuery:
         self._today = today
         self._prefix = prefix
         self._engine = engine
+
+    def _queue(self) -> tuple[int, bool]:
+        if self._queued is None:
+            return 0, False
+        try:
+            return self._queued(), False
+        except EnvironmentFailure:
+            return 0, True
 
     def run(self) -> HomeSnapshot:
         report = self._doctor.run()
@@ -91,6 +104,7 @@ class HomeQuery:
                 costs = cost_report(ledger.runs(since=start), start, now)
             finally:
                 ledger.close()
+        queued, unreadable = self._queue()
         return HomeSnapshot(
             report,
             runs,
@@ -99,4 +113,6 @@ class HomeQuery:
             self._forge_version(),
             self._prefix.run(self._engine),
             costs,
+            queued,
+            unreadable,
         )

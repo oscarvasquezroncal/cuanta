@@ -247,6 +247,11 @@ Screen.-icons #week-card, Screen.-single #week-card {
     height: 3;
 }
 
+#home-queue {
+    height: auto;
+    margin-top: 1;
+}
+
 #home-costs {
     height: auto;
 }
@@ -1389,6 +1394,10 @@ Screen.-short #result-tabs {
 }
 
 #result-governor {
+    margin-bottom: 1;
+}
+
+#result-scout {
     margin-bottom: 1;
 }
 

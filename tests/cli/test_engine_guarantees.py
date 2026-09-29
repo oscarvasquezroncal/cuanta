@@ -220,8 +220,10 @@ def test_the_claude_team_is_the_default_and_its_agents_file_has_per_role_models(
         "architecture-analyst": "claude-sonnet-5",
         "python-senior": senior,
         "tester": "claude-sonnet-5",
-        "docs-updater": "claude-haiku-4-5",
     }
+    assert data["docs"] == {"on": False, "reason": "not_requested"}
+    assert "Docs: off, the request does not ask for docs" in data["team"]
+    assert "Docs are off for this run: do not invoke the docs-updater." in data["prompt"]
     alias = "opus (premium)" if senior == "claude-opus-5-5" else "sonnet (standard)"
     assert any(line.startswith(f"team · senior → {alias}") for line in data["team"])
     assert not fake_runner.stdins
@@ -241,11 +243,11 @@ def test_the_engine_option_chooses_a_gpt_team_that_previews_each_role(
         "analyst": "gpt-6-sol",
         "senior": "gpt-6-sol",
         "tester": "gpt-6-sol",
-        "docs": "gpt-6-luna",
     }
     assert {row["engine"] for row in data["roles"]} == {"codex"}
     assert data["team"][0] == "team · GPT team · one launch per role"
-    assert any(line.startswith("team · docs → gpt-6-luna (economy)") for line in data["team"])
+    assert "Docs: off, the request does not ask for docs" in data["team"]
+    assert data["docs"] == {"on": False, "reason": "not_requested"}
     assert not any("gpt-5.6" in line for line in data["team"])
     assert not fake_runner.stdins
 
@@ -303,7 +305,6 @@ def test_a_gpt_team_runs_one_codex_launch_per_role_with_its_own_model(
         "gpt-6-sol",
         "gpt-5.6-sol",
         "gpt-6-sol",
-        "gpt-6-luna",
     ]
     assert not any(call[0] == "claude" and "-p" in call for call in fake_runner.calls)
     prompts = [text for text in fake_runner.stdins if text]
@@ -403,10 +404,16 @@ def test_a_gpt_fix_without_checks_shows_and_runs_its_team_without_a_repair_reser
     original = Container.role_budget
 
     def recording(
-        self: Container, plan: RoutePlan, task_type: str, depth: str, cap: float, repair: bool
+        self: Container,
+        plan: RoutePlan,
+        task_type: str,
+        depth: str,
+        cap: float,
+        repair: bool,
+        docs_off: bool = False,
     ) -> RepairBudget:
         repairs.append(repair)
-        return original(self, plan, task_type, depth, cap, repair)
+        return original(self, plan, task_type, depth, cap, repair, docs_off)
 
     monkeypatch.setattr(Container, "role_budget", recording)
     codex_ready(fake_runner)

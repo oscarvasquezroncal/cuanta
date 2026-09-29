@@ -12,7 +12,7 @@ from cuanta.domain.fixes import FixKind, classify
 from cuanta.domain.progress import Status
 from cuanta.domain.real_costs import CostReport
 from cuanta.domain.voice import Mood
-from cuanta.tui.cache_text import prefix_content
+from cuanta.tui.cache_text import prefix_content, queue_content, queue_unreadable_content
 from cuanta.tui.chips import TYPE_KEYS, chip_variable
 from cuanta.tui.commands import HEALTH, INIT, MANDATES, SPECTRUM, TESTS
 from cuanta.tui.fmt import compact, cost_money, glyph, grouped, run_money, status_style
@@ -82,6 +82,7 @@ class HomeView(VerticalScroll):
                 yield Sparkline([0] * 7, id="week")
                 yield Static("", id="week-total")
                 yield Static("", id="home-prefix")
+                yield Static("", id="home-queue")
         with Vertical(id="costs-card", classes="card"):
             yield Static(t("costs.title"), classes="card-title")
             yield Static(Content.styled(t("app.loading"), "$text-muted"), id="home-costs")
@@ -91,6 +92,7 @@ class HomeView(VerticalScroll):
         for key in RUN_COLUMNS:
             table.add_column(Text(self._t(f"home.{key}")), key=key)
         self.query_one("#next-run", Button).display = False
+        self.query_one("#home-queue", Static).display = False
 
     def show(self, snapshot: HomeSnapshot) -> None:
         t = self._t
@@ -124,6 +126,12 @@ class HomeView(VerticalScroll):
             Content.styled(t("home.week_total", total=total), "$text-muted")
         )
         self.query_one("#home-prefix", Static).update(prefix_content(t, snapshot.prefix))
+        queue = self.query_one("#home-queue", Static)
+        queue.display = snapshot.queued > 0 or snapshot.queue_unreadable
+        if snapshot.queue_unreadable:
+            queue.update(queue_unreadable_content(t))
+        elif snapshot.queued > 0:
+            queue.update(queue_content(t, snapshot.queued, snapshot.prefix))
 
     def _show_actions(self, initialized: bool) -> None:
         init = self.query_one(f"#action-{INIT}", Button)

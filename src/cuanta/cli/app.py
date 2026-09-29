@@ -26,6 +26,7 @@ from cuanta.cli.commands import (
     pack,
     plan,
     probe,
+    queue,
     refresh,
     route,
     runs,
@@ -127,6 +128,7 @@ app.command("mandate", help="Fill the Forge mandate and run it headlessly.")(
     mandate.mandate_command
 )
 app.command("pounce", help="Alias of mandate.", hidden=True)(mandate.mandate_command)
+app.add_typer(queue.queue_app, name="queue")
 app.command("refresh", help="Forge refresh, graph reindex, VERIFY_TIER drift report.")(
     refresh.refresh_command
 )

@@ -25,6 +25,7 @@ from cuanta.domain.pricing import Price, PriceTable, dollars
 from cuanta.domain.real_costs import Attempt, attempts
 from cuanta.domain.role_budgets import history_weights, role_split
 from cuanta.domain.routing import CostRange, Role, cost_range
+from cuanta.domain.scout import DocsChoice, ShapeChoice
 
 Estimator = Callable[[RoutePlan | None, str, str], RunEstimate]
 ShapeEstimator = Callable[[RoutePlan | None, str, str, str], RunEstimate]
@@ -52,6 +53,8 @@ class Estimate:
     repair_usd: float = 0.0
     repair_from_docs: bool = False
     forecast_error: Message | None = None
+    shape: ShapeChoice | None = None
+    docs: DocsChoice | None = None
 
 
 def _shape(item: Attempt, shapes: Mapping[str, str] | None) -> str:
@@ -170,6 +173,7 @@ def estimate(
     shape: str = "",
     shapes: Mapping[str, str] | None = None,
     repair: bool = True,
+    docs_off: bool = False,
 ) -> Estimate:
     chosen = profile(parse_depth(depth), task_type)
     similar = cost_range(similar_costs(runs, task_type, chosen.depth.value, shape, shapes))
@@ -188,7 +192,7 @@ def estimate(
         role_history(plan, runs, task_type, chosen.depth.value), planned_costs
     )
     weights: Mapping[Role, float | None] = history if history is not None else planned_costs
-    split = role_split(weights, cap, is_fix(task_type) and repair)
+    split = role_split(weights, cap, is_fix(task_type) and repair, docs_off=docs_off and repair)
     roles = tuple(replace(cost, share=split.shares.get(cost.role, 0.0)) for cost in roles)
     displayed = bounds.high if bounds.source == CALIBRATED else planned
     message = (

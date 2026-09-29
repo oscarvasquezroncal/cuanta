@@ -153,7 +153,7 @@ def _run(
     container = Container.for_project(session.project)
     check_choice(profile, SESSION_PROFILES, "--session")
     check_choice(index, INDEX_MODES, "--index")
-    check_choice(shape, tuple(Shape), "--shape")
+    check_choice(shape, (Shape.SINGLE.value, Shape.PIPELINE.value), "--shape")
     check_choice(pack, INDEX_MODES, "--pack")
     if pack not in INDEX_MODES:
         raise DomainFailure(f"unknown --pack {pack}", "use one of on, off")
