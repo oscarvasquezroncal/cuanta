@@ -30,9 +30,13 @@ def _environment(
 
 
 class SubprocessStream:
-    def __init__(self, process: subprocess.Popen[str], suspended: bool = False) -> None:
+    def __init__(
+        self, process: subprocess.Popen[str], suspended: bool = False, keep_stdin: bool = False
+    ) -> None:
         self._process = process
         self._tree = ProcessTree(process, suspended)
+        self._input = process.stdin if keep_stdin else None
+        self._writing = threading.Lock()
         self._stderr: list[str] = []
         self._lines: queue.Queue[str | None] = queue.Queue()
         self._reader = threading.Thread(target=self._drain_stderr, daemon=True)
@@ -79,6 +83,7 @@ class SubprocessStream:
             yield line.rstrip("\r\n")
 
     def wait(self) -> int:
+        self.end_input()
         code = self._process.wait()
         self._reader.join(timeout=5)
         return code
@@ -90,6 +95,25 @@ class SubprocessStream:
         if self._process.poll() is None:
             self._process.terminate()
 
+    def send(self, text: str) -> bool:
+        with self._writing:
+            stdin = self._input
+            if stdin is None:
+                return False
+            try:
+                stdin.write(text)
+                stdin.flush()
+            except (OSError, ValueError):
+                return False
+            return True
+
+    def end_input(self) -> None:
+        with self._writing:
+            stdin, self._input = self._input, None
+        if stdin is not None:
+            with contextlib.suppress(OSError, ValueError):
+                stdin.close()
+
     def close(self) -> None:
         if self._process.poll() is None:
             self._process.terminate()
@@ -99,6 +123,10 @@ class SubprocessStream:
                 self._process.kill()
                 self._process.wait(timeout=5)
         self._tree.close()
+        stdin, self._input = self._input, None
+        if stdin is not None:
+            with contextlib.suppress(OSError, ValueError):
+                stdin.close()
         self._reader.join(timeout=5)
         self._out.join(timeout=5)
         for stream in (self._process.stdout, self._process.stderr):
@@ -173,6 +201,7 @@ class SubprocessRunner:
         env: Mapping[str, str] | None = None,
         stdin_text: str | None = None,
         unset: Sequence[str] = (),
+        keep_stdin: bool = False,
     ) -> SubprocessStream:
         flags = creation_flags()
         process = subprocess.Popen(
@@ -181,7 +210,7 @@ class SubprocessRunner:
             env=_environment(env, unset),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL if stdin_text is None else subprocess.PIPE,
+            stdin=subprocess.DEVNULL if stdin_text is None and not keep_stdin else subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -189,7 +218,9 @@ class SubprocessRunner:
             start_new_session=True,
             creationflags=flags,
         )
-        stream = SubprocessStream(process, suspended=flags != 0)
-        if stdin_text is not None:
+        stream = SubprocessStream(process, suspended=flags != 0, keep_stdin=keep_stdin)
+        if keep_stdin and stdin_text is not None:
+            threading.Thread(target=stream.send, args=(stdin_text,), daemon=True).start()
+        elif stdin_text is not None:
             threading.Thread(target=_feed, args=(process, stdin_text), daemon=True).start()
         return stream

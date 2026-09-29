@@ -11,45 +11,82 @@ from cuanta.domain.ledger import Run
 from cuanta.domain.messages import msg
 from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.role_budgets import (
-    DEFAULT_MARGIN,
-    MAX_MARGIN,
-    MIN_MARGIN,
     REPAIR_FRACTION,
     ROLE_FLOOR,
-    Overrun,
+    USD_MARGIN_FALLBACK,
+    Overshoot,
+    OvershootMargins,
     allocate_budget,
     floor_fraction,
     floors_usd,
     history_weights,
-    learned_margin,
+    native_cap,
+    overshoot_margins,
     repair_budget,
     role_split,
-    soft_cap,
+    usd_margin,
 )
 from cuanta.domain.routing import ROLES, Role, RoleRoute, RoutingPolicy
 
+X3_SONNET_OVERSHOOTS = (
+    Overshoot("claude-sonnet-5", 0.2520, 0.3007),
+    Overshoot("claude-sonnet-5", 0.2760, 0.3508),
+    Overshoot("claude-sonnet-5", 0.2100, 0.2839),
+    Overshoot("claude-sonnet-5", 0.2730, 0.3003),
+    Overshoot("claude-sonnet-5", 0.2100, 0.2547),
+    Overshoot("claude-sonnet-5", 0.2890, 0.3375),
+    Overshoot("claude-sonnet-5", 0.2730, 0.3535),
+)
+SONNET = {"claude-sonnet-5": "sonnet"}
 
-def test_the_margin_starts_at_ten_percent_and_learns_from_measured_overruns() -> None:
-    assert learned_margin(()) == DEFAULT_MARGIN
-    assert learned_margin((Overrun(0.28, 0.298),)) == DEFAULT_MARGIN
-    measured = (
-        Overrun(0.4205847, 0.4231824),
-        Overrun(0.2785714, 0.298069),
-        Overrun(0.05, 0.05157085),
-        Overrun(0.10, 0.10456355),
+
+def test_the_usd_margin_is_the_p90_overshoot_with_a_fallback_below_three_samples() -> None:
+    assert usd_margin(()) == USD_MARGIN_FALLBACK == 0.08
+    assert usd_margin((0.01, 0.02)) == USD_MARGIN_FALLBACK
+    assert usd_margin((0.01, 0.02, 0.03)) == pytest.approx(0.03)
+    assert usd_margin((0.0, 0.0, 0.0, float("nan"), -1.0)) == 0.0
+    assert Overshoot("m", 0.3, 0.2).usd == 0.0
+    assert Overshoot("m", 0.3, 0.35).usd == pytest.approx(0.05)
+
+
+def test_margins_are_kept_per_model_and_match_aliases_and_dated_names() -> None:
+    margins = overshoot_margins(
+        (*X3_SONNET_OVERSHOOTS, Overshoot("claude-opus-5-5", 0.5, 0.6)), SONNET
     )
-    assert learned_margin(measured) == pytest.approx((0.298069 / 0.2785714 - 1) * 1.25)
-    assert learned_margin(tuple(Overrun(1.0, 1.0) for _ in range(5))) == MIN_MARGIN
-    assert learned_margin(tuple(Overrun(1.0, 3.0) for _ in range(5))) == MAX_MARGIN
-    assert Overrun(0.0, 1.0).ratio == 0.0
+    assert margins.count("sonnet") == 7
+    assert margins.usd("sonnet") == pytest.approx(0.0748, abs=1e-6)
+    assert margins.usd("claude-sonnet-5-20260901") == margins.usd("sonnet")
+    assert margins.usd("claude-sonnet-5[1m]") == margins.usd("sonnet")
+    assert margins.count("claude-opus-5-5") == 1
+    assert margins.usd("claude-opus-5-5") == USD_MARGIN_FALLBACK
+    assert OvershootMargins().usd("haiku") == USD_MARGIN_FALLBACK
+    assert overshoot_margins((Overshoot("m", 0.0, 1.0),)).count("m") == 0
 
 
-def test_soft_caps_and_floors() -> None:
-    assert soft_cap(1.0, 0.1) == pytest.approx(0.9)
-    assert soft_cap(1.0, 0.9) == pytest.approx(1.0 - MAX_MARGIN)
-    assert soft_cap(1.0, -1.0) == 1.0
+def test_the_native_cap_is_the_share_minus_the_margin_never_below_half_the_share() -> None:
+    assert native_cap(1.0, 0.08) == pytest.approx(0.92)
+    assert native_cap(0.1, 0.08) == pytest.approx(0.05)
+    assert native_cap(1.0, -1.0) == 1.0
+    assert native_cap(0.0, 0.08) == 0.0
     assert floors_usd((Role.SENIOR, Role.TESTER), 2.0) == pytest.approx(0.56)
     assert floors_usd((Role.ORCHESTRATOR,), 1.0) == pytest.approx(0.05)
+
+
+def test_the_x3_gsap_senior_is_no_longer_cut_by_a_quarter_of_its_share() -> None:
+    share = 0.3853
+    proportional = 0.2890
+    measured_overshoot = 0.0485
+    margin = overshoot_margins(X3_SONNET_OVERSHOOTS, SONNET).usd("sonnet")
+    cap = native_cap(share, margin)
+    assert cap == pytest.approx(share - 0.0748, abs=1e-6)
+    assert cap > proportional
+    assert cap + measured_overshoot <= share
+    assert share - (cap + measured_overshoot) < share - (proportional + measured_overshoot)
+    for large in (0.5, 1.0, 2.0, 4.0):
+        cut = large - native_cap(large, margin)
+        assert cut == pytest.approx(margin)
+        assert cut / large < 0.25
+    assert native_cap(share, USD_MARGIN_FALLBACK) > proportional
 
 
 def test_history_weights_need_enough_samples_for_every_role() -> None:
@@ -162,8 +199,10 @@ def test_the_margin_learns_from_native_role_caps_not_pipeline_caps(tmp_path: Pat
         for run in rows:
             ledger.add_run(run)
         RunReports(container.state_workspace()).save_meta("ROOT", {"native_cap_usd": 0.2786})
-        expected = (0.298 / 0.2786 - 1) * 1.25
-        assert container.budget_margin(ledger) == pytest.approx(expected)
+        margins = container.budget_margin(ledger)
+        assert margins.count("") == 3
+        assert margins.usd("") == pytest.approx(0.298 - 0.2786)
+        assert margins.usd("sonnet") == USD_MARGIN_FALLBACK
     finally:
         container.close()
 

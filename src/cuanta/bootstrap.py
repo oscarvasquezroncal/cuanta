@@ -114,6 +114,7 @@ if TYPE_CHECKING:
     from cuanta.application.sandbox import SandboxResult, SandboxRunner
     from cuanta.application.session_profile import LeanProfile
     from cuanta.application.spectrum import SpectrumQuery
+    from cuanta.application.steering import GovernorSetup
     from cuanta.application.telemetry import TelemetryService, TranscriptImport
     from cuanta.application.tests_view import LatestTests
     from cuanta.application.trials import TrialStore
@@ -124,13 +125,14 @@ if TYPE_CHECKING:
     from cuanta.domain.code_index import IndexRow
     from cuanta.domain.engine import EngineEvent
     from cuanta.domain.estimates import RunEstimate
+    from cuanta.domain.governor_report import BlockedCalls
     from cuanta.domain.instinct import Choice
     from cuanta.domain.ledger import Run
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.pack import ContextPack
     from cuanta.domain.pricing import PriceTable
-    from cuanta.domain.role_budgets import RepairBudget
+    from cuanta.domain.role_budgets import OvershootMargins, RepairBudget
     from cuanta.domain.routing import CostRange, Provider, RoutingPolicy
     from cuanta.domain.sandbox import SandboxLaunch
     from cuanta.domain.shells import Shell
@@ -561,6 +563,7 @@ class Container:
         import sys
 
         from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules
+        from cuanta.domain.read_discipline import READ_LINE_LIMIT
 
         plan = spec.change_plan or ChangePlan(read_only=spec.read_only)
         denied = tuple(
@@ -572,11 +575,16 @@ class Container:
             )
         )
         hooks: dict[str, object] | None = None
-        if self.config.read_discipline:
+        disciplined = (
+            self.config.read_discipline if spec.read_discipline is None else spec.read_discipline
+        )
+        limit = self.config.read_max_lines
+        extra = [str(limit)] if limit != READ_LINE_LIMIT else []
+        if disciplined:
             hooks = {}
             for mode, event in (("pre", "PreToolUse"), ("post", "PostToolUse")):
                 command = shlex.join(
-                    [Path(sys.executable).as_posix(), "-m", "cuanta.cli.hooks", mode]
+                    [Path(sys.executable).as_posix(), "-m", "cuanta.cli.hooks", mode, *extra]
                 )
                 hooks[event] = [
                     {
@@ -1300,6 +1308,30 @@ class Container:
             build_blocked=self.build_blocked(),
             forecaster=self.forecaster(ledger),
             new_run_id=self.new_run_id,
+            governor=self.governor_setup(ledger),
+            read_discipline=self.pipeline_read_discipline,
+            read_max_lines=self.config.read_max_lines,
+        )
+
+    def governor_setup(self, ledger: Ledger | None = None) -> GovernorSetup:
+        from cuanta.adapters.system.prices import load_prices
+        from cuanta.application.steering import GovernorSetup
+        from cuanta.domain.governor import seconds_rate
+
+        def per_second(model: str) -> float:
+            return seconds_rate(ledger.runs(), model) if ledger is not None else 0.0
+
+        return GovernorSetup(self.clock.monotonic, load_prices(), per_second)
+
+    def pipeline_read_discipline(self, engine: str) -> bool:
+        return self.config.pipeline_read_discipline and engine in {"claude", "codex"}
+
+    def blocked_calls(self, ledger: Ledger, run_ids: Sequence[str]) -> BlockedCalls:
+        from cuanta.domain.governor_report import blocked_calls
+        from cuanta.ports.ledger import EventQuery
+
+        return blocked_calls(
+            event for run_id in run_ids for event in ledger.events(EventQuery(run_id=run_id))
         )
 
     def verifier(self) -> Verifier:
@@ -1318,12 +1350,13 @@ class Container:
 
         return read_ranges(ledger.events(EventQuery(run_id=run_id)), str(self.project))
 
-    def budget_margin(self, ledger: Ledger) -> float:
+    def budget_margin(self, ledger: Ledger) -> OvershootMargins:
+        from cuanta.adapters.models.tiers import load_tier_table
         from cuanta.application.run_reports import RunReports
-        from cuanta.domain.role_budgets import Overrun, learned_margin
+        from cuanta.domain.role_budgets import Overshoot, overshoot_margins
 
         reports = RunReports(self.state_workspace())
-        samples: list[Overrun] = []
+        samples: list[Overshoot] = []
         for run in ledger.runs():
             if (
                 run.engine != "claude"
@@ -1333,10 +1366,10 @@ class Container:
                 continue
             native = (reports.meta(run.id) or {}).get("native_cap_usd")
             if isinstance(native, int | float) and native > 0:
-                samples.append(Overrun(float(native), run.cost_usd))
+                samples.append(Overshoot(run.model, float(native), run.cost_usd))
             elif run.cap_usd and (run.kind != "cross" or run.parent_id):
-                samples.append(Overrun(run.cap_usd, run.cost_usd))
-        return learned_margin(tuple(samples))
+                samples.append(Overshoot(run.model, run.cap_usd, run.cost_usd))
+        return overshoot_margins(samples, load_tier_table().aliases)
 
     def build_blocked(self) -> frozenset[str]:
         return frozenset({"codex"}) if os.name == "nt" else frozenset()
@@ -1686,6 +1719,8 @@ class Container:
             learn_run=self.learn_run if sandbox is None else None,
             pipeline_index_tools=self.config.index_enabled and self.config.pipeline_index_tools,
             forecaster=self.forecaster(ledger),
+            governor=self.governor_setup(ledger),
+            pipeline_read_discipline=self.config.pipeline_read_discipline,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:

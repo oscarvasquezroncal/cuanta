@@ -33,12 +33,24 @@ class FakeStream:
         return self.error
 
     def terminate(self) -> None:
-        return None
+        self.terminated = True
 
     def close(self) -> None:
         self.closed = True
 
+    def send(self, text: str) -> bool:
+        if self.ended:
+            return False
+        self.sent.append(text)
+        return True
+
+    def end_input(self) -> None:
+        self.ended = True
+
     closed: bool = False
+    sent: list[str] = field(default_factory=list)
+    ended: bool = False
+    terminated: bool = False
 
 
 @dataclass
@@ -52,6 +64,7 @@ class FakeRunner:
     envs: list[Mapping[str, str] | None] = field(default_factory=list)
     stdins: list[str | None] = field(default_factory=list)
     unsets: list[tuple[str, ...]] = field(default_factory=list)
+    keeps: list[bool] = field(default_factory=list)
 
     def which(self, name: str) -> str | None:
         return self.binaries.get(name)
@@ -82,12 +95,14 @@ class FakeRunner:
         env: Mapping[str, str] | None = None,
         stdin_text: str | None = None,
         unset: Sequence[str] = (),
+        keep_stdin: bool = False,
     ) -> FakeStream:
         self.calls.append(tuple(args))
         self.cwds.append(cwd)
         self.envs.append(env)
         self.stdins.append(stdin_text)
         self.unsets.append(tuple(unset))
+        self.keeps.append(keep_stdin)
         joined = " ".join(args)
         for prefix in sorted(self.queued, key=len, reverse=True):
             if joined.startswith(prefix) and self.queued[prefix]:

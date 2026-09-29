@@ -327,8 +327,8 @@ def test_unused_role_share_rolls_forward_without_borrowing_future_shares(tmp_pat
     )
     report = subject.run(REQUEST, plan(), Recorder())
     assert report.ok
-    assert [request.max_budget_usd for request in requests] == pytest.approx([0.108, 0.65, 0.81])
+    assert [request.max_budget_usd for request in requests] == pytest.approx([0.06, 0.65, 0.82])
     assert [step.budget_usd for step in report.steps] == pytest.approx([0.12, 0.65, 0.9])
-    assert [step.native_cap_usd for step in report.steps] == pytest.approx([0.108, 0.65, 0.81])
+    assert [step.native_cap_usd for step in report.steps] == pytest.approx([0.06, 0.65, 0.82])
     root = ledger.get_run(report.steps[0].run_id)
     assert root is not None and root.cap_usd == 1.0

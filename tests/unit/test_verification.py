@@ -86,6 +86,7 @@ class Missing(FakeRunner):
         env: Mapping[str, str] | None = None,
         stdin_text: str | None = None,
         unset: Sequence[str] = (),
+        keep_stdin: bool = False,
     ) -> FakeStream:
         raise FileNotFoundError("[WinError 2] not found")
 

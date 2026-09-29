@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 from cuanta.adapters.engines.base import LineParser, StreamingEngine
@@ -32,6 +33,12 @@ REQUIRED_FLAGS = (
 )
 REQUIRED_CHOICES = ("stream-json", "dontAsk")
 PROBE_FLAGS = ("--exclude-dynamic-system-prompt-sections", "--no-session-persistence")
+TURN_FLAGS = ("--input-format",)
+
+
+def user_turn(text: str) -> str:
+    message = {"role": "user", "content": [{"type": "text", "text": text}]}
+    return json.dumps({"type": "user", "message": message}) + "\n"
 
 
 def readonly_request(request: EngineRequest) -> EngineRequest:
@@ -57,15 +64,10 @@ def readonly_request(request: EngineRequest) -> EngineRequest:
 
 def build_command(binary: tuple[str, ...], request: EngineRequest) -> list[str]:
     request = readonly_request(request)
-    command = [
-        *binary,
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--permission-mode",
-        "dontAsk",
-    ]
+    command = [*binary, "-p", "--output-format", "stream-json"]
+    if request.stream_input:
+        command.extend(["--input-format", "stream-json"])
+    command.extend(["--verbose", "--permission-mode", "dontAsk"])
     if request.allowed_tools:
         command.extend(["--allowedTools", ",".join(request.allowed_tools)])
     if request.disallowed_tools:
@@ -109,7 +111,21 @@ class ClaudeCodeEngine(StreamingEngine):
     required_tokens = (*REQUIRED_FLAGS, *REQUIRED_CHOICES)
 
     def command(self, request: EngineRequest) -> list[str]:
+        if request.stream_input and not self.accepts_turns():
+            request = replace(request, stream_input=False)
         return build_command(self.binary(), request)
+
+    def accepts_turns(self) -> bool:
+        text = self.help_text()
+        return all(token in text for token in TURN_FLAGS)
+
+    def stdin_text(self, request: EngineRequest) -> str | None:
+        if request.stream_input and self.accepts_turns():
+            return user_turn(request.prompt)
+        return request.prompt
+
+    def turn_line(self, text: str) -> str:
+        return user_turn(text)
 
     def parser(self, request: EngineRequest) -> ClaudeStreamParser:
         return ClaudeStreamParser()

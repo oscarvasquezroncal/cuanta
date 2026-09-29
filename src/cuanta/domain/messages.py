@@ -320,6 +320,9 @@ ENGLISH: dict[str, str] = {
     "cost.unknown_price": "unknown model price",
     "cost.missing_usage": "cost unavailable: the engine did not report complete usage",
     "cost.table": "{table}",
+    "cost.governor_stop": (
+        "estimated by the governor from items and elapsed time; the stopped turn reported no usage"
+    ),
     "spectrum.tool": "tool {name}",
     "spectrum.file": "file {name}",
     "selection.story": "{story} · {count} runs",
@@ -505,7 +508,56 @@ ENGLISH: dict[str, str] = {
         "{role} on {engine} spent ${cost} against its ${cap} share; the ${over} overrun comes out "
         "of the remaining budget"
     ),
-    "cross.native_cap": "{role} native cap ${cap}, {margin}% below its ${share} share",
+    "cross.native_cap": "{role} native cap ${cap}, ${margin} below its ${share} share",
+    "governor.finish": (
+        "{role}: the governor sent the finish turn ({trigger}) at ${spent} of ${limit}"
+    ),
+    "governor.finish_team": (
+        "team session: the governor sent the finish turn ({trigger}) at ${spent} of the ${limit} "
+        "cap; the main agent reads it when the running subagent returns"
+    ),
+    "governor.finish_unsent": (
+        "{role}: the finish turn could not be sent; the native cap and salvage stop it instead"
+    ),
+    "governor.checkpoint": (
+        "{role}: the governor asked for a checkpoint note; a fresh session should save about "
+        "${saving}"
+    ),
+    "governor.checkpoint_unsent": (
+        "{role}: the checkpoint request could not be sent (estimated saving ${saving}); the "
+        "session continues"
+    ),
+    "governor.rotated": (
+        "{role} restarts in a fresh session with its checkpoint note: ${left} of its share left, "
+        "native cap ${cap}, estimated saving ${saving}"
+    ),
+    "governor.rotation_skipped": (
+        "{role}: no fresh session after the checkpoint; its note is the handoff"
+    ),
+    "governor.trigger.share": "its share is nearly spent",
+    "governor.trigger.headroom": "two more steps would reach its limit",
+    "governor.trigger.projection": "the cap would arrive before the plan is done",
+    "governor.trigger.fresh_session": "a fresh session would cost less",
+    "governor.codex_stop": (
+        "{role}: the governor stopped Codex at an estimated ${spent} of its ${share} share"
+    ),
+    "governor.codex_stop_unsent": (
+        "{role}: the governor could not stop Codex (estimated ${spent} of ${share}); it runs "
+        "to the end and any overrun comes out of the remainder"
+    ),
+    "governor.resuming": "{role}: a short finish turn resumes the stopped thread",
+    "governor.resumed": (
+        "{role}: the resumed thread wrote its handoff; the stopped turn cost about ${cost} "
+        "(estimate), ${left} of its share left"
+    ),
+    "governor.resume_unavailable": (
+        "{role}: the stopped thread cannot be resumed; salvage builds its handoff from the "
+        "changed files"
+    ),
+    "governor.resume_failed": (
+        "{role}: the finish turn after the stop failed; salvage builds its handoff from the "
+        "changed files"
+    ),
     "cross.verify_commands": "cuanta will run these checks after each writing role: {commands}",
     "completion.complete": "complete",
     "completion.complete_skipped": "complete, optional roles skipped",

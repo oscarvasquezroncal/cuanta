@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cuanta.adapters.engines.base import LineParser, StreamingEngine, as_dict
+from cuanta.adapters.engines.base import HELP_TIMEOUT_S, LineParser, StreamingEngine, as_dict
 from cuanta.domain.engine import (
     AssistantText,
     EngineEvent,
@@ -15,9 +15,20 @@ from cuanta.domain.engine import (
     ToolCall,
 )
 from cuanta.domain.sandbox import STATE_DIR, STATE_ROOT_ENV
+from cuanta.ports.system import ProcessRunner
 
 WRITABLE_ROOTS = "sandbox_workspace_write.writable_roots="
 INDEX_SERVER = "mcp_servers.cuanta"
+NO_SUBAGENTS = ("features.multi_agent=false", "features.multi_agent_v2=false")
+RESUME_HELP_ARGS = ("exec", "resume", "--help")
+RESUME_TOKENS = (
+    "exec resume",
+    "SESSION_ID",
+    "--json",
+    "--config",
+    "--model",
+    "--skip-git-repo-check",
+)
 SANDBOX_CONFIG = (
     'approval_policy="never"',
     f"{WRITABLE_ROOTS}[]",
@@ -114,20 +125,37 @@ class CodexEngine(StreamingEngine):
         "--config",
     )
 
+    def __init__(self, runner: ProcessRunner) -> None:
+        super().__init__(runner)
+        self._resume_help: str | None = None
+
+    def resume_help(self) -> str:
+        if self._resume_help is None:
+            completed = self._runner.run(
+                [*self.binary(), *RESUME_HELP_ARGS], timeout=HELP_TIMEOUT_S
+            )
+            self._resume_help = completed.stdout + completed.stderr
+        return self._resume_help
+
+    def resumable(self) -> bool:
+        text = self.resume_help()
+        return all(token in text for token in RESUME_TOKENS)
+
     def command(self, request: EngineRequest) -> list[str]:
-        command = [
-            *self.binary(),
-            "exec",
-            "--json",
-            "--sandbox",
-            "read-only" if request.read_only else "workspace-write",
-        ]
+        mode = "read-only" if request.read_only else "workspace-write"
+        command = (
+            [*self.binary(), "exec", "resume", "--json", "--config", f'sandbox_mode="{mode}"']
+            if request.resume_session
+            else [*self.binary(), "exec", "--json", "--sandbox", mode]
+        )
         state = request.env.get(STATE_ROOT_ENV, "") if request.temporary_copy else ""
         writable = json.dumps([str(Path(state) / STATE_DIR)], ensure_ascii=False)
         roots = f"{WRITABLE_ROOTS}{writable}" if state else ""
         for setting in SANDBOX_CONFIG:
             chosen = roots if roots and setting.startswith(WRITABLE_ROOTS) else setting
             command.extend(["--config", chosen])
+        for setting in NO_SUBAGENTS:
+            command.extend(["--config", setting])
         if request.index_server:
             server, *arguments = request.index_server
             command.extend(
@@ -147,6 +175,8 @@ class CodexEngine(StreamingEngine):
             command.append("--skip-git-repo-check")
         if request.model:
             command.extend(["--model", request.model])
+        if request.resume_session:
+            command.append(request.resume_session)
         command.append("-")
         return command
 

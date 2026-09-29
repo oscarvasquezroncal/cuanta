@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from cuanta.application.run_reports import RunReports
 from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules, strict_tools
 from cuanta.domain.engine import (
+    GOVERNOR_STOP_SUBTYPE,
     TURN_LIMIT_SUBTYPE,
     EngineEvent,
     EngineOutcome,
@@ -23,7 +24,7 @@ from cuanta.domain.overhead import spawn_event
 from cuanta.domain.plugins import FULL, LEAN
 from cuanta.domain.pricing import CostEstimate, PriceTable, estimate, estimate_cost
 from cuanta.domain.telemetry import claude_env, run_env
-from cuanta.ports.engine import Engine
+from cuanta.ports.engine import Engine, Resumable, RunStop, TurnInput
 from cuanta.ports.ledger import Ledger
 from cuanta.ports.listener import ListenerControl, ListenerStatus
 from cuanta.ports.system import Clock
@@ -64,6 +65,9 @@ class LaunchSpec:
     shape: str = ""
     pipeline_budget_usd: float = 0.0
     change_plan: ChangePlan | None = None
+    steer: bool = False
+    resume_session: str = ""
+    read_discipline: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +110,7 @@ class EngineLauncher:
         self._port = port
         self._listener = listener
         self._prices = prices
+        self._halt_estimate: Callable[[], float | None] | None = None
 
     def _cost(self, outcome: EngineOutcome | None, usage: list[LedgerEvent]) -> CostEstimate:
         reported = _reported(outcome)
@@ -118,6 +123,40 @@ class EngineLauncher:
     @property
     def engine(self) -> Engine:
         return self._engine
+
+    def steerable(self) -> bool:
+        engine = self._engine
+        return isinstance(engine, TurnInput) and engine.accepts_turns()
+
+    def send_turn(self, text: str) -> bool:
+        engine = self._engine
+        return isinstance(engine, TurnInput) and engine.send_turn(text)
+
+    def resumable(self) -> bool:
+        engine = self._engine
+        return isinstance(engine, Resumable) and engine.resumable()
+
+    def halt(self, estimate: Callable[[], float | None]) -> bool:
+        engine = self._engine
+        if not isinstance(engine, RunStop):
+            return False
+        self._halt_estimate = estimate
+        engine.halt(GOVERNOR_STOP_SUBTYPE)
+        return True
+
+    def _halted_cost(self, outcome: EngineOutcome | None, cost: CostEstimate) -> CostEstimate:
+        guess = self._halt_estimate
+        self._halt_estimate = None
+        result = outcome.result if outcome is not None else None
+        if guess is None or result is None or result.subtype != GOVERNOR_STOP_SUBTYPE:
+            return cost
+        value = guess()
+        if value is None:
+            return cost
+        return estimate(max(value, cost.value or 0.0), msg("cost.governor_stop"), kind="estimated")
+
+    def _steered(self, request: EngineRequest, spec: LaunchSpec) -> EngineRequest:
+        return replace(request, stream_input=True) if spec.steer and self.steerable() else request
 
     def request(
         self, spec: LaunchSpec, run_id: str, parent: str, port: int | None
@@ -138,6 +177,7 @@ class EngineLauncher:
                 strict
                 or (session == LEAN and spec.kind in {"mandate", "cross"})
                 or (spec.index_tools is True and spec.kind == "cross")
+                or (spec.read_discipline is True and spec.kind == "cross")
             )
         )
         if own_profile and self._guard_files is not None:
@@ -187,6 +227,7 @@ class EngineLauncher:
                 if indexed and self._index_server and self._engine.name == "codex"
                 else ()
             ),
+            resume_session=spec.resume_session,
         )
 
     @contextmanager
@@ -206,6 +247,7 @@ class EngineLauncher:
     ) -> Launch:
         run_id = spec.run_id or self._new_run_id()
         parent = traceparent(self._entropy(16), self._entropy(8))
+        self._halt_estimate = None
         guess = spec.estimate
         run = Run(
             id=run_id,
@@ -249,14 +291,14 @@ class EngineLauncher:
         try:
             with self._telemetry() as status:
                 port = status.port if status is not None and status.running else None
-                request = self.request(spec, run_id, parent, port)
+                request = self._steered(self.request(spec, run_id, parent, port), spec)
                 spawned = spawn_event(run_id, run.trace_id, self._clock.now_ms())
                 outcome = self._engine.run(request, stream_event)
         finally:
             if spawned is not None:
                 self._ledger.add_events([spawned])
             usage = _usage_events(run, outcome, self._engine.name) if outcome else []
-            cost = self._cost(outcome, usage)
+            cost = self._halted_cost(outcome, self._cost(outcome, usage))
             if (
                 outcome is not None
                 and outcome.result is not None

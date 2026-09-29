@@ -11,6 +11,7 @@ from cuanta.domain.engine import (
     BUDGET_LIMIT_SUBTYPE,
     COMMAND_LINE_LIMIT,
     COST_UNKNOWN_SUBTYPE,
+    GOVERNOR_STOP_SUBTYPE,
     EngineEvent,
     EngineOutcome,
     EngineRequest,
@@ -24,6 +25,7 @@ from cuanta.domain.gateway import split_command
 from cuanta.ports.system import ProcessRunner, StreamHandle
 
 HELP_TIMEOUT_S = 30.0
+STOP_REASONS = {BUDGET_LIMIT_SUBTYPE: "max_budget_usd", GOVERNOR_STOP_SUBTYPE: "governor_stop"}
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -59,7 +61,7 @@ def final_result(
         result or RunResult(False, stopped, None, 0, ""),
         ok=False,
         subtype=stopped,
-        terminal_reason="max_budget_usd" if stopped == BUDGET_LIMIT_SUBTYPE else "cost_unknown",
+        terminal_reason=STOP_REASONS.get(stopped, "cost_unknown"),
     )
 
 
@@ -76,12 +78,33 @@ class StreamingEngine:
         self._help: str | None = None
         self.cancelled = False
         self._active: StreamHandle | None = None
+        self._turns = False
+        self._stop_reason = ""
+        self._late = 0
 
     def cancel(self) -> None:
         self.cancelled = True
         active = self._active
         if active is not None:
             active.terminate()
+
+    def halt(self, subtype: str) -> None:
+        self._stop_reason = subtype
+        active = self._active
+        if active is not None:
+            active.terminate()
+
+    def accepts_turns(self) -> bool:
+        return False
+
+    def turn_line(self, text: str) -> str:
+        return text
+
+    def send_turn(self, text: str) -> bool:
+        active = self._active
+        if active is None or not self._turns:
+            return False
+        return active.send(self.turn_line(text))
 
     @property
     def name(self) -> str:
@@ -136,6 +159,26 @@ class StreamingEngine:
         spent += cost
         return spent, BUDGET_LIMIT_SUBTYPE if spent >= cap else ""
 
+    def _events(self, parser: LineParser, line: str, stream: StreamHandle) -> list[EngineEvent]:
+        events = parser.feed(line)
+        if self._turns and any(isinstance(event, RunResult) for event in events):
+            stream.end_input()
+        return events
+
+    def _kept(self, result: RunResult | None, later: RunResult) -> RunResult:
+        if not self._turns or result is None or not result.ok:
+            return later
+        self._late += 1
+        return replace(
+            result, cost_usd=later.cost_usd, num_turns=later.num_turns, models=later.models
+        )
+
+    def _begin(self, request: EngineRequest) -> None:
+        self._turns = request.stream_input and self.accepts_turns()
+        self._stop_reason = ""
+        self._late = 0
+        self.prepare(request)
+
     def _validated_command(self, request: EngineRequest) -> list[str]:
         command = self.command(request)
         length = command_line_length(command)
@@ -152,7 +195,7 @@ class StreamingEngine:
         parser = self.parser(request)
         cwd = Path(request.cwd) if request.cwd else None
         command = self._validated_command(request)
-        self.prepare(request)
+        self._begin(request)
         try:
             stream = self._runner.stream(
                 command,
@@ -160,6 +203,7 @@ class StreamingEngine:
                 env=request.env,
                 stdin_text=self.stdin_text(request),
                 unset=request.unset_env,
+                keep_stdin=self._turns,
             )
         except BaseException:
             self.cleanup(request)
@@ -176,15 +220,16 @@ class StreamingEngine:
             for line in stream.lines():
                 if self.cancelled:
                     break
-                for event in parser.feed(line):
+                for event in self._events(parser, line, stream):
                     if isinstance(event, ToolCall):
                         tool_calls += 1
                     if isinstance(event, RunResult):
-                        result = event
+                        result = self._kept(result, event)
                     spent, stopped = self._step_limit(event, spent, request.max_budget_usd)
                     if stopped:
                         stream.terminate()
                     on_event(event)
+                    stopped = stopped or self._stop_reason
                     if stopped:
                         break
                 if stopped:
@@ -205,4 +250,10 @@ class StreamingEngine:
         result = final_result(parser, result, code, stopped)
         if synthesized and result is not None:
             on_event(result)
-        return EngineOutcome(exit_code=code, result=result, tool_calls=tool_calls, stderr_tail=tail)
+        return EngineOutcome(
+            exit_code=code,
+            result=result,
+            tool_calls=tool_calls,
+            stderr_tail=tail,
+            late_results=self._late,
+        )
