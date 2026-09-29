@@ -1,0 +1,255 @@
+name = "shop-restock-report"
+suites = ["proof"]
+fixture = "python_strong"
+prompt = "Add a report named restock to the shop's reports. It lists every product that will run out before a new order from its supplier could arrive: a product's days of stock left are the stock available to sell divided by its average daily sales, rounded down to a whole number, and the product is listed when those days are at most its supplier's reorder window. Each line is built with the same row helper the other reports use, from the sku, the product name and the days left, soonest first, with ties ordered by sku. Discontinued products and products with no sales never appear. The existing reports must not change."
+accept = "{python} -m pytest -q -p no:cacheprovider {hidden} tests/test_reports.py"
+
+[request]
+type = "feature"
+what = "Add a restock report of the products that will run out before a new order could arrive"
+why = "Buyers learn too late that a product is about to run out, when a new order can no longer arrive in time"
+tests = "the restock report lists, soonest first, each product whose days of stock left fit in its supplier's reorder window, with sku, name and whole days left; discontinued products and products without sales never appear; the existing reports keep their output"
+out_of_scope = "the existing reports and the stock, sales and supplier data"
+
+[files]
+"src/shop/catalog.py" = '''
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Product:
+    sku: str
+    name: str
+    supplier: str
+    discontinued: bool = False
+
+
+PRODUCTS: dict[str, Product] = {
+    "TEA-01": Product("TEA-01", "Green tea", "leafco"),
+    "TEA-02": Product("TEA-02", "Black tea", "leafco"),
+    "MUG-01": Product("MUG-01", "Stone mug", "claymade"),
+    "MUG-02": Product("MUG-02", "Glass mug", "claymade", discontinued=True),
+    "KET-01": Product("KET-01", "Kettle", "heatworks"),
+    "FIL-01": Product("FIL-01", "Paper filters", "leafco"),
+    "FIL-02": Product("FIL-02", "Cloth filter", "leafco"),
+}
+
+
+def product(sku: str) -> Product:
+    return PRODUCTS[sku]
+
+
+def active() -> list[Product]:
+    return [item for item in PRODUCTS.values() if not item.discontinued]
+'''
+"src/shop/suppliers.py" = '''
+LEAD_TIME_DAYS: dict[str, int] = {"leafco": 5, "claymade": 12, "heatworks": 20}
+SAFETY_DAYS = 2
+CONTACTS: dict[str, str] = {
+    "leafco": "orders.leafco@example.invalid",
+    "claymade": "hello.claymade@example.invalid",
+    "heatworks": "trade.heatworks@example.invalid",
+}
+
+
+def lead_time(supplier: str) -> int:
+    return LEAD_TIME_DAYS[supplier]
+
+
+def reorder_window(supplier: str) -> int:
+    return lead_time(supplier) + SAFETY_DAYS
+
+
+def contact(supplier: str) -> str:
+    return CONTACTS[supplier]
+'''
+"src/shop/stock.py" = '''
+ON_HAND: dict[str, int] = {
+    "TEA-01": 30,
+    "TEA-02": 200,
+    "MUG-01": 40,
+    "MUG-02": 3,
+    "KET-01": 9,
+    "FIL-01": 0,
+    "FIL-02": 12,
+}
+RESERVED: dict[str, int] = {"TEA-01": 6, "KET-01": 1}
+
+
+def on_hand(sku: str) -> int:
+    return ON_HAND.get(sku, 0)
+
+
+def available(sku: str) -> int:
+    return max(on_hand(sku) - RESERVED.get(sku, 0), 0)
+
+
+def stock_value(prices: dict[str, float]) -> float:
+    return round(sum(prices.get(sku, 0.0) * count for sku, count in ON_HAND.items()), 2)
+'''
+"src/shop/sales.py" = '''
+DAILY_SALES: dict[str, list[int]] = {
+    "TEA-01": [3, 4, 5, 4],
+    "TEA-02": [2, 3],
+    "MUG-01": [1, 3, 2],
+    "MUG-02": [5, 5],
+    "KET-01": [0, 1, 0, 1],
+    "FIL-01": [],
+    "FIL-02": [2, 2, 2],
+}
+
+
+def average_daily(sku: str) -> float:
+    days = DAILY_SALES.get(sku, [])
+    return sum(days) / len(days) if days else 0.0
+
+
+def best_sellers(count: int) -> list[str]:
+    ranked = sorted(DAILY_SALES, key=lambda sku: (-sum(DAILY_SALES[sku]), sku))
+    return ranked[:count]
+'''
+"src/shop/shipping.py" = '''
+ZONES: dict[str, float] = {"local": 2.5, "national": 4.99, "abroad": 14.0}
+FREE_FROM = 60.0
+
+
+def shipping_cost(zone: str, subtotal: float) -> float:
+    if subtotal >= FREE_FROM:
+        return 0.0
+    return ZONES[zone]
+'''
+"src/shop/customers.py" = '''
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Customer:
+    email: str
+    zone: str
+    newsletter: bool = False
+
+
+def mailing_list(customers: list[Customer]) -> list[str]:
+    return sorted(item.email for item in customers if item.newsletter)
+'''
+"src/shop/reports.py" = '''
+from collections.abc import Callable
+
+from shop.catalog import active
+from shop.sales import average_daily, best_sellers
+from shop.stock import available
+
+Report = Callable[[], list[str]]
+REPORTS: dict[str, Report] = {}
+
+
+def report(name: str) -> Callable[[Report], Report]:
+    def register(build: Report) -> Report:
+        REPORTS[name] = build
+        return build
+
+    return register
+
+
+def row(*cells: object) -> str:
+    return " | ".join(str(cell) for cell in cells)
+
+
+@report("catalog")
+def catalog_report() -> list[str]:
+    return [row(item.sku, item.name) for item in active()]
+
+
+@report("stock")
+def stock_report() -> list[str]:
+    return [row(item.sku, available(item.sku)) for item in active()]
+
+
+@report("best-sellers")
+def best_sellers_report() -> list[str]:
+    return [row(sku, f"{average_daily(sku):.1f}") for sku in best_sellers(3)]
+'''
+"tests/test_reports.py" = '''
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from shop.reports import REPORTS, row
+
+
+def test_catalog_lists_active_products() -> None:
+    assert REPORTS["catalog"]()[:2] == [row("TEA-01", "Green tea"), row("TEA-02", "Black tea")]
+
+
+def test_stock_subtracts_reserved_units() -> None:
+    assert row("TEA-01", 24) in REPORTS["stock"]()
+
+
+def test_best_sellers() -> None:
+    assert REPORTS["best-sellers"]() == [
+        row("TEA-01", "4.0"),
+        row("MUG-02", "5.0"),
+        row("FIL-02", "2.0"),
+    ]
+'''
+
+[hidden]
+"tests/test_bench_restock.py" = '''
+import importlib
+import pkgutil
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+import shop
+
+for module in pkgutil.iter_modules(shop.__path__):
+    importlib.import_module(f"shop.{module.name}")
+
+from shop.reports import REPORTS, row
+
+
+def test_restock_lists_what_runs_out_before_an_order_arrives() -> None:
+    assert REPORTS["restock"]() == [
+        row("FIL-02", "Cloth filter", 6),
+        row("TEA-01", "Green tea", 6),
+        row("KET-01", "Kettle", 16),
+    ]
+
+
+def test_the_other_reports_keep_their_output() -> None:
+    assert REPORTS["catalog"]()[0] == row("TEA-01", "Green tea")
+    assert row("KET-01", 8) in REPORTS["stock"]()
+'''
+
+[[reference_edit]]
+path = "src/shop/reports.py"
+old = """from shop.catalog import active
+from shop.sales import average_daily, best_sellers
+from shop.stock import available
+"""
+new = """from shop.catalog import active
+from shop.sales import average_daily, best_sellers
+from shop.stock import available
+from shop.suppliers import reorder_window
+"""
+
+[[reference_edit]]
+path = "src/shop/reports.py"
+old = """@report("best-sellers")"""
+new = """@report("restock")
+def restock_report() -> list[str]:
+    found: list[tuple[int, str, str]] = []
+    for item in active():
+        daily = average_daily(item.sku)
+        if daily <= 0:
+            continue
+        days = int(available(item.sku) // daily)
+        if days <= reorder_window(item.supplier):
+            found.append((days, item.sku, item.name))
+    return [row(sku, name, days) for days, sku, name in sorted(found)]
+
+
+@report("best-sellers")"""

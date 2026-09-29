@@ -33,6 +33,7 @@ from cuanta.domain.report import (
     strip_preamble,
     unified_diff,
 )
+from cuanta.domain.run_metrics import RunMetrics, run_metrics
 from cuanta.domain.sandbox import trial_folder
 from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, ScoutSummary, parse_scout
 from cuanta.domain.spectrum import changed_paths, resolve_agents
@@ -121,6 +122,7 @@ class ResultView:
     read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
     governor: GovernorSummary = field(default_factory=GovernorSummary)
     scout: ScoutSummary = field(default_factory=ScoutSummary)
+    metrics: RunMetrics = field(default_factory=RunMetrics)
 
     @property
     def decidable(self) -> bool:
@@ -291,6 +293,9 @@ class ResultQuery:
         index_events = list(events)
         for role in roles:
             index_events.extend(self._ledger.events(EventQuery(run_id=role.id)))
+        resolved = resolve_agents(index_events)
+        governor = parse_governor(meta.get("governor"), blocked_calls(index_events))
+        scout = parse_scout(meta.get(SCOUT_KEY), meta.get(DOCS_KEY))
         return ResultView(
             run=run,
             task_type=task_type,
@@ -322,7 +327,7 @@ class ResultQuery:
             completion=str(meta.get("completion") or ""),
             verification=verify_rounds(meta.get("verification_rounds")),
             index=run_index_metrics(index_events, (run, *roles), self._reports.meta),
-            anatomy=analyze_anatomy(resolve_agents(index_events)),
+            anatomy=analyze_anatomy(resolved),
             read_efficiency=read_efficiency(
                 index_events,
                 raw_report,
@@ -332,8 +337,17 @@ class ResultQuery:
                     root for owner in (run, *roles) for root in self._read_reporting.roots(owner)
                 ),
             ),
-            governor=parse_governor(meta.get("governor"), blocked_calls(index_events)),
-            scout=parse_scout(meta.get(SCOUT_KEY), meta.get(DOCS_KEY)),
+            governor=governor,
+            scout=scout,
+            metrics=run_metrics(
+                attempt,
+                roles,
+                resolved,
+                self._ledger.forecast(run.id),
+                governor,
+                scout,
+                None if trial is None else trial.trial.added + trial.trial.removed,
+            ),
         )
 
     def _roles(self, run: Run) -> tuple[Run, ...]:

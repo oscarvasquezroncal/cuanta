@@ -60,6 +60,30 @@ class PlannedRun:
     rep: int
     session: str = LEAN_SESSION
     index: str = "on"
+    arm: str = ""
+    cap_usd: float = 0.0
+    group: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ProofRecord:
+    comparison: str
+    arm: str
+    cap_usd: float
+    end_reason: str = ""
+    leak_tokens: int | None = None
+    blocked_reads: int | None = None
+    blocked_tokens: int | None = None
+    scout_mode: str = ""
+    scout_dispatched: bool | None = None
+    first_cache_read: int | None = None
+    fixed_prefix: int | None = None
+    finish_sent: bool = False
+    finish_spent_usd: float | None = None
+    group: int = 0
+    position: int = 0
+    rule_tokens: int | None = None
+    answered: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +118,11 @@ class RunMetrics:
     depth: str = ""
     anatomy: AnatomyReport = field(default_factory=AnatomyReport)
     read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
+    proof: ProofRecord | None = None
+
+    @property
+    def arm(self) -> str:
+        return self.proof.arm if self.proof is not None else ""
 
     @property
     def total_tokens(self) -> int:
@@ -127,6 +156,7 @@ class ConditionSummary:
     shape: str = ""
     pack: str = "on"
     depth: str = ""
+    arm: str = ""
 
     @property
     def label(self) -> str:
@@ -135,6 +165,8 @@ class ConditionSummary:
             label += f" · {self.session}"
         if self.index != "on" and self.condition is not Condition.BASELINE:
             label += f" · index {self.index}"
+        if self.arm:
+            label += f" · {self.arm}"
         return label
 
     @property
@@ -225,15 +257,15 @@ def summarize(metrics: Sequence[RunMetrics]) -> tuple[ConditionSummary, ...]:
             for index in INDEX_MODES:
                 options = sorted(
                     {
-                        (item.shape, item.pack, item.depth)
+                        (item.shape, item.pack, item.depth, item.arm)
                         for item in metrics
                         if item.condition is condition
                         and item.session == session
                         and item.index == index
                     }
                 )
-                for shape, pack, depth in options:
-                    row = _summary(metrics, condition, session, index, shape, pack, depth)
+                for shape, pack, depth, arm in options:
+                    row = _summary(metrics, condition, session, index, shape, pack, depth, arm)
                     if row is not None:
                         rows.append(row)
     return tuple(rows)
@@ -247,6 +279,7 @@ def _summary(
     shape: str,
     pack: str,
     depth: str,
+    arm: str = "",
 ) -> ConditionSummary | None:
     runs = [
         item
@@ -254,7 +287,7 @@ def _summary(
         if item.condition is condition
         and item.session == session
         and item.index == index
-        and (item.shape, item.pack, item.depth) == (shape, pack, depth)
+        and (item.shape, item.pack, item.depth, item.arm) == (shape, pack, depth, arm)
     ]
     if not runs:
         return None
@@ -275,6 +308,7 @@ def _summary(
         shape=shape,
         pack=pack,
         depth=depth,
+        arm=arm,
     )
 
 
@@ -394,11 +428,13 @@ def report_markdown(
         "| Plugins / MCP / hooks | Cost | Test-output tokens | Retries |",
         "|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|",
     ]
-    ordered = sorted(metrics, key=lambda run: (run.task, run.condition.value, run.session, run.rep))
+    ordered = sorted(
+        metrics, key=lambda run: (run.task, run.condition.value, run.arm, run.session, run.rep)
+    )
     for item in ordered:
         verdict = "yes" if item.accepted else ("capped" if item.capped else "no")
         lines.append(
-            f"| {item.task} | {item.condition.value} | {item.session} | {item.rep} | {verdict} | "
+            f"| {item.task} | {_condition(item)} | {item.session} | {item.rep} | {verdict} | "
             f"{item.total_tokens:,} | {item.context_tokens:,} | "
             f"{' / '.join(str(count) for count in item.loaded)} | {_money(item.cost_usd)} | "
             f"{item.test_output_tokens:,} | {item.retries} |"
@@ -417,7 +453,7 @@ def report_markdown(
     ]
     for item in ordered:
         lines.append(
-            f"| {item.task} | {item.condition.value} | {item.session} | {item.index} | "
+            f"| {item.task} | {_condition(item)} | {item.session} | {item.index} | "
             f"{item.rep} | "
             f"{item.exploration_tokens_estimate:,} | {item.raw_reads} | {item.index_calls} | "
             f"{', '.join(item.out_of_plan_edits) or '-'} | "
@@ -436,6 +472,10 @@ def report_markdown(
     return "\n".join(lines) + "\n"
 
 
+def _condition(item: RunMetrics) -> str:
+    return f"{item.condition.value} · {item.arm}" if item.arm else item.condition.value
+
+
 def _condition_runs(row: ConditionSummary, metrics: Sequence[RunMetrics]) -> list[RunMetrics]:
     return [
         item
@@ -443,7 +483,8 @@ def _condition_runs(row: ConditionSummary, metrics: Sequence[RunMetrics]) -> lis
         if item.condition is row.condition
         and item.session == row.session
         and item.index == row.index
-        and (item.shape, item.pack, item.depth) == (row.shape, row.pack, row.depth)
+        and (item.shape, item.pack, item.depth, item.arm)
+        == (row.shape, row.pack, row.depth, row.arm)
     ]
 
 

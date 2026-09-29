@@ -7,6 +7,7 @@ from cuanta.cli.runtime import Session, execute
 if TYPE_CHECKING:
     from cuanta.cli.document import Block, Document, Table
     from cuanta.domain.real_costs import CostReport, CostRow, PhaseCostRow
+    from cuanta.domain.run_metrics import Reactions, RunMetrics
 
 TYPE_LABELS = {
     "investigation": "audit",
@@ -17,6 +18,29 @@ TYPE_LABELS = {
     "untyped": "untyped",
 }
 HEADERS = ("group", "runs", "acc.", "per acc.", "spend", "n/a", "median", "time", "err.")
+COST_METRIC_HEADERS = (
+    "run",
+    "type",
+    "engine",
+    "P50",
+    "P90",
+    "actual",
+    "cap used",
+    "P90-actual",
+    "per acc.",
+    "per line",
+)
+EXPLORATION_METRIC_HEADERS = (
+    "run",
+    "blocked reads",
+    "tokens avoided",
+    "finishes",
+    "rotations",
+    "warm 1st",
+    "warm all",
+    "pack",
+    "senior in",
+)
 CENT = 0.01
 COMPLETION_LABELS = {
     "complete": "complete",
@@ -38,11 +62,19 @@ def costs_command(
         str,
         typer.Option("--since", help="First day to count, YYYY-MM-DD (UTC); default 30 days."),
     ] = "",
+    metrics: Annotated[
+        bool,
+        typer.Option(
+            "--metrics",
+            help="Add per-run metrics: forecast against actual, margin, cost per accepted "
+            "change, blocked reads, finishes, rotations, warm cache and scout pack.",
+        ),
+    ] = False,
 ) -> None:
-    execute(ctx, lambda session: _costs(session, since))
+    execute(ctx, lambda session: _costs(session, since, metrics))
 
 
-def _costs(session: Session, since: str) -> "Document":
+def _costs(session: Session, since: str, metrics: bool = False) -> "Document":
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Document, Hint
     from cuanta.domain.errors import DomainFailure
@@ -56,7 +88,9 @@ def _costs(session: Session, since: str) -> "Document":
         start = parsed
     container = Container.for_project(session.project)
     try:
-        report = container.costs_query().report(start)
+        query = container.costs_query()
+        report = query.report(start)
+        per_run = query.metrics(start) if metrics else ()
     finally:
         container.close()
     blocks: list[Block] = [
@@ -86,7 +120,13 @@ def _costs(session: Session, since: str) -> "Document":
             )
         )
         blocks.append(Hint("record outcomes: cuanta runs accept <id> · cuanta runs reject <id>"))
-    return Document(blocks=tuple(blocks), payload=costs_payload(report))
+    payload = costs_payload(report)
+    if metrics:
+        from cuanta.domain.run_metrics import metrics_payload
+
+        blocks.extend(metric_blocks(report.since, per_run))
+        payload["metrics"] = [metrics_payload(item) for item in per_run]
+    return Document(blocks=tuple(blocks), payload=payload)
 
 
 def money(value: float | None, lower_bound: bool = False, estimated: bool = False) -> str:
@@ -212,3 +252,97 @@ def costs_payload(report: "CostReport") -> dict[str, object]:
         "total": row_payload(report.total),
         "phase_medians": [phase_payload(row) for row in report.phase_medians],
     }
+
+
+def share(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.0%}"
+
+
+def count(value: int | None) -> str:
+    return "n/a" if value is None else f"{value:,}"
+
+
+def signed(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"-{money(-value)}" if value < 0 else money(value)
+
+
+def reaction_cell(reactions: "Reactions | None") -> str:
+    if reactions is None:
+        return "n/a"
+    if reactions.saved_usd is None:
+        return str(reactions.count)
+    return f"{reactions.count} ({money(reactions.saved_usd)})"
+
+
+def cost_cells(item: "RunMetrics") -> tuple[str, ...]:
+    per_line = item.tokens_per_line
+    return (
+        item.run_id,
+        TYPE_LABELS.get(item.task_type, item.task_type),
+        MIX_LABELS.get(item.provider, item.provider),
+        money(item.p50_usd),
+        money(item.p90_usd),
+        money(item.actual_usd, estimated=item.estimated),
+        share(item.cap_used),
+        signed(item.p90_left_usd),
+        money(item.per_accepted_usd, estimated=item.estimated),
+        "n/a" if per_line is None else f"{per_line:,.0f}",
+    )
+
+
+def exploration_cells(item: "RunMetrics") -> tuple[str, ...]:
+    blocked = item.blocked
+    return (
+        item.run_id,
+        count(blocked.reads if blocked is not None else None),
+        count(blocked.tokens if blocked is not None else None),
+        reaction_cell(item.finishes),
+        reaction_cell(item.rotations),
+        share(item.first_warm_share),
+        share(item.warm_share),
+        count(item.pack_tokens),
+        count(item.senior_input_tokens),
+    )
+
+
+def metric_table(
+    title: str, headers: tuple[str, ...], numeric_from: int, rows: tuple[tuple[str, ...], ...]
+) -> "Table":
+    from cuanta.cli.document import Column, Table
+
+    return Table(
+        title,
+        tuple(
+            Column(header, numeric=index >= numeric_from) for index, header in enumerate(headers)
+        ),
+        rows,
+    )
+
+
+def metric_blocks(since: str, items: "tuple[RunMetrics, ...]") -> "list[Block]":
+    from cuanta.cli.document import Hint
+
+    if not items:
+        return [Hint("no runs with metrics in this window")]
+    return [
+        metric_table(
+            f"per-run cost since {since[:10]} UTC",
+            COST_METRIC_HEADERS,
+            3,
+            tuple(cost_cells(item) for item in items),
+        ),
+        metric_table(
+            "per-run exploration and cache",
+            EXPLORATION_METRIC_HEADERS,
+            1,
+            tuple(exploration_cells(item) for item in items),
+        ),
+        Hint(
+            "n/a: unknown, never zero · cap used: actual ÷ cap · per line: tokens ÷ changed "
+            "lines of an accepted isolated-copy patch · finishes and rotations: count (saving) · "
+            "warm: cache read ÷ input of first requests and of all requests · "
+            "--json adds forecast and actual tokens by bucket"
+        ),
+    ]

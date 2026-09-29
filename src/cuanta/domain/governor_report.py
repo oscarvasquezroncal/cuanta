@@ -48,6 +48,8 @@ class GovernorSummary:
     reactions: tuple[GovernorEntry, ...] = ()
     blocked: BlockedCalls | None = None
     discipline: tuple[tuple[str, str], ...] = ()
+    recorded: bool = False
+    hooks: bool = False
 
     @property
     def blocked_total(self) -> int:
@@ -122,13 +124,19 @@ def discipline_modes(pairs: Iterable[tuple[str, str]]) -> dict[str, str]:
 
 
 def governor_metrics(
-    taken: Sequence[ReactionTaken], modes: Mapping[str, str] | None = None
+    taken: Sequence[ReactionTaken],
+    modes: Mapping[str, str] | None = None,
+    recorded: bool = False,
+    hooks: bool = False,
 ) -> dict[str, object]:
     reactions = [entry_payload(governor_entry(item)) for item in taken]
     discipline = {role: mode for role, mode in (modes or {}).items() if mode in MODES}
-    if not reactions and not discipline:
+    if not reactions and not discipline and not recorded and not hooks:
         return {}
-    return {"reactions": reactions, "read_discipline": discipline}
+    record: dict[str, object] = {"reactions": reactions, "read_discipline": discipline}
+    if hooks:
+        record[HOOKS] = True
+    return record
 
 
 def governor_summary(
@@ -241,4 +249,6 @@ def parse_governor(value: object, blocked: BlockedCalls | None = None) -> Govern
         if isinstance(modes, dict)
         else ()
     )
-    return GovernorSummary(entries, blocked, discipline)
+    return GovernorSummary(
+        entries, blocked, discipline, isinstance(rows, list), data.get(HOOKS) is True
+    )

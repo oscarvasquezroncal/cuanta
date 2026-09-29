@@ -265,5 +265,8 @@ class MemoryLedger:
         )
         return forecast_actuals(selected[:limit] if limit else selected, self._runs.values())
 
+    def forecast(self, run_id: str) -> Forecast | None:
+        return self._forecasts.get(run_id)
+
     def close(self) -> None:
         return None

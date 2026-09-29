@@ -540,6 +540,10 @@ def test_forecasts_round_trip_with_their_actuals(ledger: Ledger) -> None:
     ledger.add_forecast(replace(_forecast("A", "2026-09-28T01:00:00Z"), p50_usd=0.6))
     (again,) = ledger.forecasts("claude", "feature", limit=2)[1:]
     assert (again.forecast.run_id, again.forecast.p50_usd) == ("A", 0.6)
+    assert ledger.forecast("B") == _forecast("B", "2026-09-28T02:00:00Z", task_type="bug")
+    one = ledger.forecast("A")
+    assert one is not None and one.p50_usd == 0.6
+    assert ledger.forecast("missing") is None
 
 
 def test_migration_adds_the_forecasts_table_idempotently(tmp_path: Path) -> None:

@@ -120,17 +120,20 @@ if TYPE_CHECKING:
     from cuanta.application.tests_view import LatestTests
     from cuanta.application.trials import TrialStore
     from cuanta.application.verification import Verifier
+    from cuanta.domain.anatomy import AnatomyReport
     from cuanta.domain.assistant import Suggestions
-    from cuanta.domain.bench import BenchTask, Condition
+    from cuanta.domain.bench import BenchTask, Condition, PlannedRun, ProofRecord
+    from cuanta.domain.bench_proof import Arm
     from cuanta.domain.change_plan import ChangePlan
     from cuanta.domain.code_index import IndexRow
     from cuanta.domain.engine import EngineEvent
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.governor_report import BlockedCalls
     from cuanta.domain.instinct import Choice
-    from cuanta.domain.ledger import Run
+    from cuanta.domain.ledger import LedgerEvent, Run
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
+    from cuanta.domain.overhead import SessionOverhead
     from cuanta.domain.pack import ContextPack
     from cuanta.domain.pricing import PriceTable
     from cuanta.domain.role_budgets import OvershootMargins, RepairBudget
@@ -166,6 +169,7 @@ class Container:
     home: Path = field(default_factory=home_dir)
     state_root: Path | None = None
     extra_env: tuple[tuple[str, str], ...] = ()
+    run_mode: str = ""
     _shared: Ledger | None = field(default=None, repr=False)
     _opened: list[Ledger] = field(default_factory=list, repr=False)
     decision_scope: DecisionScope = field(default_factory=_new_scope, repr=False)
@@ -436,6 +440,12 @@ class Container:
         self, copy_root: Path, env: tuple[tuple[str, str], ...] = ()
     ) -> Container:
         return replace(self, project=copy_root, state_root=self.state_project(), extra_env=env)
+
+    def classic(self) -> None:
+        from cuanta.domain.run_mode import CLASSIC, classic_config
+
+        self.config = classic_config(self.config)
+        self.run_mode = CLASSIC
 
     def home_reader(self) -> LocalHome:
         return LocalHome(self.home)
@@ -1392,12 +1402,14 @@ class Container:
     ) -> CrossEnginePipeline:
         from cuanta.application.cross_engine import CrossEnginePipeline
         from cuanta.application.run_reports import RunReports
+        from cuanta.domain.run_mode import classic_meta
         from cuanta.domain.scout import parse_docs_mode
 
         reports = RunReports(self.state_workspace())
+        mode = classic_meta(self.run_mode)
 
         def save_metrics(run_id: str, metrics: Mapping[str, object]) -> None:
-            reports.save_meta(run_id, {**(reports.meta(run_id) or {}), **metrics})
+            reports.save_meta(run_id, {**(reports.meta(run_id) or {}), **metrics, **mode})
 
         def launcher(name: str) -> EngineLauncher | None:
             engine = self.engine(name)
@@ -1436,7 +1448,7 @@ class Container:
             build_blocked=self.build_blocked(),
             forecaster=self.forecaster(ledger),
             new_run_id=self.new_run_id,
-            governor=self.governor_setup(ledger),
+            governor=self.governor_setup(ledger) if self.config.governor else None,
             read_discipline=self.pipeline_read_discipline,
             read_max_lines=self.config.read_max_lines,
             docs_mode=parse_docs_mode(self.config.docs_mode),
@@ -1559,8 +1571,23 @@ class Container:
                 depth=depth,
             )
 
-        executor = BenchExecutor(sandbox, attempt, self.clock.monotonic)
-        return BenchRunner(executor, self.workspace())
+        def arm_attempt(task: BenchTask, planned: PlannedRun, root: str) -> Attempt:
+            return self.bench_attempt(
+                task,
+                planned.condition,
+                root,
+                planned.cap_usd,
+                model,
+                planned.session,
+                planned.index,
+                shape=shape,
+                pack=pack,
+                depth=depth,
+                planned=planned,
+            )
+
+        executor = BenchExecutor(sandbox, attempt, self.clock.monotonic, arm_attempt)
+        return BenchRunner(executor, self.workspace(), executor.group)
 
     def bench_tasks(self, directory: Path, suite: str) -> tuple[BenchTask, ...]:
         from cuanta.adapters.bench.tasks import load_tasks
@@ -1698,25 +1725,28 @@ class Container:
         shape: str = "",
         pack: str = "on",
         depth: str = "",
+        planned: PlannedRun | None = None,
     ) -> Attempt:
         from cuanta.application.bench import Attempt
-        from cuanta.application.mandate_flow import MandateOptions
-        from cuanta.application.progress import RecordingSink
-        from cuanta.application.route_apply import RouteOptions
         from cuanta.application.spectrum import Selection
         from cuanta.domain.bench import Condition, bench_boundaries
+        from cuanta.domain.bench_proof import arm_config, planned_arm
         from cuanta.domain.depth import parse_depth
         from cuanta.domain.overhead import session_overhead
         from cuanta.domain.spectrum import LeakKind
         from cuanta.ports.ledger import EventQuery
 
+        arm = planned_arm(planned)
         sub = replace(Container.for_project(Path(root)), runner=self.runner, clock=self.clock)
         selected = "off" if condition is Condition.BASELINE else index
-        sub.config = replace(
-            sub.config,
-            index_enabled=selected == "on",
-            index_tools=selected == "on",
-            pack_enabled=selected == "on" and pack == "on",
+        sub.config = arm_config(
+            replace(
+                sub.config,
+                index_enabled=selected == "on",
+                index_tools=selected == "on",
+                pack_enabled=selected == "on" and pack == "on",
+            ),
+            arm,
         )
         plan = sub.change_plan(task.request)
         before = sub.project_snapshot()
@@ -1725,28 +1755,17 @@ class Container:
             models: tuple[tuple[str, str, str], ...] = ()
             answer: str | None = None
             actual_shape = "single"
+            report: MandateReport | None = None
             chosen_depth = parse_depth(depth)
             if condition is Condition.BASELINE:
                 run, subtype, answer = sub._bench_baseline(
                     task, root, cap, model, session, depth, ledger
                 )
             else:
-                flow = sub.mandate_flow(ledger)
-                mode = "auto" if condition is Condition.ROUTED else "off"
-                options = MandateOptions(
-                    engine="claude",
-                    model=model,
-                    budget_usd=cap,
-                    route=RouteOptions(mode=mode),
-                    session=session,
-                    temporary_copy=True,
-                    shape=shape,
-                    depth=depth,
+                report = sub._bench_mandate(
+                    task, condition, cap, model, session, shape, depth, ledger, arm
                 )
-                report = flow.run(flow.prepare(task.request, 0, options), RecordingSink())
-                run = report.run
-                subtype = ""
-                answer = report.text
+                run, subtype, answer = report.run, "", report.text
                 actual_shape = "single" if report.single else "pipeline"
                 models = tuple(
                     (row.agent, row.planned, ", ".join(row.actual)) for row in report.audit
@@ -1792,12 +1811,105 @@ class Container:
                 guard_violations=tuple(
                     dict.fromkeys((*spectrum.index.guard_violations, *protected))
                 ),
+                proof=sub._bench_proof(
+                    planned, arm, run, plan, root, events, spectrum.anatomy, overhead, report
+                ),
             )
         finally:
             sub.close()
 
+    def _bench_mandate(
+        self,
+        task: BenchTask,
+        condition: Condition,
+        cap: float,
+        model: str,
+        session: str,
+        shape: str,
+        depth: str,
+        ledger: Ledger,
+        arm: Arm | None,
+    ) -> MandateReport:
+        from cuanta.application.mandate_flow import MandateOptions, per_role_run
+        from cuanta.application.progress import RecordingSink
+        from cuanta.application.route_apply import RouteOptions
+        from cuanta.domain.bench import Condition
+        from cuanta.domain.errors import DomainFailure
+
+        flow = self.mandate_flow(ledger)
+        mode = "auto" if condition is Condition.ROUTED else "off"
+        options = MandateOptions(
+            engine="claude",
+            model=model,
+            budget_usd=cap,
+            route=RouteOptions(mode=mode),
+            session=session,
+            temporary_copy=True,
+            shape=shape,
+            depth=depth,
+        )
+        if arm is not None and arm.shape:
+            options, _ = self.shaped_options(task.request, replace(options, shape=arm.shape))
+            if per_role_run(options, task.request.type, "claude"):
+                raise DomainFailure(
+                    "the bench runs the Claude team natively; this shape needs one launch per role",
+                    "set runs.scout_mode = native for the bench",
+                )
+        return flow.run(flow.prepare(task.request, 0, options), RecordingSink())
+
+    def _bench_proof(
+        self,
+        planned: PlannedRun | None,
+        arm: Arm | None,
+        run: Run,
+        plan: ChangePlan,
+        root: str,
+        events: Sequence[LedgerEvent],
+        anatomy: AnatomyReport,
+        overhead: SessionOverhead,
+        report: MandateReport | None,
+    ) -> ProofRecord | None:
+        from cuanta.domain.bench_proof import exploration_leak, proof_record
+        from cuanta.domain.governor_report import blocked_calls
+        from cuanta.domain.read_efficiency import read_calls
+
+        if planned is None or arm is None:
+            return None
+        hooks = self.config.read_discipline or self.config.pipeline_read_discipline
+        split = overhead.split
+        leak: tuple[int, int] | None = None
+        if anatomy.totals.requests > 0:
+            calls = read_calls(events, root)
+            lines = {
+                path: len(found)
+                for path in {call.path for call in calls if not call.search}
+                if ".." not in path.split("/") and (found := self.project_lines(path)) is not None
+            }
+            leak = exploration_leak(calls, plan, lines, self.config.read_max_lines)
+        return proof_record(
+            arm,
+            planned,
+            run.end_reason,
+            leak[0] if leak is not None else None,
+            blocked_calls(events) if hooks else None,
+            report.scout if report is not None else None,
+            overhead.cache.read if overhead.cache is not None else None,
+            split.fixed if split is not None else None,
+            report.governor if report is not None else (),
+            rule_tokens=leak[1] if leak is not None else None,
+            answered=bool(report.text) if report is not None else None,
+        )
+
+    def bench_overshoot(self) -> float:
+        from cuanta.domain.bench_proof import overshoot_allowance
+
+        if not (self.cuanta_dir() / "ledger.db").is_file():
+            return overshoot_allowance({})
+        return overshoot_allowance(self.budget_margin(self.shared_ledger()).samples)
+
     def mandate_service(self, ledger: Ledger) -> MandateService:
         from cuanta.application.mandate import MandateService
+        from cuanta.domain.run_mode import classic_meta
 
         return MandateService(
             self.state_workspace(),
@@ -1807,6 +1919,7 @@ class Container:
             frozenset(self.config.exclusions),
             self.capsule_store(),
             scanned=self.workspace(),
+            meta=classic_meta(self.run_mode),
         )
 
     def mandate_flow(self, ledger: Ledger, sandbox: SandboxLaunch | None = None) -> MandateFlow:
@@ -1849,8 +1962,9 @@ class Container:
             learn_run=self.learn_run if sandbox is None else None,
             pipeline_index_tools=self.config.index_enabled and self.config.pipeline_index_tools,
             forecaster=self.forecaster(ledger),
-            governor=self.governor_setup(ledger),
+            governor=self.governor_setup(ledger) if self.config.governor else None,
             pipeline_read_discipline=self.config.pipeline_read_discipline,
+            read_discipline=self.config.read_discipline,
             docs_mode=parse_docs_mode(self.config.docs_mode),
             lines_of=self.project_lines,
             capsules=self.capsule_store(),
@@ -2040,13 +2154,14 @@ class Container:
         from cuanta.application.run_reports import RunReports
 
         has_ledger = (self.cuanta_dir() / "ledger.db").is_file
-        reports = RunReports(self.state_workspace())
+        workspace = self.state_workspace()
+        reports = RunReports(workspace)
 
         def completion(run_id: str) -> str:
             value = (reports.meta(run_id) or {}).get("completion")
             return value if isinstance(value, str) else ""
 
-        return CostsQuery(self.ledger, has_ledger, self.clock.now_iso, completion)
+        return CostsQuery(self.ledger, has_ledger, self.clock.now_iso, completion, workspace)
 
     def run_outcomes(self, ledger: Ledger) -> RunOutcomes:
         from cuanta.application.outcomes import RunOutcomes

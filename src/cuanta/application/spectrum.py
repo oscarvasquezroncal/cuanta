@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from cuanta.application.index_reporting import run_index_metrics
 from cuanta.application.results import stored_shape
 from cuanta.domain.anatomy import analyze_anatomy
+from cuanta.domain.cost_trend import CostTrend
 from cuanta.domain.errors import DomainFailure
 from cuanta.domain.ledger import LedgerEvent, RouteAudit, Run
 from cuanta.domain.messages import Message, english, msg
@@ -48,6 +49,7 @@ class SpectrumResult:
     runs: tuple[Run, ...]
     events: tuple[LedgerEvent, ...]
     audits: tuple[RouteAudit, ...] = ()
+    trend: CostTrend = field(default_factory=CostTrend)
 
     def rows(self, view: View) -> list[Row]:
         resolved = resolve_agents(self.events)

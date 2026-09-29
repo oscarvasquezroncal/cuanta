@@ -175,6 +175,7 @@ class Prepared:
     forecast_error: Message | None = None
     scout: bool = False
     docs: DocsChoice | None = None
+    read_hooks: bool = False
 
 
 def display_command(parts: tuple[str, ...], prompt: str) -> str:
@@ -250,7 +251,9 @@ class MandateFlow:
         docs_mode: DocsMode = DocsMode.ON,
         lines_of: LinesOf | None = None,
         capsules: CapsuleStore | None = None,
+        read_discipline: bool = False,
     ) -> None:
+        self._read_discipline = read_discipline
         self._docs_mode = docs_mode
         self._lines_of = lines_of
         self._capsules = capsules
@@ -467,7 +470,12 @@ class MandateFlow:
             ),
             scout=wanted and has_scout(applied),
             docs=docs,
+            read_hooks=self._hooked(launcher, spec),
         )
+
+    def _hooked(self, launcher: EngineLauncher, spec: LaunchSpec) -> bool:
+        wanted = self._read_discipline if spec.read_discipline is None else spec.read_discipline
+        return wanted and launcher.owns_profile(spec)
 
     def _route(
         self, request: MandateRequest, options: MandateOptions, native: bool
@@ -635,7 +643,9 @@ class MandateFlow:
                 sink if steering is None else observed(sink, steering),
             )
             if steering is not None:
-                report = replace(report, governor=tuple(steering.taken))
+                report = replace(report, governor=tuple(steering.taken), governed=True)
+            if prepared.read_hooks:
+                report = replace(report, read_hooks=True)
             if watch is not None:
                 report = replace(report, scout=self._session_scout(prepared, watch, report))
             if prepared.docs is not None and prepared.docs.reason is not DocsReason.FORCED_ON:

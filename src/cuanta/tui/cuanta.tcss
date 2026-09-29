@@ -653,6 +653,16 @@ Screen.-single #agent-cards, Screen.-icons #agent-cards {
     margin-top: 1;
 }
 
+#spectrum-trend {
+    height: auto;
+    max-height: 12;
+}
+
+#spectrum-trend-note {
+    height: auto;
+    margin-top: 1;
+}
+
 #ledger-filters .field {
     width: 24;
 }
@@ -1398,6 +1408,10 @@ Screen.-short #result-tabs {
 }
 
 #result-scout {
+    margin-bottom: 1;
+}
+
+#result-metrics {
     margin-bottom: 1;
 }
 

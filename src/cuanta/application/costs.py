@@ -3,7 +3,11 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 
+from cuanta.application.run_reports import RunReports
+from cuanta.application.trials import TrialStore
 from cuanta.domain.anatomy import AnatomyReport, analyze_anatomy
+from cuanta.domain.cost_trend import DEFAULT_TREND_RUNS, CostTrend, cost_trend
+from cuanta.domain.governor_report import blocked_calls, parse_governor
 from cuanta.domain.ledger import LedgerEvent, Run
 from cuanta.domain.real_costs import (
     Attempt,
@@ -13,8 +17,12 @@ from cuanta.domain.real_costs import (
     costs_since,
     report_attempts,
 )
+from cuanta.domain.run_metrics import RunMetrics, run_metrics
+from cuanta.domain.run_mode import run_mode
+from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, parse_scout
 from cuanta.domain.spectrum import resolve_agents, usage_events
 from cuanta.ports.ledger import EventQuery, Ledger
+from cuanta.ports.workspace import Workspace
 
 
 def _phase_reports(
@@ -61,8 +69,10 @@ class CostsQuery:
         has_ledger: Callable[[], bool],
         now_iso: Callable[[], str],
         completion: Callable[[str], str] | None = None,
+        workspace: Workspace | None = None,
     ) -> None:
         self._completion = completion
+        self._workspace = workspace
         self._ledger_factory = ledger_factory
         self._has_ledger = has_ledger
         self._now_iso = now_iso
@@ -85,5 +95,58 @@ class CostsQuery:
                 else None
             )
             return report_attempts(items, start, phases, states)
+        finally:
+            ledger.close()
+
+    def trend(self, limit: int = DEFAULT_TREND_RUNS) -> CostTrend:
+        if not self._has_ledger():
+            return CostTrend(limit)
+        ledger = self._ledger_factory()
+        try:
+            return cost_trend(attempts(ledger.runs(), self._now_iso()), limit)
+        finally:
+            ledger.close()
+
+    def metrics(self, since: str = "") -> tuple[RunMetrics, ...]:
+        if self._workspace is None:
+            raise ValueError("run metrics read run metadata and need the state workspace")
+        now = self._now_iso()
+        start = since or costs_since(now)
+        if not self._has_ledger():
+            return ()
+        reports = RunReports(self._workspace)
+        ledger = self._ledger_factory()
+        try:
+            runs = ledger.runs(since=start)
+            by_id = {run.id: run for run in runs}
+            forecasts = {item.forecast.run_id: item.forecast for item in ledger.forecasts()}
+            trials = TrialStore(self._workspace, ledger, self._now_iso)
+            found: list[RunMetrics] = []
+            ordered = sorted(
+                attempts(runs, now),
+                key=lambda item: (item.run.started_at, item.run.id),
+                reverse=True,
+            )
+            for item in ordered:
+                events = [
+                    event
+                    for run_id in item.run_ids
+                    for event in ledger.events(EventQuery(run_id=run_id))
+                ]
+                meta = reports.meta(item.run.id) or {}
+                trial = trials.load(item.run.id)
+                found.append(
+                    run_metrics(
+                        item,
+                        tuple(by_id[run_id] for run_id in item.run_ids[1:] if run_id in by_id),
+                        resolve_agents(events),
+                        forecasts.get(item.run.id),
+                        parse_governor(meta.get("governor"), blocked_calls(events)),
+                        parse_scout(meta.get(SCOUT_KEY), meta.get(DOCS_KEY)),
+                        None if trial is None else trial.added + trial.removed,
+                        run_mode(meta),
+                    )
+                )
+            return tuple(found)
         finally:
             ledger.close()

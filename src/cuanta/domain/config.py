@@ -54,6 +54,7 @@ class Config:
     scout_mode: str = "native"
     scout_threshold: float = DEFAULT_SCOUT_THRESHOLD
     docs_mode: str = "auto"
+    governor: bool = True
 
 
 KEY_MAP: dict[str, str] = {
@@ -80,6 +81,7 @@ KEY_MAP: dict[str, str] = {
     "runs.scout_mode": "scout_mode",
     "runs.scout_threshold": "scout_threshold",
     "runs.docs": "docs_mode",
+    "runs.governor": "governor",
     "git.workflow": "git_workflow",
     "ui.onboarded": "onboarded",
     "listener.port": "port",

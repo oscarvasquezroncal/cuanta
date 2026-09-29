@@ -33,6 +33,7 @@ class Trial:
     checks: tuple[Check, ...] = ()
     recovery_note: str = ""
     simple: bool = False
+    mode: str = "v5"
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,9 @@ def parse_trial(raw: Any) -> Trial:
     shape = raw.get("shape", "")
     if shape not in {"", "single", "pipeline"}:
         raise ValueError("Unsupported shape")
+    mode = raw.get("mode", "v5")
+    if mode not in {"classic", "v5"}:
+        raise ValueError("mode must be classic or v5")
     models = strings(raw.get("role_models", []))
     if any(not re.fullmatch(r"[a-z_]+=[A-Za-z0-9._:/-]+", model) for model in models):
         raise ValueError("Role models use role=model")
@@ -134,6 +138,7 @@ def parse_trial(raw: Any) -> Trial:
         shape=shape,
         cross_engine=cross,
         simple=simple,
+        mode=mode,
         role_models=models,
         acceptance=strings(raw.get("acceptance", [])),
         checks=tuple(checks),

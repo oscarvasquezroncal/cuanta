@@ -726,7 +726,8 @@ class ContainerServices:
             selection = (
                 Selection(since=ALL_SESSIONS) if run_id == ALL_IMPORTED else Selection(run=run_id)
             )
-            return container.spectrum_query(ledger).run(selection)
+            result = container.spectrum_query(ledger).run(selection)
+            return replace(result, trend=container.costs_query().trend())
         finally:
             container.close()
 

@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -11,11 +12,16 @@ import pytest
 from cuanta.adapters.storage.capsule_store import FileCapsuleStore
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.adapters.system.clock import FixedClock
-from cuanta.application.cross_engine import CompletionState, CrossEnginePipeline, CrossReport
+from cuanta.application.cross_engine import (
+    CompletionState,
+    CrossEnginePipeline,
+    CrossReport,
+    cross_metrics,
+)
 from cuanta.application.engine_run import EngineLauncher, LaunchSpec
 from cuanta.application.forecast import Forecaster, PlannedForecast
 from cuanta.application.governor import Governor
-from cuanta.application.mandate import Composed, MandateReport
+from cuanta.application.mandate import Composed, MandateReport, report_payload
 from cuanta.application.mandate_flow import MandateFlow, Prepared
 from cuanta.application.routing import RoutePlan
 from cuanta.application.steering import (
@@ -489,6 +495,7 @@ def team_flow(governor: GovernorSetup | None, service: StubService) -> MandateFl
     flow._learn_run = None
     flow._final_suite = None
     flow._governor = governor
+    flow._read_discipline = False
     return flow
 
 
@@ -509,6 +516,51 @@ def test_the_mandate_flow_governs_a_native_team_only_with_a_governor(
     assert len(seen) == 15
     assert engine.turns == ([(1, 12, TEAM_FINISH)] if governed else [])
     assert [taken.sent for taken in report.governor] == ([True] if governed else [])
+    assert report.governed is governed and not report.read_hooks
+
+
+def test_a_quiet_governed_team_records_its_governor(tmp_path: Path) -> None:
+    report, _, _ = cross_run(tmp_path, TurnEngine([Leg((20_000,) * 3, cost=0.05)]), 1.0, setup())
+    assert report.steered and report.governor == ()
+    assert cross_metrics(report)["governor"] == {"reactions": [], "read_discipline": {}}
+    plain, _, _ = cross_run(tmp_path, TurnEngine([Leg((20_000,) * 3, cost=0.05)]), 1.0, None)
+    assert not plain.steered and "governor" not in cross_metrics(plain)
+
+
+def test_a_quiet_native_session_records_its_governor_and_hooks(tmp_path: Path) -> None:
+    engine = TurnEngine([Leg((20_000,) * 3, cost=0.05)])
+    launcher = launcher_for(engine, MemoryLedger())
+    composed = Composed("build the team", Choice("normal", 0.5), 1, REQUEST, ("claude",))
+    prepared = Prepared(composed, "claude", launcher, team_spec(tmp_path), read_hooks=True)
+    report = team_flow(setup(), StubService()).run(prepared, Recorder(), verdict=False)
+    assert report.governed and report.read_hooks and report.governor == ()
+    assert report_payload(report)["governor"] == {
+        "reactions": [],
+        "read_discipline": {},
+        HOOKS: True,
+    }
+    assert "governor" not in report_payload(replace(report, governed=False, read_hooks=False))
+    fresh = launcher_for(TurnEngine([Leg((20_000,) * 3, cost=0.05)]), MemoryLedger())
+    ungoverned = team_flow(None, StubService()).run(
+        replace(prepared, launcher=fresh, read_hooks=False), Recorder(), verdict=False
+    )
+    assert not ungoverned.governed and "governor" not in report_payload(ungoverned)
+
+
+def test_the_native_hooks_follow_the_generated_profile_and_the_discipline(
+    tmp_path: Path,
+) -> None:
+    flow = team_flow(None, StubService())
+    owned = cast("EngineLauncher", SimpleNamespace(owns_profile=lambda spec: True))
+    shared = cast("EngineLauncher", SimpleNamespace(owns_profile=lambda spec: False))
+    spec = team_spec(tmp_path)
+    assert not flow._hooked(owned, spec)
+    assert flow._hooked(owned, replace(spec, read_discipline=True))
+    assert not flow._hooked(shared, replace(spec, read_discipline=True))
+    flow._read_discipline = True
+    assert flow._hooked(owned, spec) and not flow._hooked(
+        owned, replace(spec, read_discipline=False)
+    )
 
 
 def test_finish_and_checkpoint_turns_ask_for_the_handoff() -> None:

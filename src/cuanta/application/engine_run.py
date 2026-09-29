@@ -170,16 +170,7 @@ class EngineLauncher:
         plan = spec.change_plan or (ChangePlan(read_only=True) if spec.read_only else None)
         strict = plan is not None and (plan.read_only or bool(plan.guard))
         indexed = self._index_tools if spec.index_tools is None else spec.index_tools
-        own_profile = (
-            self._engine.name == "claude"
-            and self._guard_files is not None
-            and (
-                strict
-                or (session == LEAN and spec.kind in {"mandate", "cross"})
-                or (spec.index_tools is True and spec.kind == "cross")
-                or (spec.read_discipline is True and spec.kind == "cross")
-            )
-        )
+        own_profile = self.owns_profile(spec)
         if own_profile and self._guard_files is not None:
             mcp_config, settings_file = self._guard_files(spec)
         elif session == LEAN and self._engine.name == "claude" and self._lean_files is not None:
@@ -228,6 +219,21 @@ class EngineLauncher:
                 else ()
             ),
             resume_session=spec.resume_session,
+        )
+
+    def owns_profile(self, spec: LaunchSpec) -> bool:
+        session = spec.session or self._default_session
+        plan = spec.change_plan or (ChangePlan(read_only=True) if spec.read_only else None)
+        strict = plan is not None and (plan.read_only or bool(plan.guard))
+        return (
+            self._engine.name == "claude"
+            and self._guard_files is not None
+            and (
+                strict
+                or (session == LEAN and spec.kind in {"mandate", "cross"})
+                or (spec.index_tools is True and spec.kind == "cross")
+                or (spec.read_discipline is True and spec.kind == "cross")
+            )
         )
 
     @contextmanager

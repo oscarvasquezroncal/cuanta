@@ -211,6 +211,7 @@ class CrossReport:
     governor: tuple[ReactionTaken, ...] = ()
     scout: ScoutRecord | None = None
     docs: DocsChoice | None = None
+    steered: bool = False
 
     @property
     def verification_outputs(self) -> tuple[str, ...]:
@@ -265,6 +266,7 @@ def cross_metrics(report: CrossReport) -> dict[str, object]:
     governor = governor_metrics(
         report.governor,
         discipline_modes((step.role.value, step.read_discipline) for step in report.steps),
+        recorded=report.steered,
     )
     if governor:
         base["governor"] = governor
@@ -460,6 +462,7 @@ class _Pass:
     order: tuple[Role, ...] = CROSS_ORDER
     docs: DocsChoice | None = None
     scout: ScoutRecord | None = None
+    steered: bool = False
     before: dict[str, str | None] = field(default_factory=dict)
     origin: Mapping[str, str] = field(default_factory=dict)
 
@@ -479,6 +482,7 @@ class _Pass:
             governor=tuple(self.governed),
             scout=self.scout,
             docs=self.docs,
+            steered=self.steered,
         )
 
     @property
@@ -1143,6 +1147,7 @@ class CrossEnginePipeline:
         launch = self._launch(turn, turn.spec, steering)
         if steering is None:
             return turn, launch, ()
+        state.steered = True
         follow = (
             self._rotate(state, turn, launch, steering)
             if turn.engine == "claude"

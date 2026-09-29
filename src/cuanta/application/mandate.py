@@ -125,6 +125,8 @@ class MandateReport:
     governor: tuple[ReactionTaken, ...] = ()
     scout: Mapping[str, object] | None = None
     docs: DocsChoice | None = None
+    governed: bool = False
+    read_hooks: bool = False
 
 
 class MandateService:
@@ -137,8 +139,10 @@ class MandateService:
         exclusions: frozenset[str] = frozenset(),
         capsules: CapsuleStore | None = None,
         scanned: Workspace | None = None,
+        meta: Mapping[str, object] | None = None,
     ) -> None:
         self._capsules = capsules
+        self._meta = dict(meta or {})
         self._workspace = workspace
         self._scanned = scanned or workspace
         self._reports = RunReports(workspace)
@@ -317,7 +321,7 @@ class MandateService:
 
     def save_meta(self, report: MandateReport) -> None:
         existing = self._reports.meta(report.run.id) or {}
-        self._reports.save_meta(report.run.id, {**existing, **report_payload(report)})
+        self._reports.save_meta(report.run.id, {**existing, **report_payload(report), **self._meta})
 
 
 def report_payload(report: MandateReport) -> dict[str, object]:
@@ -360,7 +364,7 @@ def report_payload(report: MandateReport) -> dict[str, object]:
             for row in report.audit
         ],
     }
-    governor = governor_metrics(report.governor)
+    governor = governor_metrics(report.governor, recorded=report.governed, hooks=report.read_hooks)
     if governor:
         payload["governor"] = governor
     if report.scout is not None:
