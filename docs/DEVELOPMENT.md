@@ -178,7 +178,8 @@ Trial specs are private TOML files with `project`, `total_cap_usd` and `[[trials
 Every trial requires `name`, `type`, `what`, `why`, `tests`, `out_of_scope`, `depth`, `engine`
 and `cap_usd`. Optional keys are `shape`, `model`, `cross_engine`, `simple`, `role_models` (a list of
 `role=model` strings), `acceptance` (command strings), `checks` (tables with `file` and
-`regex`), and `recovery_note`. Paths in checks are relative to the acceptance copy.
+`regex`), `recovery_note` and `mode` (`v5` by default; `classic` passes `--classic`). Paths in
+checks are relative to the acceptance copy.
 Engine-qualified role references such as `senior=claude:claude-sonnet-5` retain their engine
 in cross mode. Native trials remove the matching engine prefix before routing and reject a
 role assigned to a different engine instead of silently using the default model.
@@ -191,7 +192,11 @@ of the total cap to reserve the next trial's cap. It launches only sandbox manda
 on unknown costs or an exceeded cap, and labels reported and token-priced estimated costs.
 Each acceptance run uses a fresh owned copy, validates stored after-image hashes, runs the
 commands and file/regex checks, and removes the copy. Full output, costs, estimates, turns,
-tokens and first-request cache metrics are saved in `summary.json` and a Markdown table.
+tokens and first-request cache metrics are saved in `summary.json` and a Markdown table. Each
+trial row also records its `mode` and `provider`, fresh, cache-read, cache-write and output tokens,
+the first request's fixed tokens, the blocked reads, the forecast's P50 and P90 against the actual
+(from `cuanta costs --metrics`) and the outcome; a missing forecast row is kept as `r3_error`, and a
+run that recorded another mode than the trial asked for stops the series.
 It prints `cuanta runs accept` and `cuanta runs reject` commands; the builder decides.
 
 On POSIX use `uv run --no-sync python scripts/dev/gate.py`, `focus.py` or `trial.py` with the

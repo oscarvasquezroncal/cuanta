@@ -86,6 +86,45 @@ before its share runs out.
   run as their own group. A run skips a mandate that left the queue after it was listed, and each
   write holds a short lock, so a `queue add` from another shell is never lost. Home shows "Mandate
   queue unreadable" when the file cannot be read. `docs/TEAMS.md` explains it.
+- Metrics per run. Result's Consumption tab shows a metrics panel ("Métricas" in Spanish): the
+  forecast's P50 and P90 against the actual cost, the share of the cap used and P90 minus actual,
+  forecast and observed tokens by bucket (start, exploration, writing, verification, handoff), the
+  cost per accepted change, the tokens per changed line of an accepted isolated-copy patch, the
+  blocked reads with the tokens they avoided, graceful finishes and rotations with their estimated
+  savings, the warm-cache share of first requests and of all requests, the scout's pack size and
+  the senior's input tokens. `cuanta costs --metrics` adds the same per run, and `--json` adds a
+  `metrics` list. Unknown values stay n/a, never zero. A governed run records its governor even when
+  it never reacted, and a native session records whether it ran with the read-discipline hooks, so
+  their finishes and blocked reads show 0 instead of n/a. `docs/TEAMS.md` explains each metric.
+- Spectrum has a Trend tab ("Tendencia"): the cost per accepted change over the last 20 runs of each
+  provider and task type, with a line from the oldest run to the newest. `cuanta spectrum --trend`
+  prints it (`--last N` sets the runs), and `--json` adds a `trend` object.
+- `cuanta bench run --compare read-discipline|scout|warm-queue|finish` runs one V5 comparison as
+  arms of the same task and model: read discipline on and off; the scout and senior shape against
+  the pipeline, both routed; two mandates back to back in one copy, like a warm queue; and runs
+  with a tight cap. `--arm-cap ARM=USD` sets each arm's cap per run. The scout arm runs the native
+  scout and the tight-cap arm runs with the governor, whatever the config says. A comparison starts
+  only when the bench cap left covers all its arms, and then runs them all. Without `--yes` it lists
+  the planned runs, each cap, the settings each arm forces and a worst case that allows an overshoot
+  past each cap (`--overshoot-usd`; by default the largest the ledger measured, at least $0.10), and
+  spends nothing. `cuanta bench report` states each target as met, missed or n/a with the measured
+  numbers, from the stored run records: exploration-leak tokens with and without the discipline,
+  counted the same way in both arms (reads outside the change plan, and reads that break the
+  discipline's rule: a Read without a range of a file above the line limit, a whole-tree content
+  Grep); the scout's saving with acceptance parity and the scout mode that ran (n/a when the scout
+  did not run or neither arm was accepted); the second mandate's first-request cache reads over its
+  fixed prefix; and, per run, whether a run was cut by its cap (a budget stop without a final
+  answer) although a graceful finish was possible (n/a when no run reached the finish rule).
+  `--json` adds `targets`. The `proof` suite adds `shop-restock-report`, a feature whose request
+  names no file and whose change needs reads across five modules.
+- `runs.governor` (on by default) turns all live steering off when false: finish turns, Codex stop
+  and resume, and rotation.
+- `cuanta mandate --classic` runs one mandate the V4 way, for comparisons: the pipeline shape (no
+  scout), docs on, read discipline off and the governor off. The run records `mode: classic`, which
+  `cuanta costs --metrics --json` reports as `mode`; `cuanta queue add` keeps the flag. Trial specs
+  take `mode = "classic" | "v5"`, and the trial summary records the mode, the provider, the tokens
+  by kind, the first request's fixed tokens, the blocked reads, the forecast's P50 and P90 against
+  the actual and the outcome.
 
 ### Changed
 - `--role-model role=model` pins a model within the team's provider; a pin to the other provider is

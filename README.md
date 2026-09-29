@@ -384,6 +384,11 @@ The rules:
 - **Every run** starts from a fresh copy of the repo, with pinned versions, a spend cap and randomized order.
 - **The report** shows medians and ranges, never a single hand-picked run.
 
+`cuanta bench run --compare read-discipline|scout|warm-queue|finish` runs one V5 comparison instead
+of the three conditions, with a cap per arm (`--arm-cap ARM=USD`); without `--yes` it lists the
+planned runs, their caps and the worst case, allowing an overshoot past each cap
+(`--overshoot-usd`). The report states each target as met or missed from the stored runs.
+
 <!-- cuanta-bench:start -->
 _Results will appear here after the first public run of `cuanta bench report --readme`._
 <!-- cuanta-bench:end -->

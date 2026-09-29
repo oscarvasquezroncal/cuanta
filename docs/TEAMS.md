@@ -260,6 +260,9 @@ done.
   scrolls, and its tabs keep at least 16 rows. `cuanta runs show --json` and `cuanta mandate --json`
   add a `governor` object with the same facts; the mandate's own JSON leaves `blocked` null for a
   native session, whose blocked calls `runs show` counts from the ledger.
+- **Off.** `runs.governor = false` wires no governor: no finish turn, no Codex stop or resume and no
+  rotation, and Claude launches keep plain-text stdin. The native cap, the USD margin and the
+  salvage still end a role that reaches its cap.
 
 ## Forecast before launch
 
@@ -415,6 +418,62 @@ it again.
   line only while mandates are queued. A `queue.json` that cannot be read shows "Mandate queue
   unreadable" ("Cola de mandatos ilegible") on Home instead, and `cuanta queue list` names the
   problem.
+
+## Metrics
+
+Each attempt (a mandate, or the first run of a team of separate launches) gets its metrics from the
+ledger, its run record and, for an isolated copy, its patch. Result's Consumption tab shows them in
+a metrics panel ("Métricas" in Spanish), `cuanta costs --metrics` lists them per run for its window
+(`--json` adds `metrics`), and Spectrum's Trend tab and `cuanta spectrum --trend` follow the cost
+per accepted change. A value cuanta cannot know stays n/a, never zero.
+
+- **Forecast against actual.** The stored forecast's P50 and P90 against the attempt's recorded
+  cost. The cap used is the actual divided by the forecast's cap (the run's cap without a forecast);
+  P90 minus actual is negative when the run went past its P90. By bucket, the forecast's tokens stand
+  next to the tokens seen in the run's requests: start is the whole context of each agent's first
+  request; exploration is what each later request added (fresh input and cache writes) outside
+  handoffs; writing is the output of every request; handoff is what a session took in when a
+  subagent returned. Verification stays n/a: its tokens are not attributed to their own bucket yet,
+  so they count in exploration. A role of a team of separate launches receives its handoff in its
+  first request, so it counts in start. A run without request telemetry, such as a Codex run
+  (contract CX-10), has no observed buckets.
+- **Cost per accepted change.** An accepted attempt's cost; n/a when the run is not accepted or its
+  cost is unknown. Tokens per accepted changed line divide every token of the attempt by the added
+  and removed lines of its patch. Only an isolated copy (`--sandbox`) keeps the patch, so an
+  in-place run shows n/a.
+- **Blocked reads.** The reads the read-discipline hooks blocked and the tokens they would have cost
+  (file size ÷ 4). Known when a role or the native session ran with the hooks, so a run with the
+  hooks and nothing blocked shows 0; n/a otherwise.
+- **Finishes and rotations.** Finish turns and Codex stops that were sent, and rotations that
+  restarted, each with the governor's estimated saving; a finish turn saves no dollars, so its saving
+  is n/a. A governed run records its governor even when it never reacted, so it shows 0; n/a when
+  no governor watched the run (`runs.governor` off, classic mode, or a launch that cannot be
+  steered).
+- **Warm cache.** Cache reads divided by cache reads, cache writes and fresh input, over the first
+  request of each launch and over every request.
+- **Scout and senior.** The pack's tokens after cuanta's checks, and the input tokens the senior read
+  (fresh input, cache reads and cache writes), from the senior launch or the senior subagent.
+- **Trend.** For each provider and task type, its last 20 attempts (`--last N`): the cost per
+  accepted change, counting every attempt as `cuanta costs` does, and a line of that value after
+  each run, oldest first, with a dot before the first accepted change.
+- **Mode.** `cuanta costs --metrics --json` reports each run's `mode`: `classic` for a run launched
+  with `--classic` (see below), `v5` otherwise.
+
+## Classic mode
+
+`cuanta mandate --classic` runs one mandate the way V4 did, so the same task can be compared with
+and without V5. For that run only it forces the pipeline shape where the scout could run (features,
+fixes and refactors), turns docs on (`runs.docs = on`), turns the read discipline off
+(`runs.read_discipline` and `runs.pipeline_read_discipline`) and turns the governor off
+(`runs.governor`). Investigations and `--simple` mandates keep their own shape, as they did in V4.
+`--shape scout` is refused with `--classic`. The run's metadata records `mode: classic`; a run
+without it counts as `v5`. `cuanta queue add --classic` keeps the flag for the queued mandate.
+
+Classic does not bring back the proportional margin that V5B removed: a Claude role's native cap
+still sits the USD margin below its share. That margin applies only to a Claude team of separate
+launches (`--cross-engine`); the Claude team runs natively in one session capped by the mandate's
+cap, so a comparison of the native Claude team is unaffected. A GPT team's roles have no native
+cap, so the margin does not apply to them either.
 
 ## The Windows limitation
 
