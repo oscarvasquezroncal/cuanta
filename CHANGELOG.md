@@ -52,6 +52,40 @@ before its share runs out.
   `cuanta mandate --json` add a `governor` object; team steps add `rotated`, `stopped`, `resumed` and
   `read_discipline`. Below 30 rows the Result screen scrolls so its tabs keep room.
 - `runs.read_max_lines` (400) sets the line count above which a `Read` without a range is blocked.
+- The scout and senior shape for features and fixes. A read-only scout on the economy model
+  (`haiku` or `gpt-6-luna`, the new `scout` role, pinnable with `--role-model scout=...`) explores
+  with the index tools and the read discipline and returns an evidence pack: `file:line` facts, a few
+  snippets, risks, test links and the confirmed edit set. cuanta checks the pack against the working
+  copy, takes each snippet's text from the working copy, trims it to about 6,000 tokens (snippets first, then facts beyond the first twelve, never the
+  edit set), stores it as a capsule and shows it in Result. The senior works from the pack and the
+  edit set only, with a read budget of at least its edit set plus two; its reads outside them count
+  as exploration leak for the governor, and its edits outside the edit set are flagged in Result,
+  named in its handoff or not. The tester gets the diff
+  and runs `cuanta test --affected`. `docs/TEAMS.md` explains the shape.
+- The shape is chosen before launch: the scout shape when the pipeline forecast's exploration is
+  above `runs.scout_threshold` (35%) of its tokens, the pipeline otherwise. `--shape scout` or
+  `--shape pipeline` forces it on features, fixes and refactors, and a pin decides it too: an
+  `analyst` pin keeps the pipeline, a `scout` pin runs the scout. `--shape scout` is refused where
+  no scout can run: investigations, `--simple`, opencode and `--route off`. The app's run keeps the
+  shape its Team step showed.
+- `runs.scout_mode`: `native` (default) runs the Claude team's scout as a subagent in its one session,
+  with the pack captured from the session for Result; `launch` runs it as its own read-only launch
+  followed by one launch per role. The GPT team and `--cross-engine` always launch the scout. Each
+  run records the mode, and a native run records whether the main agent called the scout.
+- `runs.docs` (`auto` by default, `on`, `off`) decides when the docs role runs; see Changed.
+- A warm queue. `cuanta queue add` takes the options of `cuanta mandate` and checks them when it
+  queues; `cuanta queue list` shows the run order; `cuanta queue run` runs the queued mandates back to
+  back, so each one after the first starts on a warm prefix; `cuanta queue clear [ID...]` removes
+  them. The run order keeps the same engine and model together and the queue order otherwise. Each
+  mandate keeps its own cap, depth and `--sandbox`. `queue run` shows the order and asks first
+  unless `--yes`, stops at the first failed mandate unless `--keep-going`, and keeps the failed and
+  unrun mandates queued. The CLI and the app's Home show "warm prefix until HH:MM" ("prefijo
+  caliente hasta HH:MM") from the last Claude request and the saved `cache.ttl_s`, or unknown when no
+  TTL is saved for the auth mode. The queue lives in `.cuanta/queue.json`, which keeps each
+  mandate's options and request text until it finishes green or is cleared; `--sandbox` mandates
+  run as their own group. A run skips a mandate that left the queue after it was listed, and each
+  write holds a short lock, so a `queue add` from another shell is never lost. Home shows "Mandate
+  queue unreadable" when the file cannot be read. `docs/TEAMS.md` explains it.
 
 ### Changed
 - `--role-model role=model` pins a model within the team's provider; a pin to the other provider is
@@ -80,6 +114,11 @@ before its share runs out.
   The dry run shows the cap.
 - `cuanta costs` groups a run of one launch per role under its provider; only runs whose roles used
   more than one engine stay under cross-engine.
+- Docs is optional. The docs role runs only when the request asks for docs (docs, documentation,
+  documentación, README, CHANGELOG, guide, guía and similar words in WHAT, WHERE or TESTS), and never
+  in trials (isolated copies); `runs.docs = on` restores the old behaviour, and a
+  `--role-model docs=...` pin runs it on any run. When docs is off, its
+  share becomes the repair reserve of a team of separate launches, for features as for fixes.
 
 ### Fixed
 - Stop, in the app's pipeline screen, stops a team run of one launch per role: the running role ends
