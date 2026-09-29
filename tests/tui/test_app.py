@@ -153,6 +153,9 @@ def test_next_step_button_copies_external_fix() -> None:
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
         assert str(app.query_one("#next-run", Button).label) == "Copy"
         await pilot.click("#next-run")
+        deadline = time.monotonic() + SETTLE_BUDGET_S
+        while not services.copied and time.monotonic() < deadline:
+            await pilot.pause(0.01)
         assert services.copied == ["npm install -g @openai/codex"]
         assert await at(app, pilot, "home")
 
