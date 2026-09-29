@@ -8,7 +8,7 @@ accept = "{python} -m pytest -q -p no:cacheprovider {hidden} tests/test_reports.
 type = "feature"
 what = "Add a restock report of the products that will run out before a new order could arrive"
 why = "Buyers learn too late that a product is about to run out, when a new order can no longer arrive in time"
-tests = "the restock report lists, soonest first, each product whose days of stock left fit in its supplier's reorder window, with sku, name and whole days left; discontinued products and products without sales never appear; the existing reports keep their output"
+tests = "the restock report lists, soonest first (ties by sku), each product whose days of stock left fit in its supplier's reorder window, with sku, name and whole days left; discontinued products and products without sales never appear; the existing reports keep their output"
 out_of_scope = "the existing reports and the stock, sales and supplier data"
 
 [files]
