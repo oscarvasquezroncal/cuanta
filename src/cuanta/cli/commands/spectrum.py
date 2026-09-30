@@ -124,6 +124,7 @@ def _spectrum(
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Column, Document, Hint, KeyValues, Line, Table
     from cuanta.cli.fmt import compact, percent, thousands, usd
+    from cuanta.cli.time import time_blocks
     from cuanta.domain.errors import DomainFailure
     from cuanta.domain.progress import Status
     from cuanta.domain.spectrum import QUOTA_NOTE
@@ -178,6 +179,7 @@ def _spectrum(
         *(_overhead(result) if totals.total else []),
         *_index_exploration(report.index),
         *_anatomy(report.anatomy),
+        *time_blocks(result.time),
     ]
     if totals.total == 0:
         blocks.append(Line("no token events for this selection · nap", Status.INFO))
@@ -426,6 +428,7 @@ def _payload(
         "overhead": overhead_payload(result.overhead),
         "index": asdict(report.index),
         "anatomy": asdict(report.anatomy),
+        "time": asdict(result.time),
         "read_efficiency": {
             **asdict(report.read_efficiency),
             "read_count": report.read_efficiency.read_count,

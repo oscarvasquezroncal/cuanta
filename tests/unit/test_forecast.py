@@ -566,8 +566,9 @@ def test_publishing_warns_on_tight_verdicts_and_the_json_names_the_suggestions()
     recorder = Recorder()
     publish_forecast(recorder, comfortable)
     notes = [event for event in recorder.events if isinstance(event, Note)]
-    assert [note.status for note in notes] == [Status.INFO]
+    assert [note.status for note in notes] == [Status.INFO, Status.INFO]
     assert notes[0].text.startswith("Forecast $")
+    assert notes[1].text.startswith("Time forecast: P50")
     tight = planned(ledger, cap=(comfortable.envelope.p50_usd or 0.0) * 1.2)
     assert tight.envelope.verdict is Verdict.TIGHT
     recorder = Recorder()

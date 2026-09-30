@@ -27,6 +27,76 @@ exploration  58,200         2  $0.3000
 writing           0         0  $0.0000
 handoff           0         0  $0.0000
 Exclusive request phases; writing compares output with fresh input plus cache write, excluding cache read. Handoff matches a closed child window to the next parent request when cache write is within 50% of final child output plus 256 wrapper tokens. These are observed heuristics, not causal token attribution.
+wall time (s)  n/a
+
+time
+phase             seconds  samples
+----------------  -------  -------
+index_refresh         n/a        0
+forecast_plan         n/a        0
+sandbox_copy          n/a        0
+engine_startup        n/a        0
+session_title         n/a        0
+api_requests          n/a        4
+tools                 n/a        4
+hooks                 n/a        0
+verification          n/a        0
+repair                n/a        0
+handoff               n/a        0
+snapshots_guards      n/a        0
+after_image           n/a        0
+copy_removal          n/a        0
+tool:Bash             n/a        1
+tool:Edit             n/a        1
+tool:Read             n/a        2
+> Measured durations can overlap; they do not add up to wall time. Unknown stays n/a.
+
+time · main
+phase             seconds  samples
+----------------  -------  -------
+index_refresh         n/a        0
+forecast_plan         n/a        0
+sandbox_copy          n/a        0
+engine_startup        n/a        0
+session_title         n/a        0
+api_requests          n/a        3
+tools                 n/a        3
+hooks                 n/a        0
+verification          n/a        0
+repair                n/a        0
+handoff               n/a        0
+snapshots_guards      n/a        0
+after_image           n/a        0
+copy_removal          n/a        0
+tool:Edit             n/a        1
+tool:Read             n/a        2
+
+time · tester
+phase             seconds  samples
+----------------  -------  -------
+index_refresh         n/a        0
+forecast_plan         n/a        0
+sandbox_copy          n/a        0
+engine_startup        n/a        0
+session_title         n/a        0
+api_requests          n/a        1
+tools                 n/a        1
+hooks                 n/a        0
+verification          n/a        0
+repair                n/a        0
+handoff               n/a        0
+snapshots_guards      n/a        0
+after_image           n/a        0
+copy_removal          n/a        0
+tool:Bash             n/a        1
+
+request time
+request  role    model          purpose  duration (s)  first token (s)
+-------  ------  -------------  -------  ------------  ---------------
+1        main    claude-opus    n/a               n/a              n/a
+3        main    claude-opus    n/a               n/a              n/a
+6        tester  claude-sonnet  n/a               n/a              n/a
+8        main    claude-opus    n/a               n/a              n/a
 
 run 01KFIXTURERUN0000000000000 · mandate · HU-007  98.8K · 100.0%
   - main  86.0K · 87.0%

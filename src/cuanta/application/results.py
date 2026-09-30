@@ -37,6 +37,7 @@ from cuanta.domain.run_metrics import RunMetrics, run_metrics
 from cuanta.domain.sandbox import trial_folder
 from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, ScoutSummary, parse_scout
 from cuanta.domain.spectrum import changed_paths, resolve_agents
+from cuanta.domain.time_anatomy import TimeReport, analyze_time
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.workspace import Workspace
 
@@ -123,6 +124,8 @@ class ResultView:
     governor: GovernorSummary = field(default_factory=GovernorSummary)
     scout: ScoutSummary = field(default_factory=ScoutSummary)
     metrics: RunMetrics = field(default_factory=RunMetrics)
+    time: TimeReport = field(default_factory=TimeReport)
+    implementation: dict[str, object] | None = None
 
     @property
     def decidable(self) -> bool:
@@ -328,6 +331,7 @@ class ResultQuery:
             verification=verify_rounds(meta.get("verification_rounds")),
             index=run_index_metrics(index_events, (run, *roles), self._reports.meta),
             anatomy=analyze_anatomy(resolved),
+            time=analyze_time(run, index_events),
             read_efficiency=read_efficiency(
                 index_events,
                 raw_report,
@@ -339,6 +343,11 @@ class ResultQuery:
             ),
             governor=governor,
             scout=scout,
+            implementation=(
+                dict(implementation)
+                if isinstance(implementation := meta.get("implementation"), dict)
+                else None
+            ),
             metrics=run_metrics(
                 attempt,
                 roles,

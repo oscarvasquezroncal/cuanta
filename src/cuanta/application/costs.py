@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 
 from cuanta.application.run_reports import RunReports
 from cuanta.application.trials import TrialStore
@@ -21,6 +22,7 @@ from cuanta.domain.run_metrics import RunMetrics, run_metrics
 from cuanta.domain.run_mode import run_mode
 from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, parse_scout
 from cuanta.domain.spectrum import resolve_agents, usage_events
+from cuanta.domain.time_costs import time_medians
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.workspace import Workspace
 
@@ -86,15 +88,22 @@ class CostsQuery:
         try:
             runs = ledger.runs(since=start)
             items = attempts(runs, now)
-            phases = _phase_reports(
-                items, {run.id: run for run in runs}, ledger.events(EventQuery(since=start))
-            )
+            events = ledger.events(EventQuery(since=start))
+            phases = _phase_reports(items, {run.id: run for run in runs}, events)
             states = (
                 {item.run.id: self._completion(item.run.id) for item in items}
                 if self._completion is not None
                 else None
             )
-            return report_attempts(items, start, phases, states)
+            metadata = (
+                {item.run.id: RunReports(self._workspace).meta(item.run.id) or {} for item in items}
+                if self._workspace is not None
+                else {}
+            )
+            return replace(
+                report_attempts(items, start, phases, states),
+                time_medians=time_medians(items, events, metadata),
+            )
         finally:
             ledger.close()
 

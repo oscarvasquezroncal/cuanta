@@ -71,9 +71,11 @@ def test_the_team_step_reuses_the_change_plan_compiled_for_the_same_request(
     assert compiled == [first, other]
 
 
-@pytest.mark.parametrize("engine", ["codex", "claude"])
+@pytest.mark.parametrize(
+    ("engine", "profile"), [("codex", "balanced"), ("claude", "balanced"), ("claude", "fast")]
+)
 def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str, profile: str
 ) -> None:
     team = RoutePlan(RoutingPolicy(engines=(engine,)), None, None, (), (), "heuristic")
     reserves: list[bool] = []
@@ -96,10 +98,16 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
         )
 
     def team_forecast(*args: object, **kwargs: object) -> PlannedForecast:
+        if profile == "fast":
+            assert args[4] == "single"
+            assert kwargs["implementation_profile"] == "fast"
+            assert kwargs["variant"] == "low"
+            assert kwargs["model"] == "claude-sonnet-5"
+            assert kwargs["native"] is False
         raise ValueError("the code index is being written")
 
     container = SimpleNamespace(
-        config=Config(engine=engine),
+        config=Config(engine=engine, implementation_profile=profile, implementation_variant="low"),
         plan_route=plan_route,
         team_estimate=team_estimate,
         change_plan=lambda request: ChangePlan(),
@@ -112,7 +120,9 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
     services = ContainerServices(tmp_path)
     monkeypatch.setattr(services, "_container", lambda: cast("Container", container))
     request = MandateRequest("bug", "fix add", "wrong sum")
-    plan, found = services.team_plan(request, MandateOptions(engine=engine))
+    plan, found = services.team_plan(
+        request, MandateOptions(engine=engine, model="claude-sonnet-5")
+    )
     assert plan is team
     assert found.forecast is None
     assert found.forecast_error is not None

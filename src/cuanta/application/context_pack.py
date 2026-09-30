@@ -9,6 +9,7 @@ from cuanta.domain.capsules import LineRange, slice_lines
 from cuanta.domain.change_plan import ChangePlan, guarded, path_matches
 from cuanta.domain.code_index import INDEX_TABLES
 from cuanta.domain.depth import Depth, parse_depth, profile
+from cuanta.domain.implementation import project_rules
 from cuanta.domain.index_cards import handling_card
 from cuanta.domain.index_facts import revalidate_fact
 from cuanta.domain.index_search import rule_applies
@@ -103,6 +104,23 @@ class IndexContextPack:
                 "compiled protection and verification",
             )
         ]
+        rule_sources = {
+            path: text
+            for path in (
+                "tsconfig.json",
+                "eslint.config.js",
+                "eslint.config.mjs",
+                "eslint.config.cjs",
+                "eslint.config.ts",
+                ".eslintrc.json",
+                ".eslintrc.js",
+                ".eslintrc.cjs",
+            )
+            if (text := self._reader.service.inventory.read(path)) is not None
+        }
+        rules = project_rules(rule_sources)
+        if rules:
+            items.append(PackItem("project-rules", Layer.L0, rules[:3200], 100, "project checks"))
         window = {Depth.QUICK: 12, Depth.NORMAL: 24, Depth.DEEP: 40}[depth]
         for path in paths[:read_budget]:
             if path not in files or (edit_only and (path not in edit or guarded(path, plan))):

@@ -38,6 +38,7 @@ def render(template: str, values: Mapping[str, str]) -> str:
 
 
 ENGLISH: dict[str, str] = {
+    "envelope.time": "Time forecast: P50 {p50} · P90 {p90} · n={samples}",
     "read_efficiency.no_reads": "No successful source reads were observed.",
     "read_efficiency.missing_report": "The report needed to count cited files is unavailable.",
     "leak.second_context": (

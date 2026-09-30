@@ -116,6 +116,31 @@ def test_a_path_under_a_protected_pattern_stays_out_of_edit() -> None:
     drive(make_app(services), scenario, size=(120, 50))
 
 
+def test_reset_during_the_last_plan_mount_does_not_restore_stale_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_paths: list[str] = []
+
+    def reset_on_mount(chip: PlanChip) -> None:
+        if chip.role == "guard" and not reset_paths:
+            reset_paths.append(chip.path)
+            chip.app.query_one(MandateWizard).reset()
+
+    monkeypatch.setattr(PlanChip, "on_mount", reset_on_mount, raising=False)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        wizard.prefilled(FEATURE_REQUEST)
+        await wait_for(pilot, lambda: bool(reset_paths))
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert wizard.change_plan is None
+        assert not wizard.query_one("#change-plan").display
+        assert wizard.options().plan_overrides == ()
+
+    drive(make_app(FakeServices(change_plan_result=FEATURE_PLAN)), scenario, size=(120, 50))
+
+
 @pytest.mark.parametrize("kind", ["bug", "feature", "refactor", "investigation"])
 def test_every_request_type_recompiles_the_plan_without_understanding(kind: str) -> None:
     readonly = kind == "investigation"

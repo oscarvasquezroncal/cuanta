@@ -16,6 +16,7 @@ from cuanta.domain.errors import DomainFailure
 from cuanta.domain.governor import ReactionTaken
 from cuanta.domain.governor_report import governor_metrics
 from cuanta.domain.graph_policy import graphless_prompt
+from cuanta.domain.implementation import ImplementationReport
 from cuanta.domain.instinct import SCOPES, Choice, scope_hint_line
 from cuanta.domain.ledger import Capsule, Run, Snapshot
 from cuanta.domain.mandate import (
@@ -127,6 +128,7 @@ class MandateReport:
     docs: DocsChoice | None = None
     governed: bool = False
     read_hooks: bool = False
+    implementation: ImplementationReport | None = None
 
 
 class MandateService:
@@ -205,8 +207,15 @@ class MandateService:
         shape: Shape = Shape.PIPELINE,
         graph_available: bool = True,
         context: str = "",
+        implementation: bool = False,
     ) -> Composed:
-        block = builtin_block(request.type, simple, shape, graph_available) or self.template_block()
+        block = (
+            "# MANDATE — implementation\n\n"
+            "Implement the request in this native session.\n\n=== REQUEST ===\n"
+            if implementation
+            else builtin_block(request.type, simple, shape, graph_available)
+            or self.template_block()
+        )
         if not graph_available:
             block = graphless_prompt(block)
         request = replace(request, why=self.bounded(request.why))
@@ -232,7 +241,7 @@ class MandateService:
             request,
             tuple(command(prompt)),
             simple,
-            simple or single_context(request.type, simple, shape),
+            implementation or simple or single_context(request.type, simple, shape),
         )
 
     def link_decisions(self, request_hash: str, run_id: str) -> int:
@@ -264,17 +273,22 @@ class MandateService:
         progress: ProgressSink,
         summarize: Callable[[str], tuple[dict[str, int], float | None]],
         observer: Callable[[EngineEvent], None] | None = None,
+        before: Callable[[str], None] | None = None,
     ) -> MandateReport:
         view = LiveView(progress, observer=observer)
         holder: dict[str, str] = {}
 
         def before_launch(run_id: str) -> None:
             holder["run_id"] = run_id
-            self.snapshot(run_id, "start")
+            if before is not None:
+                before(run_id)
+            with launcher.timing.measure("snapshots_guards", run_id):
+                self.snapshot(run_id, "start")
 
         launch = launcher.launch(spec, view, before_launch)
         run = launch.run
-        end = self.snapshot(run.id, "end")
+        with launcher.timing.measure("snapshots_guards", run.id):
+            end = self.snapshot(run.id, "end")
         start = {item.path: item.sha256 for item in self._ledger.snapshots(run.id, "start")}
         start_modes = self._snapshot_modes.pop((run.id, "start"), {})
         end_modes = self._snapshot_modes.pop((run.id, "end"), {})
@@ -290,7 +304,8 @@ class MandateService:
         by_agent, utilization = summarize(run.id)
         result = view.result or launch.outcome.result
         raw_text = result.text if result is not None else ""
-        report_path = self._reports.save_report(run.id, raw_text) if raw_text else ""
+        with launcher.timing.measure("handoff", run.id):
+            report_path = self._reports.save_report(run.id, raw_text) if raw_text else ""
         text = strip_preamble(raw_text)
         protected = spec.change_plan is not None and bool(
             plan_metrics(spec.change_plan, changed, run.engine)["guard_violations"]
@@ -315,7 +330,10 @@ class MandateService:
             single=composed.single,
             prompt_chars=len(composed.prompt),
             change_plan=spec.change_plan,
+            implementation=launch.implementation,
         )
+        if launch.implementation is not None:
+            report = replace(report, tests="green" if launch.implementation.passed else "red")
         self.save_meta(report)
         return report
 
@@ -373,4 +391,6 @@ def report_payload(report: MandateReport) -> dict[str, object]:
         payload[DOCS_KEY] = docs_payload(report.docs)
     if report.change_plan is not None:
         payload.update(plan_metrics(report.change_plan, report.changed_files, run.engine))
+    if report.implementation is not None:
+        payload["implementation"] = report.implementation.payload()
     return payload

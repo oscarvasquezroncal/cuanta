@@ -165,6 +165,30 @@ def _exploration(events: Sequence[LedgerEvent]) -> list[tuple[str, LedgerEvent]]
     return selected
 
 
+def execution_tool_name(event: LedgerEvent) -> str:
+    if event.source == "cuanta_mcp" and not event.tool_name.startswith("mcp__"):
+        return f"mcp__cuanta__{event.tool_name}"
+    if event.tool_name != "mcp_tool":
+        return event.tool_name or "unknown"
+    values = _attributes(event)
+    server, tool = values.get("mcp_server_name"), values.get("mcp_tool_name")
+    return f"mcp__{server}__{tool}" if server and tool else event.tool_name
+
+
+def executed_tool_events(events: Sequence[LedgerEvent]) -> list[LedgerEvent]:
+    owned: dict[tuple[str, str], list[LedgerEvent]] = defaultdict(list)
+    native: dict[tuple[str, str], list[LedgerEvent]] = defaultdict(list)
+    for event in _unique(events):
+        key = event.run_id, execution_tool_name(event)
+        if event.source == "cuanta_mcp" and event.kind == "index_call":
+            owned[key].append(event)
+        elif _executed(event):
+            native[key].append(event)
+    selected = [event for group in native.values() for event in _native_calls(group)]
+    selected.extend(event for key, group in owned.items() if key not in native for event in group)
+    return selected
+
+
 def _tokens(event: LedgerEvent) -> int:
     value = _attributes(event).get("returned_tokens_estimate")
     if event.source == "cuanta_mcp" and type(value) is int and value >= 0:

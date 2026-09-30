@@ -36,6 +36,7 @@ from cuanta.application.steering import (
     session_plan,
     session_steering,
 )
+from cuanta.application.timing import PhaseRecorder
 from cuanta.domain.cache import PrefixState
 from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.depth import Depth, profile
@@ -179,6 +180,8 @@ class FixedForecaster(Forecaster):
         native: bool = False,
         model: str = "",
         max_turns: int = 0,
+        implementation_profile: str = "balanced",
+        variant: str = "",
     ) -> PlannedForecast:
         return self.planned
 
@@ -471,9 +474,10 @@ class StubService:
         progress: object,
         summarize: object,
         observer: Callable[[EngineEvent], None] | None = None,
+        before: Callable[[str], None] | None = None,
     ) -> MandateReport:
         self.specs.append(spec)
-        launch = launcher.launch(spec, observer or (lambda event: None))
+        launch = launcher.launch(spec, observer or (lambda event: None), before)
         return MandateReport(
             launch.run, launch.outcome.ok, (), "not run", {}, None, (), 0, Choice("normal", 0.5), ""
         )
@@ -487,6 +491,7 @@ class StubService:
 
 def team_flow(governor: GovernorSetup | None, service: StubService) -> MandateFlow:
     flow = MandateFlow.__new__(MandateFlow)
+    flow._timing = PhaseRecorder()
     flow._active = None
     flow._service = cast("MandateService", service)
     flow._summarize = lambda run_id: ({}, None)

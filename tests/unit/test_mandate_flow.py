@@ -12,6 +12,7 @@ from cuanta.application.mandate_flow import (
     models_for,
     validate,
 )
+from cuanta.application.timing import PhaseRecorder
 from cuanta.domain.errors import DomainFailure, NotAvailable
 from cuanta.domain.mandate import MandateRequest
 from cuanta.tui.i18n import Catalog
@@ -86,6 +87,7 @@ class StubEngine:
 
 def test_stop_only_cancels_an_active_run() -> None:
     flow = MandateFlow.__new__(MandateFlow)
+    flow._timing = PhaseRecorder()
     flow._active = None
     assert not flow.stop()
     engine = StubEngine()
@@ -96,6 +98,7 @@ def test_stop_only_cancels_an_active_run() -> None:
 
 def test_stop_while_the_engine_is_checked_cancels_the_launch() -> None:
     flow = MandateFlow.__new__(MandateFlow)
+    flow._timing = PhaseRecorder()
     flow._active = None
 
     class CheckedEngine(StubEngine):

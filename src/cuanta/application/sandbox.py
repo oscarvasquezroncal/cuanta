@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from cuanta.application.cross_engine import CrossEnginePipeline, CrossReport, CrossStep
 from cuanta.application.mandate import MandateReport
 from cuanta.application.mandate_flow import MandateFlow, MandateOptions, Prepared
 from cuanta.application.routing import RoutePlan
+from cuanta.application.timing import PhaseRecorder
 from cuanta.application.trials import (
     BASE_DIR,
     FILES_DIR,
@@ -78,6 +79,11 @@ class SandboxResult:
     report: MandateReport | None = None
     cross: CrossReport | None = None
     record_error: str = ""
+    after_shown: Callable[[], None] | None = field(default=None, compare=False, repr=False)
+
+    def shown(self) -> None:
+        if self.after_shown is not None:
+            self.after_shown()
 
 
 class TrialRecorder:
@@ -223,6 +229,7 @@ class TrialRecorder:
                 "linked": list(copy.linked),
                 "linked_files": copy.linked_files,
                 "copy_seconds": round(copy.seconds, 3),
+                "reused": copy.reused,
                 "skipped_links": list(copy.skipped_links),
                 "skipped_caches": list(copy.skipped_caches),
                 "kept": trial.kept,
@@ -257,15 +264,21 @@ class SandboxRunner:
         ledger: Ledger,
         origin: Path,
         after_record: Callable[[SandboxCopy, str], None] | None = None,
+        timing: PhaseRecorder | None = None,
+        cleanup: Callable[[SandboxCopy, str], Callable[[], None]] | None = None,
     ) -> None:
+        self._timing = timing or PhaseRecorder()
         self._after_record = after_record
         self._sandbox = sandbox
         self._recorder = recorder
         self._ledger = ledger
         self._origin = origin
+        self._cleanup = cleanup
+        self._after_shown: Callable[[], None] | None = None
 
     def _open(self, progress: ProgressSink) -> tuple[SandboxCopy, SandboxLaunch]:
-        copy = self._sandbox.create(self._origin)
+        with self._timing.measure("sandbox_copy"):
+            copy = self._sandbox.create(self._origin)
         progress.publish(
             note(
                 Status.INFO,
@@ -323,11 +336,12 @@ class SandboxRunner:
         return copy, launch
 
     def checkpoint(self, copy: SandboxCopy, run_id: str = "") -> Message | None:
-        changed = self._sandbox.dependencies_changed(copy)
-        if changed:
-            return msg("sandbox.dependencies_changed", count=len(changed))
-        state = self._state(copy, run_id)
-        return _state_message(state, len(state)) if state else None
+        with self._timing.measure("snapshots_guards", run_id):
+            changed = self._sandbox.dependencies_changed(copy)
+            if changed:
+                return msg("sandbox.dependencies_changed", count=len(changed))
+            state = self._state(copy, run_id)
+            return _state_message(state, len(state)) if state else None
 
     def _state(self, copy: SandboxCopy, run_id: str) -> tuple[str, ...]:
         kept: list[str] = []
@@ -356,10 +370,12 @@ class SandboxRunner:
         progress: ProgressSink,
         excluded: Collection[str] = (),
     ) -> Trial:
-        state = self._state(copy, run_id)
-        trial = self._recorder.record(
-            copy, run_id, request, engine, report_text, payload, keep, state, excluded
-        )
+        with self._timing.measure("snapshots_guards", run_id):
+            state = self._state(copy, run_id)
+        with self._timing.measure("after_image", run_id):
+            trial = self._recorder.record(
+                copy, run_id, request, engine, report_text, payload, keep, state, excluded
+            )
         folder = trial_folder(run_id)
         if trial.changes:
             progress.publish(
@@ -403,15 +419,27 @@ class SandboxRunner:
         return trial
 
     def _finish(
-        self, copy: SandboxCopy, keep: bool, progress: ProgressSink, rescue: bool = False
+        self,
+        copy: SandboxCopy,
+        keep: bool,
+        progress: ProgressSink,
+        rescue: bool = False,
+        run_id: str = "",
     ) -> bool:
         if keep or rescue:
             with suppress(OSError):
                 self._sandbox.keep(copy)
             progress.publish(note(Status.INFO, msg("sandbox.kept", path=str(copy.root))))
             return False
+        if self._cleanup is not None and run_id:
+            try:
+                self._after_shown = self._cleanup(copy, run_id)
+                return False
+            except OSError:
+                pass
         try:
-            removed = self._sandbox.remove(copy)
+            with self._timing.measure("copy_removal"):
+                removed = self._sandbox.remove(copy)
         except (OSError, ValueError):
             removed = False
         if not removed:
@@ -456,12 +484,16 @@ class SandboxRunner:
         payload: Callable[[MandateReport], Mapping[str, object]] | None = None,
         on_start: Callable[[MandateFlow, Prepared], None] | None = None,
     ) -> SandboxResult:
+        self._timing.reset()
+        self._after_shown = None
+        wall_start = self._timing.start()
         copy, launch = self._open(progress)
         keep = options.keep_copy
         run_id, engine = "", ""
         trial: Trial | None = None
         rescue = False
         record_error = ""
+        completed = False
         try:
             flow = flow_for(copy, launch)
             prepared = flow.prepare(request, signatures, replace(options, temporary_copy=True))
@@ -486,15 +518,26 @@ class SandboxRunner:
                 progress.publish(
                     note(Status.FAIL, msg("sandbox.record_failed", error=record_error))
                 )
+            completed = True
         except BaseException:
             if trial is None:
                 trial = self._rescue(copy, run_id, request, engine, "", keep, progress)
                 rescue = trial is None and self._launched(run_id)
             raise
         finally:
-            removed = self._finish(copy, keep, progress, rescue)
+            removed = self._finish(
+                copy, keep, progress, rescue, trial.run_id if trial and completed else ""
+            )
+            if self._launched(run_id):
+                self._timing.flush(run_id)
+                self._timing.record("run_wall", wall_start, run_id)
         return SandboxResult(
-            trial, str(copy.root), removed, report=report, record_error=record_error
+            trial,
+            str(copy.root),
+            removed,
+            report=report,
+            record_error=record_error,
+            after_shown=self._after_shown,
         )
 
     def run_cross(
@@ -508,11 +551,16 @@ class SandboxRunner:
         keep: bool,
         payload: Callable[[CrossReport], Mapping[str, object]] | None = None,
     ) -> SandboxResult:
+        self._timing.reset()
+        self._after_shown = None
+        wall_start = self._timing.start()
         copy, launch = self._open(progress)
+        first = ""
         trial: Trial | None = None
         rescue = False
         pipeline: CrossEnginePipeline | None = None
         record_error = ""
+        completed = False
         try:
             pipeline = pipeline_for(copy, launch, lambda: self.checkpoint(copy))
             report = pipeline.run(request, plan, progress)
@@ -546,6 +594,7 @@ class SandboxRunner:
                     progress.publish(
                         note(Status.FAIL, msg("sandbox.record_failed", error=record_error))
                     )
+            completed = True
         except BaseException:
             steps = tuple(pipeline.completed) if pipeline is not None else ()
             current = pipeline.current if pipeline is not None else ""
@@ -558,9 +607,19 @@ class SandboxRunner:
                 self._guard(copy, progress)
             raise
         finally:
-            removed = self._finish(copy, keep, progress, rescue)
+            removed = self._finish(
+                copy, keep, progress, rescue, trial.run_id if trial and completed else ""
+            )
+            if self._launched(first):
+                self._timing.flush(first)
+                self._timing.record("run_wall", wall_start, first)
         return SandboxResult(
-            trial, str(copy.root), removed, cross=report, record_error=record_error
+            trial,
+            str(copy.root),
+            removed,
+            cross=report,
+            record_error=record_error,
+            after_shown=self._after_shown,
         )
 
 

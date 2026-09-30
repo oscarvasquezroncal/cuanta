@@ -238,6 +238,23 @@ def test_verification_states_are_explicit() -> None:
     assert "`missing`: did not start" in text
 
 
+def test_a_long_failure_list_is_bounded_instead_of_dropped_from_the_handoff() -> None:
+    errors = tuple(f"src/a{n}.ts:{n}:1 error TS2322: " + "x" * 100 for n in range(300))
+    handoff = RoleHandoff(
+        "senior",
+        "claude",
+        "sonnet",
+        HandoffStatus.DONE,
+        summary="done",
+        verification=(VerifyResult("npm run lint", 1, 42.0, errors),),
+    )
+    for budget in (1200, 2000, 3000):
+        text = render_chain(merge_chain((handoff,)), budget)
+        assert "- `npm run lint`: exit 1, 42.0s" in text
+        assert f"  {errors[0]}" in text and "further errors retained" in text
+        assert "more items omitted" not in text and estimate_tokens(text) <= budget
+
+
 def test_a_blocked_handoff_keeps_its_reason() -> None:
     handoff = build_handoff('{"status": "blocked", "blocked_reason": "no plan"}', "senior")
     assert handoff.status is HandoffStatus.BLOCKED

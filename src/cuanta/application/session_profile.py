@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
+from cuanta.domain.claude_variants import variant_settings
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.plugins import EMPTY_MCP, InstalledPlugin, lean_settings
 from cuanta.domain.stable import content_name, stable_json
@@ -28,13 +29,18 @@ class LeanProfile:
         permissions_deny: tuple[str, ...] = (),
         owned_hooks: dict[str, object] | None = None,
         owned_mcp: Mapping[str, object] | None = None,
+        pure_model: str = "",
+        variant: str = "",
     ) -> tuple[str, str]:
         mcp = self._write(
             "lean-mcp", stable_json(owned_mcp if owned_mcp is not None else EMPTY_MCP)
         )
+        values = lean_settings(self._plugins(), permissions_deny, owned_hooks)
+        if pure_model or variant:
+            values.update(variant_settings(pure_model, variant, bool(pure_model)))
         settings = self._write(
             "lean-settings",
-            stable_json(lean_settings(self._plugins(), permissions_deny, owned_hooks)),
+            stable_json(values),
         )
         return mcp, settings
 

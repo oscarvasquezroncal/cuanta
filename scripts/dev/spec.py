@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cuanta.domain.claude_variants import VARIANTS
+
 
 @dataclass(frozen=True)
 class Check:
@@ -34,6 +36,10 @@ class Trial:
     recovery_note: str = ""
     simple: bool = False
     mode: str = "v5"
+    profile: str = ""
+    variant: str = ""
+    pure: bool = False
+    headroom_usd: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -41,6 +47,8 @@ class Spec:
     project: Path
     total_cap: float
     trials: tuple[Trial, ...]
+    budget_group: str = "default"
+    budget_file: Path | None = None
 
 
 def amount(value: Any) -> float:
@@ -80,6 +88,22 @@ def relative(value: str) -> str:
     return "/".join(parts)
 
 
+def implementation_options(raw: dict[str, Any]) -> tuple[str, str, bool, float]:
+    profile = raw.get("profile", "")
+    if profile not in {"", "fast", "balanced"}:
+        raise ValueError("profile must be fast or balanced")
+    variant = raw.get("variant", "")
+    if variant not in ("", *VARIANTS):
+        raise ValueError("Unsupported variant")
+    pure = raw.get("pure", False)
+    if not isinstance(pure, bool):
+        raise ValueError("pure must be boolean")
+    headroom = amount(raw["headroom_usd"]) if "headroom_usd" in raw else 0.0
+    if headroom >= amount(raw.get("cap_usd")):
+        raise ValueError("headroom_usd must be below cap_usd")
+    return profile, variant, pure, headroom
+
+
 def parse_trial(raw: Any) -> Trial:
     if not isinstance(raw, dict):
         raise ValueError("Each trial must be a table")
@@ -113,6 +137,7 @@ def parse_trial(raw: Any) -> Trial:
     mode = raw.get("mode", "v5")
     if mode not in {"classic", "v5"}:
         raise ValueError("mode must be classic or v5")
+    profile, variant, pure, headroom = implementation_options(raw)
     models = strings(raw.get("role_models", []))
     if any(not re.fullmatch(r"[a-z_]+=[A-Za-z0-9._:/-]+", model) for model in models):
         raise ValueError("Role models use role=model")
@@ -139,6 +164,10 @@ def parse_trial(raw: Any) -> Trial:
         cross_engine=cross,
         simple=simple,
         mode=mode,
+        profile=profile,
+        variant=variant,
+        pure=pure,
+        headroom_usd=headroom,
         role_models=models,
         acceptance=strings(raw.get("acceptance", [])),
         checks=tuple(checks),
@@ -147,8 +176,9 @@ def parse_trial(raw: Any) -> Trial:
 
 def load(path: Path) -> Spec:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    if set(data) != {"project", "total_cap_usd", "trials"}:
-        raise ValueError("Spec requires project, total_cap_usd and trials only")
+    required = {"project", "total_cap_usd", "trials"}
+    if not required <= set(data) or set(data) - required - {"budget_group", "budget_file"}:
+        raise ValueError("Spec requires project, total_cap_usd and trials")
     project = Path(text(data, "project"))
     if not project.is_absolute():
         project = path.resolve().parent / project
@@ -158,6 +188,10 @@ def load(path: Path) -> Spec:
     trials = tuple(parse_trial(raw) for raw in data["trials"])
     if len({trial.name for trial in trials}) != len(trials):
         raise ValueError("Duplicate trial names")
-    if sum(trial.cap for trial in trials) > cap + 1e-9:
-        raise ValueError("Trial caps exceed the total cap")
-    return Spec(project.resolve(), cap, trials)
+    if any(trial.cap > cap + 1e-9 for trial in trials):
+        raise ValueError("A trial cap exceeds the total cap")
+    group = text(data, "budget_group", "default")
+    budget = Path(text(data, "budget_file")) if "budget_file" in data else None
+    if budget is not None and not budget.is_absolute():
+        budget = path.resolve().parent / budget
+    return Spec(project.resolve(), cap, trials, group, budget)

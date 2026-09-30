@@ -49,6 +49,7 @@ from cuanta.application.models import CatalogView, ProbeOutcome
 from cuanta.application.new_files import NewFilePair
 from cuanta.application.results import ResultQuery, ResultView, RunFile
 from cuanta.application.routing import RoleStats, RoutePlan, role_stats
+from cuanta.application.sandbox import SandboxResult
 from cuanta.application.spectrum import ALL_SESSIONS, Selection, SpectrumResult
 from cuanta.application.tests_view import TestsSummary, from_report
 from cuanta.domain.assistant import Clarity, Suggestions, content_key
@@ -63,6 +64,7 @@ from cuanta.domain.engine import EngineEvent
 from cuanta.domain.errors import CuantaError, DomainFailure, NotAvailable
 from cuanta.domain.fixes import Fix, FixAction
 from cuanta.domain.handoff import Handoff, parse_workflow
+from cuanta.domain.implementation import ImplementationProfile, implementation_profile
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import Decision, Run
 from cuanta.domain.loop import LOOP_OUT_OF_SCOPE, LoopGate, loop_gate
@@ -71,7 +73,7 @@ from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.models import ModelEntry
 from cuanta.domain.progress import ProgressEvent
 from cuanta.domain.real_costs import CostReport
-from cuanta.domain.routing import RoutingPolicy, parse_provider
+from cuanta.domain.routing import Role, RoutingPolicy, parse_provider, single_model
 from cuanta.domain.scout import ShapeChoice
 from cuanta.domain.team import (
     ProviderAdvice,
@@ -176,6 +178,8 @@ class LoopState:
 
 
 class Services(Protocol):
+    def result_shown(self, run_id: str) -> None: ...
+
     @property
     def project(self) -> Path: ...
 
@@ -373,6 +377,12 @@ class ContainerServices:
         self._stop_lock = threading.Lock()
         self._clarity: dict[str, Clarity] = {}
         self._plan_cache: tuple[MandateRequest, ChangePlan] | None = None
+        self._sandbox_results: dict[str, SandboxResult] = {}
+
+    def result_shown(self, run_id: str) -> None:
+        result = self._sandbox_results.pop(run_id, None)
+        if result is not None:
+            result.shown()
 
     @property
     def project(self) -> Path:
@@ -468,6 +478,8 @@ class ContainerServices:
                 container.has_forge_agents(),
                 container.init_estimate(),
                 container.config.max_turns,
+                container.config.implementation_profile,
+                container.config.implementation_variant,
             )
         finally:
             container.close()
@@ -565,7 +577,9 @@ class ContainerServices:
                 self._flow = pipeline
 
         if not options.sandbox:
-            pipeline = container.cross_engine(ledger, cap, turns, depth=options.depth)
+            pipeline = container.cross_engine(
+                ledger, cap, turns, depth=options.depth, implementation=options
+            )
             started(pipeline)
             return pipeline.run(request, plan, sink)
         isolated = container.run_sandboxed_cross(
@@ -578,9 +592,12 @@ class ContainerServices:
             options.keep_copy,
             options.depth,
             on_start=started,
+            implementation=options,
         )
         if isolated.cross is None:
             raise NotAvailable("the isolated run ended without a report", "check the ledger")
+        if isolated.cross.steps:
+            self._sandbox_results[isolated.cross.steps[0].run_id] = isolated
         return isolated.cross
 
     def _run_sandboxed(
@@ -613,6 +630,7 @@ class ContainerServices:
             self._starting = False
         if result.report is None:
             raise NotAvailable("the isolated run ended without a report", "check the ledger")
+        self._sandbox_results[result.report.run.id] = result
         return result.report
 
     def _trials[T](self, action: Callable[[Container, TrialStore], T]) -> T:
@@ -925,7 +943,18 @@ class ContainerServices:
         container = self._container()
         route = options.route
         try:
+            profile = implementation_profile(
+                options.profile, container.config.implementation_profile
+            )
+            options = replace(
+                options,
+                profile=profile.value,
+                variant=options.variant or container.config.implementation_variant,
+            )
+            fast = profile == ImplementationProfile.FAST
             options, choice = container.shaped_options(request, options)
+            if fast:
+                choice = ShapeChoice(Shape.SINGLE)
             plan, _ = container.plan_route(
                 request.type,
                 request.what,
@@ -942,8 +971,10 @@ class ContainerServices:
             docs = container.docs_choice(request, options)
             plan = container.shape_plan(plan, choice, docs)
             cap = resolve_budget(options, request.type, container.config.budget_usd)
-            shape = options.simple or single_context(
-                request.type, options.simple, parse_shape(options.shape)
+            shape = (
+                fast
+                or options.simple
+                or single_context(request.type, options.simple, parse_shape(options.shape))
             )
             shaped = (Shape.SINGLE if shape else Shape.PIPELINE).value
             engine = options.engine or container.config.engine
@@ -967,6 +998,10 @@ class ContainerServices:
                 docs=docs,
             )
             per_role = per_role_run(options, request.type, container.config.engine)
+            writer = plan.route(Role.SENIOR) or single_model(plan.routes)
+            model = options.model
+            if fast and not model and writer is not None and writer.model is not None:
+                model = writer.model.id
             try:
                 forecast = container.team_forecast(
                     request.type,
@@ -977,10 +1012,12 @@ class ContainerServices:
                     cap,
                     protection,
                     native=shaped == Shape.PIPELINE.value and not per_role,
-                    model="" if per_role else options.model,
+                    model="" if per_role else model,
                     max_turns=0
                     if per_role
                     else launch_turns(options, request.type, engine, container.config.max_turns),
+                    implementation_profile=profile.value,
+                    variant=options.variant,
                 )
             except (CuantaError, ValueError) as error:
                 return plan, replace(estimate, forecast_error=forecast_failure(error))

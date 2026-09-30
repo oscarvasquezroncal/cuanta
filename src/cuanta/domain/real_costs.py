@@ -3,12 +3,16 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from cuanta.domain.anatomy import AnatomyReport, Phase
 from cuanta.domain.costs import ESTIMATED, CostTotal, median, sum_costs, total_costs
 from cuanta.domain.estimates import estimate_error
 from cuanta.domain.ledger import Run
 from cuanta.domain.outcomes import ACCEPTED, CROSS_KIND, REJECTED, is_attempt, pipeline_running
+
+if TYPE_CHECKING:
+    from cuanta.domain.time_costs import TimeMedianRow
 
 WINDOW_DAYS = 30
 INVESTIGATION_TYPE = "investigation"
@@ -106,6 +110,7 @@ class CostReport:
     total: CostRow
     phase_medians: tuple[PhaseCostRow, ...] = ()
     by_completion: tuple[CostRow, ...] = ()
+    time_medians: tuple[TimeMedianRow, ...] = ()
 
     @property
     def empty(self) -> bool:

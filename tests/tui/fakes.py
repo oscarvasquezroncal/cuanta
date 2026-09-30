@@ -574,6 +574,9 @@ def snapshot(
 
 @dataclass
 class FakeServices:
+    def result_shown(self, run_id: str) -> None:
+        pass
+
     home_snapshot: HomeSnapshot = field(default_factory=snapshot)
     project: Path = Path("/work/shop")
     calls: list[str] = field(default_factory=list)

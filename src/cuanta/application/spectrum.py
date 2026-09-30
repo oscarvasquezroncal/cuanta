@@ -31,6 +31,7 @@ from cuanta.domain.spectrum import (
     usage_events,
 )
 from cuanta.domain.testing import GatewayStatus
+from cuanta.domain.time_anatomy import TimeReport, analyze_time
 from cuanta.ports.ledger import EventQuery, Ledger
 
 HU_PATTERN = re.compile(r"^HU-\d+$", re.IGNORECASE)
@@ -50,6 +51,7 @@ class SpectrumResult:
     events: tuple[LedgerEvent, ...]
     audits: tuple[RouteAudit, ...] = ()
     trend: CostTrend = field(default_factory=CostTrend)
+    time: TimeReport = field(default_factory=TimeReport)
 
     def rows(self, view: View) -> list[Row]:
         resolved = resolve_agents(self.events)
@@ -189,7 +191,10 @@ class SpectrumQuery:
                 else file_utilization(efficiency, report.totals.total),
             )
         audits = self._ledger.route_audits(runs[0].id) if len(runs) == 1 else ()
-        return SpectrumResult(report, runs, tuple(events), audits)
+        timing_run = runs[0] if len(runs) == 1 else Run("", "selection")
+        return SpectrumResult(
+            report, runs, tuple(events), audits, time=analyze_time(timing_run, index_events)
+        )
 
     def _metric_inputs(
         self, events: list[LedgerEvent], runs: tuple[Run, ...]

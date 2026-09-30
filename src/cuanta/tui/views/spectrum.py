@@ -30,6 +30,7 @@ from cuanta.tui.index_text import index_content
 from cuanta.tui.metrics_text import trend_cells
 from cuanta.tui.read_efficiency_text import utilization_note
 from cuanta.tui.services import ALL_IMPORTED, Services
+from cuanta.tui.time_text import time_content
 from cuanta.tui.widgets.flow import FlowRow
 
 LATEST = ""
@@ -127,6 +128,8 @@ class SpectrumView(VerticalScroll):
                 yield Static("", id="plan-weeks", classes="bars")
             with TabPane(t("anatomy.title"), id="tab-anatomy"):
                 yield Static("", id="spectrum-anatomy", classes="bars")
+            with TabPane(t("time.title"), id="tab-time"):
+                yield Static("", id="spectrum-time", classes="bars")
             with TabPane(t("spectrum.tab_trend"), id=TREND_TAB):
                 yield Static("", id="spectrum-trend-title", classes="card-title")
                 yield DataTable(id="spectrum-trend", cursor_type="none", zebra_stripes=True)
@@ -230,6 +233,7 @@ class SpectrumView(VerticalScroll):
         self._set_loaded(True)
         self.query_one("#spectrum-index", Static).update(index_content(t, report.index))
         self.query_one("#spectrum-anatomy", Static).update(anatomy_content(t, report.anatomy))
+        self.query_one("#spectrum-time", Static).update(time_content(t, result.time))
         self.query_one("#spectrum-label", Static).update(self._label(result))
         audit = self.query_one("#spectrum-audit", Static)
         audit.update(self._audit(result))

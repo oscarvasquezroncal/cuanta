@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from math import isfinite
@@ -73,14 +74,22 @@ class StreamingEngine:
     required_tokens: tuple[str, ...] = ()
     step_cost_cap = False
 
-    def __init__(self, runner: ProcessRunner) -> None:
+    def __init__(
+        self, runner: ProcessRunner, monotonic: Callable[[], float] = time.monotonic
+    ) -> None:
         self._runner = runner
+        self._monotonic = monotonic
         self._help: str | None = None
         self.cancelled = False
         self._active: StreamHandle | None = None
         self._turns = False
         self._stop_reason = ""
         self._late = 0
+        self._startup_seconds: float | None = None
+        self._process_start = 0.0
+        self._sent_turns = 0
+        self._continued_result = False
+        self._continue_results = False
 
     def cancel(self) -> None:
         self.cancelled = True
@@ -104,7 +113,10 @@ class StreamingEngine:
         active = self._active
         if active is None or not self._turns:
             return False
-        return active.send(self.turn_line(text))
+        sent = active.send(self.turn_line(text))
+        if sent:
+            self._sent_turns += 1
+        return sent
 
     @property
     def name(self) -> str:
@@ -161,11 +173,20 @@ class StreamingEngine:
 
     def _events(self, parser: LineParser, line: str, stream: StreamHandle) -> list[EngineEvent]:
         events = parser.feed(line)
-        if self._turns and any(isinstance(event, RunResult) for event in events):
+        if events and self._startup_seconds is None:
+            self._startup_seconds = max(0.0, self._monotonic() - self._process_start)
+        if (
+            self._turns
+            and not self._continue_results
+            and any(isinstance(event, RunResult) for event in events)
+        ):
             stream.end_input()
         return events
 
     def _kept(self, result: RunResult | None, later: RunResult) -> RunResult:
+        if self._continued_result:
+            self._continued_result = False
+            return later
         if not self._turns or result is None or not result.ok:
             return later
         self._late += 1
@@ -174,10 +195,15 @@ class StreamingEngine:
         )
 
     def _begin(self, request: EngineRequest) -> None:
+        self._startup_seconds = None
         self._turns = request.stream_input and self.accepts_turns()
         self._stop_reason = ""
         self._late = 0
+        self._sent_turns = 0
+        self._continued_result = False
+        self._continue_results = request.continue_results
         self.prepare(request)
+        self._process_start = self._monotonic()
 
     def _validated_command(self, request: EngineRequest) -> list[str]:
         command = self.command(request)
@@ -190,6 +216,16 @@ class StreamingEngine:
                 "as a capsule",
             )
         return command
+
+    def _deliver(
+        self, event: EngineEvent, on_event: Callable[[EngineEvent], None], stream: StreamHandle
+    ) -> None:
+        submitted = self._sent_turns
+        on_event(event)
+        if self._turns and self._continue_results and isinstance(event, RunResult):
+            self._continued_result = self._sent_turns > submitted
+            if not self._continued_result:
+                stream.end_input()
 
     def run(self, request: EngineRequest, on_event: Callable[[EngineEvent], None]) -> EngineOutcome:
         parser = self.parser(request)
@@ -228,7 +264,7 @@ class StreamingEngine:
                     spent, stopped = self._step_limit(event, spent, request.max_budget_usd)
                     if stopped:
                         stream.terminate()
-                    on_event(event)
+                    self._deliver(event, on_event, stream)
                     stopped = stopped or self._stop_reason
                     if stopped:
                         break
@@ -256,4 +292,5 @@ class StreamingEngine:
             tool_calls=tool_calls,
             stderr_tail=tail,
             late_results=self._late,
+            startup_seconds=self._startup_seconds,
         )

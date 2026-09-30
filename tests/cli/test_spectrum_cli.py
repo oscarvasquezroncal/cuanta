@@ -113,6 +113,22 @@ def test_spectrum_json_contract(seeded: Path) -> None:
         "context_tokens": 27_000,
         "share": 0.7407,
     }
+    timing = document["time"]
+    assert timing["wall_seconds"] is None
+    assert all(phase["seconds"] is None for phase in timing["phases"])
+    assert {phase["phase"]: phase["samples"] for phase in timing["phases"] if phase["samples"]} == {
+        "api_requests": 4,
+        "tools": 4,
+        "tool:Bash": 1,
+        "tool:Edit": 1,
+        "tool:Read": 2,
+    }
+    assert [role["role"] for role in timing["roles"]] == ["main", "tester"]
+    assert [request["role"] for request in timing["requests"]] == ["main", "main", "tester", "main"]
+    assert all(
+        request["duration_seconds"] is None and request["ttft_seconds"] is None
+        for request in timing["requests"]
+    )
     assert_golden("spectrum.json", json.dumps(document, indent=2, sort_keys=True))
 
 

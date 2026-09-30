@@ -20,9 +20,11 @@ from cuanta.application.cross_engine import (
     CrossReport,
     NewFileGuard,
     cross_metrics,
+    repair_prompt,
 )
 from cuanta.application.engine_run import EngineLauncher
 from cuanta.application.routing import RoutePlan
+from cuanta.application.timing import PhaseRecorder
 from cuanta.application.verification import Verifier
 from cuanta.cli.commands.mandate import cross_payload
 from cuanta.domain.change_plan import ChangePlan, EditTarget
@@ -44,6 +46,8 @@ from cuanta.domain.role_handoff import VerifyResult
 from cuanta.domain.routing import ROLES, Role, RoleRoute, RoutingPolicy
 from cuanta.domain.sandbox import SandboxLaunch
 from cuanta.domain.scout import DocsMode
+from cuanta.domain.time_anatomy import analyze_time
+from cuanta.ports.ledger import EventQuery
 from tests.fakes import FakeRunner, FakeStream
 
 REQUEST = MandateRequest(type="feature", what="add canonical", why="seo", out_of_scope="secrets")
@@ -171,6 +175,7 @@ class Harness:
     discipline: Callable[[str], bool] | None = None
     docs_mode: DocsMode = DocsMode.ON
     sandbox: SandboxLaunch | None = None
+    timing: bool = False
 
     def allocate(
         self, plan: RoutePlan, kind: str, depth: str, cap: float, repair: bool, docs_off: bool
@@ -229,6 +234,7 @@ class Harness:
             read_discipline=self.discipline,
             docs_mode=self.docs_mode,
             sandbox=self.sandbox,
+            timing=PhaseRecorder(FixedClock(), self.ledger) if self.timing else None,
         )
 
     def run(
@@ -372,6 +378,69 @@ def test_a_failed_check_gets_one_repair_then_passes(tmp_path: Path) -> None:
     assert "senior gets one repair turn" in " ".join(recorder.texts())
     assert report.state is CompletionState.COMPLETE
     assert report.spent_usd == pytest.approx(0.45)
+
+
+def test_the_legacy_repair_prompt_is_bounded_and_keeps_the_first_errors() -> None:
+    huge = "src/a.ts:1:1 error TS2322: " + "x" * 12_000
+    many = tuple(f"src/b.ts:{line}:1 error TS2304: missing {line}" for line in range(500))
+    results = (
+        VerifyResult("npm run lint", 1, 1.0, (huge, *many)),
+        VerifyResult("npm run build", 2, 1.0, ("src/c.ts:4:2 error TS1005: ';' expected.",)),
+        VerifyResult("npx tsc --noEmit", 0, 1.0),
+    )
+    prompt = repair_prompt("PROMPT", results)
+    assert len(prompt.encode()) < 9_000
+    assert "  src/a.ts:1:1 error TS2322: xxx" in prompt and "xxx...\n" in prompt
+    assert "  src/b.ts:0:1 error TS2304: missing 0" in prompt and "further errors" in prompt
+    assert "- `npm run build` exit 2\n  src/c.ts:4:2 error TS1005: ';' expected." in prompt
+    assert "npx tsc" not in prompt
+
+
+def test_timing_tracks_role_verification_and_repair_separately(tmp_path: Path) -> None:
+    seed(tmp_path)
+    harness = Harness(
+        tmp_path,
+        {
+            "senior": [
+                Act(cost=0.1, writes={"src/layout.ts": "broken\n"}),
+                Act(cost=0.05, writes={"src/layout.ts": "fixed\n"}),
+            ]
+        },
+        verify_results=[(VerifyResult("npm run build", 1, 2.0, ("src/layout.ts:1 error",)),)],
+        timing=True,
+    )
+    report, _ = harness.run()
+    run = harness.ledger.get_run(report.steps[0].run_id)
+    assert run is not None
+    anatomy = analyze_time(run, harness.ledger.events(EventQuery()))
+    phases = {row.phase: row for row in anatomy.phases}
+    assert phases["verification"].samples == 2
+    assert phases["verification"].seconds == 1
+    assert phases["repair"].samples == 1
+    assert phases["repair"].seconds == 0.5
+    assert phases["forecast_plan"].seconds is not None
+    assert phases["handoff"].seconds is not None
+    assert phases["snapshots_guards"].seconds is not None
+    senior = next(role for role in anatomy.roles if role.role == "senior")
+    assert next(row for row in senior.phases if row.phase == "repair").seconds == 0.5
+
+
+def test_final_snapshot_and_skipped_role_timing_are_persisted(tmp_path: Path) -> None:
+    seed(tmp_path)
+    harness = Harness(tmp_path, {}, timing=True)
+    report, _ = harness.run({Role.ANALYST: "claude"})
+    root = report.steps[0].run_id
+    events = harness.ledger.events(EventQuery(run_id=root))
+    phases = [event for event in events if event.kind == "phase_timing"]
+    assert all(event.ts for event in events if event.kind == "run_role")
+    assert json.loads(phases[-1].raw)["phase"] == "run_wall"
+    assert any(
+        event.agent == "docs" and json.loads(event.raw)["phase"] == "forecast_plan"
+        for event in phases
+    )
+    assert any(
+        not event.agent and json.loads(event.raw)["phase"] == "snapshots_guards" for event in phases
+    )
 
 
 def test_a_disciplined_senior_keeps_its_read_discipline_through_a_repair_round(

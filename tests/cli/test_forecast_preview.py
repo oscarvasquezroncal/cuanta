@@ -23,6 +23,7 @@ ENVELOPE_KEYS = {
     "cache",
     "source",
     "lines",
+    "time",
 }
 
 
@@ -47,8 +48,11 @@ def test_the_claude_dry_run_shows_the_forecast_line_and_an_envelope_object(
     assert not any(row["repair"] for row in envelope["roles"])
     assert envelope["lines"][0].startswith("Forecast $")
     assert "cache unknown" in envelope["lines"][0]
+    assert envelope["time"]["p50_seconds"] is None
+    assert envelope["time"]["p90_seconds"] is None
     text = invoke(cross_args(tmp_path, "--route", "fixed", "--dry-run"))
     assert "Forecast $" in text.stdout
+    assert "Time forecast: P50 n/a" in text.stdout
     assert not fake_runner.stdins
 
 

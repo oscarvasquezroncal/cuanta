@@ -339,7 +339,7 @@ def _entry_is_dir(entry: os.DirEntry[str]) -> bool:
 
 
 class _Copier:
-    def __init__(self, origin: Path, root: Path) -> None:
+    def __init__(self, origin: Path, root: Path, reuse: bool = False) -> None:
         self.origin = origin
         self.root = root
         self.base: dict[str, FileStat] = {}
@@ -356,6 +356,8 @@ class _Copier:
         self.copied_files = 0
         self.copied_bytes = 0
         self.rules = IgnoreRules()
+        self.reuse = reuse
+        self.visited: set[str] = set()
 
     def run(self, rules: IgnoreRules) -> None:
         self.rules = rules
@@ -407,6 +409,7 @@ class _Copier:
         action = copy_action(relative, is_dir)
         if action is CopyAction.SKIP:
             return
+        self.visited.add(relative)
         if action is CopyAction.LINK:
             if linked:
                 self.roots.append((_real(entry.path), self.root / relative))
@@ -424,9 +427,10 @@ class _Copier:
         hidden = ignored or self.rules.matches(relative, is_dir)
         if is_dir and hidden and entry.name.casefold() in BUILD_OUTPUTS:
             self.outputs.append(relative)
+            self.visited.discard(relative)
             return
         if is_dir:
-            os.mkdir(_long(self.root / relative))
+            os.makedirs(_long(self.root / relative), exist_ok=self.reuse)
             stack.append((relative, hidden))
         elif stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode):
             self._copy(entry, relative, hidden)
@@ -435,6 +439,19 @@ class _Copier:
 
     def _copy(self, entry: os.DirEntry[str], relative: str, hidden: bool) -> None:
         target = _long(self.root / relative)
+        if self.reuse and os.path.isfile(target) and not os.path.islink(target):
+            checksum = _digest(entry.path)
+            if checksum == _digest(target):
+                shutil.copystat(entry.path, target)
+                stamp = _stamp(target)
+                if tracked(relative):
+                    if hidden:
+                        self.hidden[relative] = stamp
+                    else:
+                        self.base[relative] = FileStat(
+                            checksum, stamp[0], stamp[1], _runs_as_program(os.stat(target).st_mode)
+                        )
+                return
         digest = hashlib.sha256()
         size = 0
         with open(entry.path, "rb") as reader, open(target, "wb") as writer:
@@ -482,6 +499,11 @@ class _Copier:
     def _make_link(self, relative: str, target: str, junction: bool, directory: bool) -> None:
         link = _long(self.root / relative)
         try:
+            if self.reuse and os.path.lexists(link):
+                if os.path.isdir(link) and (os.name == "nt" or not os.path.islink(link)):
+                    os.rmdir(link)
+                else:
+                    os.unlink(link)
             if junction:
                 _junction(target, link)
             else:
@@ -492,19 +514,21 @@ class _Copier:
     def _farm(self, relative: str) -> None:
         self.linked.append(relative)
         stack = [relative]
-        os.mkdir(_long(self.root / relative))
+        os.makedirs(_long(self.root / relative), exist_ok=self.reuse)
         while stack:
             folder = stack.pop()
             for entry in os.scandir(_long(self.origin / folder)):
                 inner = _join(folder, entry.name)
                 destination = _long(self.root / inner)
+                self.visited.add(inner)
                 if _is_link(entry):
                     self._relink(entry, inner)
                 elif entry.is_dir(follow_symlinks=False):
                     if dependency_cache(inner):
                         self.caches.append(inner)
+                        self.visited.discard(inner)
                         continue
-                    os.mkdir(destination)
+                    os.makedirs(destination, exist_ok=self.reuse)
                     stack.append(inner)
                 elif stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode):
                     self.fingerprint[inner] = _stamp(entry.path)
@@ -515,6 +539,10 @@ class _Copier:
 
     def _hard_link(self, source: str, destination: str) -> None:
         try:
+            if self.reuse and os.path.exists(destination):
+                if os.path.samefile(source, destination):
+                    return
+                os.unlink(destination)
             os.link(source, destination)
         except OSError as error:
             raise EnvironmentFailure(
@@ -682,7 +710,12 @@ class LocalSandbox:
                 marker = json.loads((slot / MARKER).read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if not isinstance(marker, dict) or marker.get("kept") or _alive(marker.get("pid")):
+            if (
+                not isinstance(marker, dict)
+                or marker.get("kept")
+                or marker.get("warm")
+                or _alive(marker.get("pid"))
+            ):
                 continue
             with suppress(OSError, ValueError):
                 self._delete(slot, origin, strict=True)

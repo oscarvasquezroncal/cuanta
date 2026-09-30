@@ -10,6 +10,8 @@ from ctypes import wintypes
 from typing import Any
 
 KILL_ON_JOB_CLOSE = 0x2000
+BREAKAWAY_OK = 0x0800
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 EXTENDED_LIMIT_INFORMATION = 9
 PROCESS_SET_QUOTA = 0x0100
 PROCESS_TERMINATE = 0x0001
@@ -55,12 +57,14 @@ def creation_flags() -> int:
 
 
 class ProcessTree:
-    def __init__(self, process: subprocess.Popen[str], suspended: bool = False) -> None:
+    def __init__(
+        self, process: subprocess.Popen[str], suspended: bool = False, breakaway: bool = False
+    ) -> None:
         self._process = process
         self._job: int | None = None
         if sys.platform == "win32":
             try:
-                self._job = _attach_job(process.pid)
+                self._job = _attach_job(process.pid, breakaway)
             finally:
                 if suspended:
                     _resume(process)
@@ -136,13 +140,13 @@ def _resume(process: subprocess.Popen[str]) -> None:
         )
 
 
-def _attach_job(pid: int) -> int | None:
+def _attach_job(pid: int, breakaway: bool = False) -> int | None:
     kernel = _kernel()
     job = kernel.CreateJobObjectW(None, None)
     if not job:
         return None
     limits = _ExtendedLimits()
-    limits.BasicLimitInformation.LimitFlags = KILL_ON_JOB_CLOSE
+    limits.BasicLimitInformation.LimitFlags = KILL_ON_JOB_CLOSE | (BREAKAWAY_OK if breakaway else 0)
     configured = kernel.SetInformationJobObject(
         job, EXTENDED_LIMIT_INFORMATION, ctypes.byref(limits), ctypes.sizeof(limits)
     )

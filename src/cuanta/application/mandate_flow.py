@@ -16,9 +16,15 @@ from cuanta.application.mandate import Composed, MandateReport, MandateService, 
 from cuanta.application.route_apply import Applied, MandateRouting, RouteOptions
 from cuanta.application.scout import SessionWatch, session_scout, watched
 from cuanta.application.steering import GovernorSetup, observed, session_steering
+from cuanta.application.timing import PhaseRecorder
 from cuanta.domain.agents import role_of
 from cuanta.domain.capsules import capsule_id
 from cuanta.domain.change_plan import ChangePlan, apply_overrides
+from cuanta.domain.claude_variants import (
+    DELEGATION_TOOLS,
+    resolve_variant,
+    session_denied_tools,
+)
 from cuanta.domain.depth import (
     DEFAULT_DEPTH,
     MAX_TURNS,
@@ -34,6 +40,12 @@ from cuanta.domain.errors import CuantaError, DomainFailure, NotAvailable
 from cuanta.domain.estimates import RunEstimate
 from cuanta.domain.evidence_pack import LinesOf
 from cuanta.domain.guarantees import readonly_unavailable
+from cuanta.domain.implementation import (
+    LARGE_EDIT_TOKENS,
+    ImplementationProfile,
+    implementation_profile,
+    implementation_prompt,
+)
 from cuanta.domain.mandate import (
     INVESTIGATION,
     MandateRequest,
@@ -98,6 +110,9 @@ class MandateOptions:
     estimate: RunEstimate | None = None
     plan_overrides: tuple[tuple[str, str], ...] = ()
     scout_mode: str = ""
+    profile: str = ""
+    variant: str = ""
+    pure: bool = False
 
 
 def scout_launch(options: MandateOptions, task_type: str) -> bool:
@@ -110,6 +125,8 @@ def scout_launch(options: MandateOptions, task_type: str) -> bool:
 
 
 def per_role_run(options: MandateOptions, task_type: str, default_engine: str) -> bool:
+    if options.profile == ImplementationProfile.FAST:
+        return False
     single = single_context(task_type, options.simple, parse_shape(options.shape))
     pipeline = not options.simple and not single
     engine = options.engine or default_engine
@@ -133,6 +150,56 @@ def isolated(spec: LaunchSpec, sandbox: SandboxLaunch | None, claude: bool) -> L
         mode=SANDBOX_MODE,
         env=sandbox.env,
         disallowed_tools=(*spec.disallowed_tools, *denied),
+    )
+
+
+def single_applied(applied: Applied | None, options: MandateOptions) -> Applied | None:
+    if applied is None:
+        return None
+    if options.profile != ImplementationProfile.FAST:
+        return replace(applied, agents=None, agents_file="")
+    senior = applied.plan.route(Role.SENIOR)
+    model = senior.model if senior is not None else None
+    chosen = options.model or (model.id if model is not None else applied.single)
+    return replace(applied, agents=None, agents_file="", single=chosen, orchestrator="")
+
+
+def implementation_spec(base: LaunchSpec, claude: bool) -> LaunchSpec:
+    fast = base.profile == ImplementationProfile.FAST
+    if fast:
+        base = replace(base, read_discipline=False, session="lean")
+    if base.variant:
+        base = replace(base, effort=resolve_variant(base.variant, base.model).effort)
+    if base.pure and not base.model:
+        raise DomainFailure("pure implementation requires an explicit or resolved model")
+    if not base.read_only and claude:
+        base = replace(
+            base,
+            append_system_prompt=implementation_prompt(
+                False, fast and not base.variant.endswith("ultracode")
+            ),
+        )
+    return base
+
+
+def stepped_prepared(prepared: Prepared) -> Prepared:
+    large = (
+        prepared.spec.profile == ImplementationProfile.FAST
+        and prepared.spec.task_type == MandateType.FEATURE
+        and prepared.forecast is not None
+        and sum(prepared.forecast.inputs.edit_tokens) >= LARGE_EDIT_TOKENS
+    )
+    if not large:
+        return prepared
+    return replace(
+        prepared,
+        spec=replace(
+            prepared.spec,
+            implementation_steps=True,
+            append_system_prompt=implementation_prompt(
+                True, not prepared.spec.variant.endswith("ultracode")
+            ),
+        ),
     )
 
 
@@ -176,6 +243,7 @@ class Prepared:
     scout: bool = False
     docs: DocsChoice | None = None
     read_hooks: bool = False
+    preparation_seconds: float | None = None
 
 
 def display_command(parts: tuple[str, ...], prompt: str) -> str:
@@ -252,7 +320,15 @@ class MandateFlow:
         lines_of: LinesOf | None = None,
         capsules: CapsuleStore | None = None,
         read_discipline: bool = False,
+        timing: PhaseRecorder | None = None,
+        default_profile: str = "balanced",
+        default_variant: str = "",
+        implementation_tools: tuple[str, ...] = (),
     ) -> None:
+        self._implementation_tools = implementation_tools
+        self._default_profile = default_profile
+        self._default_variant = default_variant
+        self._timing = timing or PhaseRecorder()
         self._read_discipline = read_discipline
         self._docs_mode = docs_mode
         self._lines_of = lines_of
@@ -296,12 +372,26 @@ class MandateFlow:
         options: MandateOptions,
         preview: bool = False,
     ) -> Prepared:
+        self._timing.reset()
+        started = self._timing.start()
+        options = replace(
+            options,
+            profile=implementation_profile(options.profile, self._default_profile).value,
+            variant=options.variant or self._default_variant,
+        )
         self._validate(request, options)
-        return self._prepare_validated(request, signatures, options, preview)
+        with self._timing.measure("forecast_plan"):
+            prepared = self._prepare_validated(request, signatures, options, preview)
+        return replace(prepared, preparation_seconds=self._timing.elapsed(started))
 
     def _validate(self, request: MandateRequest, options: MandateOptions) -> None:
         validate(request)
         engine = options.engine or self._default_engine
+        fast = options.profile == ImplementationProfile.FAST
+        if fast and (engine != "claude" or request.type == INVESTIGATION):
+            raise DomainFailure("fast implementation requires a Claude writing request")
+        if options.pure and engine != "claude":
+            raise DomainFailure("pure implementation requires Claude")
         refusal = scout_refusal(
             request.type,
             parse_forced_shape(options.shape),
@@ -311,8 +401,14 @@ class MandateFlow:
         if refusal is not None:
             raise DomainFailure(english(refusal[0]), refusal[1])
         if self._refresh_index is not None:
-            self._refresh_index()
-        if not options.simple and self._has_agents is not None and not self._has_agents():
+            with self._timing.measure("index_refresh"):
+                self._refresh_index()
+        if (
+            not options.simple
+            and not fast
+            and self._has_agents is not None
+            and not self._has_agents()
+        ):
             raise DomainFailure(
                 "this project has no Forge agents yet (.claude/agents)",
                 "run cuanta init first, or use simple mode (--simple)",
@@ -333,19 +429,15 @@ class MandateFlow:
         if engine is None:
             raise DomainFailure(f"unknown engine {engine_name}", "use claude, codex or opencode")
         investigation = request.type == INVESTIGATION
+        fast = options.profile == ImplementationProfile.FAST
         refusal = readonly_unavailable(engine_name) if investigation else None
         if refusal is not None:
             raise DomainFailure(english(refusal))
         shape = parse_shape(options.shape)
-        single = single_context(request.type, options.simple, shape)
+        single = fast or single_context(request.type, options.simple, shape)
         claude = engine_name == "claude"
         graph_available = self._graph_mode() is GraphMode.CLI
-        if not claude:
-            tools: tuple[str, ...] = ()
-        elif investigation:
-            tools = investigation_tools(options.simple, shape, graph_available)
-        else:
-            tools = allowed_tools(self._stack(), graph_available)
+        tools = self._tools(options, investigation, claude, graph_available)
         launcher = self._launchers(engine)
         route, wanted, docs = self._route(
             request, options, claude and not single and not investigation
@@ -355,8 +447,8 @@ class MandateFlow:
             if self._routing is not None and not options.simple
             else None
         )
-        if applied is not None and single:
-            applied = replace(applied, agents=None, agents_file="")
+        if single:
+            applied = single_applied(applied, options)
         protection = self._protection(request, options.plan_overrides)
         if claude and applied is not None and protection is not None and self._routing is not None:
             applied = self._routing.protect(applied, protection, options.session)
@@ -372,7 +464,7 @@ class MandateFlow:
         budget_line = read_budget_line(depth, graph_available) if depth is not None else ""
         system = (
             analyst_system_prompt(self._analyst_body(), budget_line, graph_available)
-            if single and claude
+            if single and claude and investigation
             else ""
         )
         base = LaunchSpec(
@@ -382,7 +474,8 @@ class MandateFlow:
             allowed_tools=tools,
             disallowed_tools=(
                 investigation_denied(options.simple, shape) if investigation else DEFAULT_DENIED
-            ),
+            )
+            + (session_denied_tools(options.variant) if fast else ()),
             model=options.model
             or (applied.orchestrator or applied.single if applied is not None else ""),
             agents_file=applied.agents_file if applied is not None else "",
@@ -392,7 +485,9 @@ class MandateFlow:
             max_budget_usd=cap,
             max_turns=(resolve_max_turns(options, depth, self._default_max_turns) if claude else 0),
             tools=(
-                investigation_builtin_tools(options.simple, shape, graph_available)
+                self._implementation_tools
+                if fast and self._implementation_tools
+                else investigation_builtin_tools(options.simple, shape, graph_available)
                 if claude and investigation
                 else None
             ),
@@ -414,14 +509,23 @@ class MandateFlow:
                 else None
             ),
             read_discipline=(
-                True
+                False
+                if fast
+                else True
                 if claude
                 and applied is not None
                 and applied.agents
                 and self._pipeline_read_discipline
                 else None
             ),
+            profile=options.profile,
+            variant=options.variant,
+            pure=options.pure or fast,
+            verify_commands=protection.verify
+            if protection is not None and not investigation
+            else (),
         )
+        base = implementation_spec(base, claude)
         sandbox = self._launch(options)
         base = isolated(base, sandbox, claude)
 
@@ -447,13 +551,14 @@ class MandateFlow:
             shape,
             graph_available,
             self._packed_prompt(pack, ""),
+            implementation=fast,
         )
         if run_id:
             self._service.link_decisions(key, run_id)
             if options.intake_scope:
                 self._service.link_decisions(options.intake_scope, run_id)
         spec = replace(base, prompt=composed.prompt, scope=composed.hint.option)
-        return Prepared(
+        prepared = Prepared(
             composed,
             engine_name,
             launcher,
@@ -472,6 +577,21 @@ class MandateFlow:
             docs=docs,
             read_hooks=self._hooked(launcher, spec),
         )
+        return stepped_prepared(prepared)
+
+    def _tools(
+        self, options: MandateOptions, investigation: bool, claude: bool, graph: bool
+    ) -> tuple[str, ...]:
+        if not claude:
+            return ()
+        if investigation:
+            return investigation_tools(options.simple, parse_shape(options.shape), graph)
+        tools = allowed_tools(self._stack(), graph)
+        if options.profile != ImplementationProfile.FAST:
+            return tools
+        if options.variant.endswith("ultracode"):
+            return (*tools, "Workflow")
+        return tuple(tool for tool in tools if tool not in DELEGATION_TOOLS)
 
     def _hooked(self, launcher: EngineLauncher, spec: LaunchSpec) -> bool:
         wanted = self._read_discipline if spec.read_discipline is None else spec.read_discipline
@@ -524,8 +644,10 @@ class MandateFlow:
                 spec.max_budget_usd,
                 protection,
                 native=shape in {Shape.PIPELINE.value, Shape.SCOUT.value},
-                model=options.model,
+                model=spec.model,
                 max_turns=spec.max_turns,
+                implementation_profile=spec.profile,
+                variant=spec.variant or spec.effort,
             )
         except (CuantaError, ValueError) as error:
             return None, forecast_failure(error)
@@ -615,6 +737,7 @@ class MandateFlow:
         observer: Callable[[EngineEvent], None] | None = None,
         verdict: bool = True,
     ) -> MandateReport:
+        wall_start = self._timing.start()
         engine = prepared.launcher.engine
         name = prepared.engine_name
         self._active = engine
@@ -641,7 +764,9 @@ class MandateFlow:
                 progress,
                 self._summarize,
                 sink if steering is None else observed(sink, steering),
+                self._timing.flush,
             )
+            self._timing.flush(report.run.id)
             if steering is not None:
                 report = replace(report, governor=tuple(steering.taken), governed=True)
             if prepared.read_hooks:
@@ -664,6 +789,11 @@ class MandateFlow:
         self._service.save_meta(report)
         if self._learn_run is not None:
             self._learn_run(report.run.id)
+        elapsed = self._timing.elapsed(wall_start)
+        if elapsed is not None:
+            self._timing.seconds(
+                "run_wall", elapsed + (prepared.preparation_seconds or 0.0), report.run.id
+            )
         return report
 
     def _session_scout(
@@ -696,11 +826,14 @@ class MandateFlow:
         publish_forecast(progress, stored)
 
     def verdict(self, report: MandateReport, progress: ProgressSink) -> MandateReport:
+        if report.implementation is not None:
+            return report
         if self._final_suite is None or report.run.status == "interrupted":
             return report
         progress.publish(started("verdict", msg("mandate.verdict")))
         try:
-            status = self._final_suite(report.run.id)
+            with self._timing.measure("verification", report.run.id):
+                status = self._final_suite(report.run.id)
         except CuantaError as error:
             progress.publish(
                 finished("verdict", Status.WARN, msg("stage.error", error=error.message))
@@ -730,6 +863,8 @@ class MandateSetup:
     forge_ready: bool = True
     init_estimate: float | None = None
     max_turns: int = 0
+    profile: str = "balanced"
+    variant: str = ""
 
 
 @dataclass(frozen=True, slots=True)

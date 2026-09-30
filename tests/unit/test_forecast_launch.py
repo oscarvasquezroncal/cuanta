@@ -15,6 +15,7 @@ from cuanta.application.engine_run import EngineLauncher
 from cuanta.application.forecast import Forecaster, PlannedForecast, PlanSizes
 from cuanta.application.mandate_flow import MandateFlow, MandateOptions
 from cuanta.application.routing import RoutePlan
+from cuanta.application.timing import PhaseRecorder
 from cuanta.bootstrap import Container
 from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.config import Config
@@ -78,6 +79,8 @@ class BrokenForecaster(Forecaster):
         native: bool = False,
         model: str = "",
         max_turns: int = 0,
+        implementation_profile: str = "balanced",
+        variant: str = "",
     ) -> PlannedForecast:
         raise ValueError("forecast 01X has an unreadable plan")
 
@@ -201,6 +204,7 @@ class StubService:
 
 def native(ledger: MemoryLedger, service: StubService, forecasting: bool) -> MandateFlow:
     flow = MandateFlow.__new__(MandateFlow)
+    flow._timing = PhaseRecorder()
     flow._active = None
     flow._service = cast("MandateService", service)
     flow._summarize = lambda run_id: ({}, None)
@@ -248,8 +252,12 @@ def test_a_native_mandate_stores_its_forecast_before_launch_only_with_a_forecast
     assert all(note.status is Status.INFO for note in notes)
 
 
-def launch_spec(shape: str) -> LaunchSpec:
-    return cast("LaunchSpec", SimpleNamespace(shape=shape, max_budget_usd=5.0, max_turns=12))
+def launch_spec(shape: str, model: str = "") -> LaunchSpec:
+    from cuanta.application.engine_run import LaunchSpec
+
+    return LaunchSpec(
+        "mandate", "request", "", (), shape=shape, max_budget_usd=5.0, max_turns=12, model=model
+    )
 
 
 def test_the_native_forecast_prices_the_launch_model_shape_and_turn_rail() -> None:
@@ -257,7 +265,9 @@ def test_the_native_forecast_prices_the_launch_model_shape_and_turn_rail() -> No
     flow = native(ledger, StubService(ledger), True)
     applied = cast("Applied", SimpleNamespace(plan=team()))
     pinned = MandateOptions(model="claude-opus-5-5", depth="normal")
-    single, failure = flow._forecast("bug", applied, "claude", pinned, launch_spec("single"), None)
+    single, failure = flow._forecast(
+        "bug", applied, "claude", pinned, launch_spec("single", pinned.model), None
+    )
     assert failure is None and single is not None
     assert single.inputs.max_turns == 12 and not single.inputs.native
     assert {item.model for item in single.envelope.roles} == {"claude-opus-5-5"}

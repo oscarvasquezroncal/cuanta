@@ -100,6 +100,9 @@ def execute(ctx: typer.Context, action: Callable[[Session], Document]) -> None:
     try:
         document = action(session)
         session.presenter.render(document)
+        if document.after_render is not None:
+            sys.stdout.flush()
+            document.after_render()
         code = ExitCode(document.exit_code)
     except CuantaError as error:
         session.presenter.fail(error)

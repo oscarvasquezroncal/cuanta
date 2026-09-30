@@ -37,6 +37,7 @@ from cuanta.tui.cache_text import first_request_content
 from cuanta.tui.fmt import money, run_money
 from cuanta.tui.governor_text import governor_content
 from cuanta.tui.i18n import Catalog
+from cuanta.tui.implementation_text import implementation_content
 from cuanta.tui.index_text import index_lines
 from cuanta.tui.metrics_text import metrics_content
 from cuanta.tui.read_efficiency_text import read_efficiency_content
@@ -44,6 +45,7 @@ from cuanta.tui.scout_text import scout_content
 from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.screens.run_file import RunFileScreen
 from cuanta.tui.services import Services
+from cuanta.tui.time_text import time_content
 from cuanta.tui.widgets.flow import FlowRow
 
 FILE_SCHEME = "cuanta-file:"
@@ -91,8 +93,7 @@ class ResultScreen(Screen[None]):
         return self.view.task_type == INVESTIGATION
 
     def compose(self) -> ComposeResult:
-        t = self._t
-        view = self.view
+        t, view = self._t, self.view
         with Horizontal(id="result-bar"):
             yield Static(t("result.title"), classes="card-title", id="result-title")
             yield Static(self._status(), id="result-status")
@@ -102,34 +103,12 @@ class ResultScreen(Screen[None]):
             yield Static("", id="result-decision")
             yield Button(t("result.accept"), id="result-accept", variant="success", compact=True)
             yield Button(t("result.reject"), id="result-reject", compact=True)
-        budget_reason = budget_stop_reason(view.run.end_reason)
-        if budget_reason is not None:
-            yield Static(
-                Content.styled(t.message(budget_reason), "$warning"), id="result-budget-cut"
-            )
-        if view.run.end_reason == TURN_LIMIT_SUBTYPE:
-            yield Static(
-                Content.styled(t("result.cut_by_turns"), "$warning"), id="result-turns-cut"
-            )
-        if view.fallback_error:
-            yield Static(
-                Content.styled(
-                    t.message(
-                        msg(
-                            "instinct.fallback",
-                            backend=view.fallback_from.capitalize(),
-                            error=view.fallback_error,
-                        )
-                    ),
-                    "$warning",
-                ),
-                id="result-instinct-fallback",
-            )
-        if view.simple:
-            yield Static(Content.styled(t("result.simple_note"), "$warning"), id="result-simple")
+        yield from self._notices()
         yield Static(self._split(), id="result-split")
         yield Static(first_request_content(t, view.cache), id="result-cache")
         yield Static(self._map_summary(), id="result-map-summary")
+        if view.implementation is not None:
+            yield Static(implementation_content(t, view.implementation), id="result-implementation")
         if view.trial is not None:
             with Vertical(id="result-trial"):
                 yield Static("", id="result-trial-line")
@@ -179,7 +158,40 @@ class ResultScreen(Screen[None]):
                 yield Static(anatomy_content(t, view.anatomy), id="result-anatomy", classes="bars")
                 yield DataTable(id="result-agents", cursor_type="none", zebra_stripes=True)
                 yield Static(self._consumption(), id="result-consumption")
+            yield from self._time()
         yield Footer()
+
+    def _notices(self) -> ComposeResult:
+        t, view = self._t, self.view
+        budget_reason = budget_stop_reason(view.run.end_reason)
+        if budget_reason is not None:
+            yield Static(
+                Content.styled(t.message(budget_reason), "$warning"), id="result-budget-cut"
+            )
+        if view.run.end_reason == TURN_LIMIT_SUBTYPE:
+            yield Static(
+                Content.styled(t("result.cut_by_turns"), "$warning"), id="result-turns-cut"
+            )
+        if view.fallback_error:
+            yield Static(
+                Content.styled(
+                    t.message(
+                        msg(
+                            "instinct.fallback",
+                            backend=view.fallback_from.capitalize(),
+                            error=view.fallback_error,
+                        )
+                    ),
+                    "$warning",
+                ),
+                id="result-instinct-fallback",
+            )
+        if view.simple:
+            yield Static(Content.styled(t("result.simple_note"), "$warning"), id="result-simple")
+
+    def _time(self) -> ComposeResult:
+        with TabPane(self._t("time.title"), id="tab-time"), VerticalScroll():
+            yield Static(time_content(self._t, self.view.time), id="result-time", classes="bars")
 
     def _panels(self) -> ComposeResult:
         yield from self._metrics()
@@ -339,6 +351,7 @@ class ResultScreen(Screen[None]):
     def on_mount(self) -> None:
         with suppress(NoMatches):
             self._fill()
+        self.call_after_refresh(self._services.result_shown, self.view.run.id)
 
     def on_resize(self, event: Resize) -> None:
         self.set_class(event.size.width < NARROW_WIDTH, "-narrow")
