@@ -71,6 +71,9 @@ def senior_rules(reads: int) -> str:
         (
             "WORK FROM THE PACK: it is all the exploration this run does. Open only the pack's "
             "anchored ranges and the files in its edit set; do not explore the code again.",
+            "There is no analyst in this shape: the evidence pack and its edit set replace the "
+            "analyst's plan JSON (phase, gate and blast radius). Do not stop or report blocked "
+            "because a plan JSON is missing; treat the edit set as the blast radius.",
             f"Read budget: about {reads} file reads. cuanta counts every read outside the pack's "
             "files and the edit set as exploration leak.",
             "Edit only the files in the edit set. If the change needs another file, edit it only "
