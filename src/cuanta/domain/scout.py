@@ -33,7 +33,10 @@ SCOUT_BODY = (
     "stop as soon as you can name the files the change must edit.\n"
     "Your only output is an evidence pack for the senior, who will not see your transcript: "
     "file:line facts, the few snippets the change needs, risks, the tests that cover the change "
-    "and the confirmed edit set."
+    "and the confirmed edit set.\n"
+    "Card flags such as 'generated; do-not-edit' are hints from cuanta's index, not locks: when "
+    "the request asks to change a file, put it in the edit set and note the flag as a risk. "
+    "Report status blocked only when the request cannot be done at all."
 )
 
 
