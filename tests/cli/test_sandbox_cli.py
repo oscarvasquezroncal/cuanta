@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from cuanta.adapters.system.process_runner import SubprocessRunner
+from cuanta.adapters.system.sandbox_cleanup import BackgroundCleanup, finish_cleanup
 from cuanta.bootstrap import Container
 from tests.fakes import FakeRunner, copy_repo
 from tests.support import FIXTURES, invoke
@@ -33,6 +34,11 @@ def env(monkeypatch: pytest.MonkeyPatch, fake_runner: FakeRunner, tmp_path: Path
         return container
 
     monkeypatch.setattr(Container, "for_project", classmethod(build))
+
+    def cleanup(job: BackgroundCleanup) -> None:
+        assert finish_cleanup(job._path)
+
+    monkeypatch.setattr(BackgroundCleanup, "__call__", cleanup)
     scratch = tmp_path / "temp"
     scratch.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
@@ -99,8 +105,8 @@ def test_a_sandbox_fix_leaves_the_project_untouched_and_applies_cleanly(
     run_id = str(payload["run_id"])
     sandbox = payload["sandbox"]
     assert isinstance(sandbox, dict)
-    assert sandbox["removed"] is True
-    assert not Path(str(sandbox["copy_root"])).exists()
+    assert sandbox["removed"] is False and sandbox["cleanup_pending"] is True
+    assert (Path(str(sandbox["copy_root"])) / TARGET).read_bytes() == BROKEN.encode()
     trial = sandbox["trial"]
     assert isinstance(trial, dict)
     assert [(item["path"], item["kind"]) for item in trial["changes"]] == [(TARGET, "modified")]

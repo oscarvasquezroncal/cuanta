@@ -390,7 +390,9 @@ def refresh_chain(
     return replace(chain, facts=refresh_facts(chain.facts, lines_of))
 
 
-def _verification_line(result: VerifyResult) -> str:
+def _verification_line(result: VerifyResult, share: int) -> str:
+    from cuanta.domain.implementation import repair_feedback
+
     if result.timed_out:
         state = "timed out"
     elif result.exit_code is None:
@@ -398,10 +400,13 @@ def _verification_line(result: VerifyResult) -> str:
     else:
         state = f"exit {result.exit_code}"
     head = f"- `{result.command}`: {state}, {result.seconds:.1f}s"
-    return "\n".join((head, *(f"  {line}" for line in result.errors)))
+    errors = repair_feedback(result.errors, share).splitlines()
+    return "\n".join((head, *(f"  {line}" for line in errors)))
 
 
 def render_chain(chain: HandoffChain, budget_tokens: int) -> str:
+    from cuanta.domain.implementation import REPAIR_FEEDBACK_BYTES
+
     if not chain.handoffs:
         return ""
     required: list[str] = ["Roles so far:"]
@@ -413,8 +418,11 @@ def render_chain(chain: HandoffChain, budget_tokens: int) -> str:
     if chain.next_step:
         required.append(f"Next step: {chain.next_step}")
     failed = [item for item in chain.verification if not item.passed]
+    limit = max(budget_tokens, 1) * CHARS_PER_TOKEN - OMISSION_RESERVE
+    used = sum(_size(line) for line in required)
+    share = min(REPAIR_FEEDBACK_BYTES, max(0, limit - used) // 2) // max(1, len(failed))
     sections: list[tuple[str, list[str]]] = [
-        ("Verification failures:", [_verification_line(item) for item in failed]),
+        ("Verification failures:", [_verification_line(item, share) for item in failed]),
         ("Plan, edit:", [f"- {path}" for path in chain.plan.edit]),
         ("Plan, verify:", [f"- {command}" for command in chain.plan.verify]),
         (
@@ -438,12 +446,10 @@ def render_chain(chain: HandoffChain, budget_tokens: int) -> str:
         ("Plan, read:", [f"- {path}" for path in chain.plan.read]),
         (
             "Verification passed:",
-            [_verification_line(item) for item in chain.verification if item.passed],
+            [_verification_line(item, share) for item in chain.verification if item.passed],
         ),
     ]
-    limit = max(budget_tokens, 1) * CHARS_PER_TOKEN - OMISSION_RESERVE
     lines = list(required)
-    used = sum(_size(line) for line in lines)
     omitted = 0
     for title, items in sections:
         if not items:

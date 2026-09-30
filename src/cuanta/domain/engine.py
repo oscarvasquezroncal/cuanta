@@ -142,6 +142,9 @@ class EngineRequest:
     index_server: tuple[str, ...] = ()
     stream_input: bool = False
     resume_session: str = ""
+    pure: bool = False
+    variant: str = ""
+    continue_results: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +154,7 @@ class EngineOutcome:
     tool_calls: int
     stderr_tail: str = ""
     late_results: int = 0
+    startup_seconds: float | None = None
 
     @property
     def ok(self) -> bool:

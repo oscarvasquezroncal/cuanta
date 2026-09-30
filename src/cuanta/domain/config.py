@@ -9,6 +9,22 @@ from cuanta.domain.read_discipline import READ_LINE_LIMIT
 DEFAULT_PORT = 4318
 SCOUT_MODES = ("native", "launch")
 DOCS_MODES = ("auto", "on", "off")
+IMPLEMENTATION_TOOLS = frozenset(
+    {
+        "Read",
+        "Grep",
+        "Glob",
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "Bash",
+        "Skill",
+        "Agent",
+        "Task",
+        "Workflow",
+    }
+)
 DEFAULT_SCOUT_THRESHOLD = 0.35
 
 
@@ -55,6 +71,11 @@ class Config:
     scout_threshold: float = DEFAULT_SCOUT_THRESHOLD
     docs_mode: str = "auto"
     governor: bool = True
+    implementation_profile: str = "balanced"
+    implementation_variant: str = ""
+    repair_rounds: int = 3
+    repair_timeout_s: int = 900
+    implementation_tools: tuple[str, ...] = ()
 
 
 KEY_MAP: dict[str, str] = {
@@ -82,6 +103,11 @@ KEY_MAP: dict[str, str] = {
     "runs.scout_threshold": "scout_threshold",
     "runs.docs": "docs_mode",
     "runs.governor": "governor",
+    "runs.profile": "implementation_profile",
+    "runs.variant": "implementation_variant",
+    "runs.repair_rounds": "repair_rounds",
+    "runs.repair_timeout_s": "repair_timeout_s",
+    "runs.tools": "implementation_tools",
     "git.workflow": "git_workflow",
     "ui.onboarded": "onboarded",
     "listener.port": "port",
@@ -207,6 +233,19 @@ def layer_from_table(table: Mapping[str, object]) -> dict[str, object]:
         del layer["scout_mode"]
     if layer.get("docs_mode") not in (None, *DOCS_MODES):
         del layer["docs_mode"]
+    if layer.get("implementation_profile") not in (None, "fast", "balanced"):
+        del layer["implementation_profile"]
+    rounds = layer.get("repair_rounds")
+    if isinstance(rounds, int) and not 0 <= rounds <= 3:
+        del layer["repair_rounds"]
+    timeout = layer.get("repair_timeout_s")
+    if isinstance(timeout, int) and timeout < 1:
+        del layer["repair_timeout_s"]
+    tools = layer.get("implementation_tools")
+    if isinstance(tools, tuple) and (
+        len(set(tools)) != len(tools) or not set(tools) <= IMPLEMENTATION_TOOLS
+    ):
+        del layer["implementation_tools"]
     threshold = layer.get("scout_threshold")
     if isinstance(threshold, float) and not 0.0 < threshold <= 1.0:
         del layer["scout_threshold"]

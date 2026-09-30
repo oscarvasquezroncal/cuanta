@@ -93,6 +93,7 @@ if TYPE_CHECKING:
     from cuanta.application.forecast import Forecaster, JevEnvelope, PlannedForecast, PlanSizes
     from cuanta.application.gateway import RunGateway
     from cuanta.application.home import HomeQuery
+    from cuanta.application.implementer import ImplementationSession
     from cuanta.application.index_read import IndexRead
     from cuanta.application.index_summaries import SummaryResult
     from cuanta.application.init_project import InitProject
@@ -568,6 +569,87 @@ class Container:
             guard_files=self.guard_profile,
             index_tools=self.config.index_enabled and self.config.index_tools,
             index_server=self.index_server_command(),
+            implementer=lambda spec: self.implementation_session(spec, ledger),
+        )
+
+    def implementation_session(
+        self, spec: LaunchSpec, ledger: Ledger
+    ) -> ImplementationSession | None:
+        from cuanta.application.implementer import ImplementationSession, VerificationBaselines
+        from cuanta.application.timing import PhaseRecorder
+        from cuanta.domain.errors import DomainFailure
+        from cuanta.domain.implementation import (
+            DIAGNOSTICS_VERSION,
+            baseline_key,
+            unavailable_checks,
+        )
+
+        if spec.read_only or spec.kind not in {"mandate", "cross"}:
+            return None
+        stack = self.detector().run(with_engines=False).stack
+        package = self.workspace().read_text("package.json")
+        try:
+            parsed = json.loads(package or "{}")
+        except ValueError:
+            parsed = {}
+        scripts = parsed.get("scripts", {}) if isinstance(parsed, dict) else {}
+        lint = (
+            f"{stack.package_manager or 'npm'} run lint"
+            if isinstance(scripts, dict) and isinstance(scripts.get("lint"), str)
+            else ""
+        )
+        commands = tuple(
+            dict.fromkeys(
+                command
+                for command in (
+                    stack.typecheck_command,
+                    lint,
+                    *spec.verify_commands,
+                    stack.build_command if "build" in spec.prompt.casefold() else "",
+                )
+                if command
+            )
+        )
+        if not commands:
+            if spec.implementation_steps:
+                raise DomainFailure("ordered implementation requires verification commands")
+            return None
+        verifier = self.verifier()
+        timing = PhaseRecorder(self.clock, ledger)
+        snapshot = self.project_snapshot()
+        for name in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "uv.lock"):
+            digest = self.workspace().sha256(name)
+            if digest is not None:
+                snapshot[name] = digest
+        context = baseline_key(
+            dict(self.extra_env),
+            (stack.language_version, stack.framework_version),
+            DIAGNOSTICS_VERSION,
+        )
+        with timing.measure("verification", spec.run_id, spec.role):
+            baseline = VerificationBaselines(self.state_workspace()).get(
+                snapshot, commands, verifier.run_checks, lambda: False, context
+            )
+        unavailable = unavailable_checks(baseline, commands)
+        if unavailable:
+            raise DomainFailure(
+                "verification is unusable, so the writer was not started: "
+                + "; ".join(unavailable),
+                "install the missing tool, or make the check pass or print its failures, "
+                "then run again",
+            )
+        return ImplementationSession(
+            commands,
+            baseline,
+            verifier.run_checks,
+            self.clock.monotonic,
+            spec.max_budget_usd,
+            self.config.repair_rounds,
+            self.config.repair_timeout_s,
+            spec.implementation_steps,
+            spec.max_turns,
+            measured=lambda phase, seconds: timing.seconds(phase, seconds, spec.run_id, spec.role),
+            snapshot=self.project_snapshot,
         )
 
     def guard_profile(self, spec: LaunchSpec) -> tuple[str, str]:
@@ -606,7 +688,13 @@ class Container:
                 ]
         wanted = self.config.index_tools if spec.index_tools is None else spec.index_tools
         mcp = self.index_mcp_config() if self.config.index_enabled and wanted else None
-        return self.lean_profile().files(permissions_deny=denied, owned_hooks=hooks, owned_mcp=mcp)
+        return self.lean_profile().files(
+            permissions_deny=denied,
+            owned_hooks=hooks,
+            owned_mcp=mcp,
+            pure_model=spec.model if spec.pure else "",
+            variant=spec.variant,
+        )
 
     def index_server_command(self) -> tuple[str, ...]:
         import sys
@@ -1297,6 +1385,7 @@ class Container:
     def forecaster(self, ledger: Ledger) -> Forecaster:
         from cuanta.adapters.system.prices import load_prices
         from cuanta.application.forecast import Forecaster
+        from cuanta.application.run_reports import RunReports
 
         prices = load_prices()
         return Forecaster(
@@ -1308,6 +1397,7 @@ class Container:
             self.clock.now_iso,
             self.envelope_advisor(ledger, prices),
             self.estimate_shapes,
+            lambda run_id: RunReports(self.state_workspace()).meta(run_id) or {},
         )
 
     def team_forecast(
@@ -1322,9 +1412,22 @@ class Container:
         native: bool = False,
         model: str = "",
         max_turns: int = 0,
+        implementation_profile: str = "balanced",
+        variant: str = "",
     ) -> PlannedForecast:
         return self.forecaster(self.shared_ledger()).plan(
-            task_type, plan, provider, depth, shape, cap, change_plan, native, model, max_turns
+            task_type,
+            plan,
+            provider,
+            depth,
+            shape,
+            cap,
+            change_plan,
+            native,
+            model,
+            max_turns,
+            implementation_profile,
+            variant,
         )
 
     def role_budget(
@@ -1399,9 +1502,11 @@ class Container:
         sandbox: SandboxLaunch | None = None,
         checkpoint: Callable[[], Message | None] | None = None,
         depth: str = "",
+        implementation: MandateOptions | None = None,
     ) -> CrossEnginePipeline:
         from cuanta.application.cross_engine import CrossEnginePipeline
         from cuanta.application.run_reports import RunReports
+        from cuanta.application.timing import PhaseRecorder
         from cuanta.domain.run_mode import classic_meta
         from cuanta.domain.scout import parse_docs_mode
 
@@ -1452,6 +1557,15 @@ class Container:
             read_discipline=self.pipeline_read_discipline,
             read_max_lines=self.config.read_max_lines,
             docs_mode=parse_docs_mode(self.config.docs_mode),
+            timing=PhaseRecorder(self.clock, ledger),
+            implementation_profile=implementation.profile or self.config.implementation_profile
+            if implementation is not None
+            else self.config.implementation_profile,
+            variant=implementation.variant or self.config.implementation_variant
+            if implementation is not None
+            else self.config.implementation_variant,
+            pure=implementation.pure if implementation is not None else False,
+            model=implementation.model if implementation is not None else "",
         )
 
     def governor_setup(self, ledger: Ledger | None = None) -> GovernorSetup:
@@ -1925,6 +2039,7 @@ class Container:
     def mandate_flow(self, ledger: Ledger, sandbox: SandboxLaunch | None = None) -> MandateFlow:
         from cuanta.application.mandate_flow import MandateFlow
         from cuanta.application.spectrum import Selection
+        from cuanta.application.timing import PhaseRecorder
         from cuanta.domain.scout import parse_docs_mode
         from cuanta.domain.spectrum import View
 
@@ -1968,6 +2083,10 @@ class Container:
             docs_mode=parse_docs_mode(self.config.docs_mode),
             lines_of=self.project_lines,
             capsules=self.capsule_store(),
+            timing=PhaseRecorder(self.clock, ledger),
+            default_profile=self.config.implementation_profile,
+            default_variant=self.config.implementation_variant,
+            implementation_tools=self.config.implementation_tools,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -2006,10 +2125,12 @@ class Container:
         return TrialStore(self.state_workspace(), ledger, self.clock.now_iso)
 
     def sandbox_runner(self, ledger: Ledger) -> SandboxRunner:
-        from cuanta.adapters.system.sandbox import LocalSandbox
+        from cuanta.adapters.system.sandbox_cleanup import BackgroundCleanup
+        from cuanta.adapters.system.warm_sandbox import WarmSandbox
         from cuanta.application.sandbox import SandboxRunner, TrialRecorder
+        from cuanta.application.timing import PhaseRecorder
 
-        sandbox = LocalSandbox(now_iso=self.clock.now_iso)
+        sandbox = WarmSandbox(now_iso=self.clock.now_iso)
         recorder = TrialRecorder(sandbox, self.state_workspace(), self.clock.now_iso)
         return SandboxRunner(
             sandbox,
@@ -2017,6 +2138,10 @@ class Container:
             ledger,
             self.state_project(),
             after_record=lambda copy, run_id: self.learn_run(run_id, copy.root),
+            timing=PhaseRecorder(self.clock, ledger),
+            cleanup=lambda copy, run_id: BackgroundCleanup(
+                copy, run_id, self.state_project() / ".cuanta"
+            ),
         )
 
     def run_metrics(self, ledger: Ledger, run_id: str) -> dict[str, object]:
@@ -2088,6 +2213,7 @@ class Container:
         keep: bool,
         depth: str = "",
         on_start: Callable[[CrossEnginePipeline], None] | None = None,
+        implementation: MandateOptions | None = None,
     ) -> SandboxResult:
         from cuanta.application.cross_engine import cross_metrics
 
@@ -2095,7 +2221,9 @@ class Container:
             copy: SandboxCopy, launch: SandboxLaunch, checkpoint: Callable[[], Message | None]
         ) -> CrossEnginePipeline:
             sub = self.sandbox_container(copy.root, launch.env)
-            pipeline = sub.cross_engine(ledger, budget_usd, max_turns, launch, checkpoint, depth)
+            pipeline = sub.cross_engine(
+                ledger, budget_usd, max_turns, launch, checkpoint, depth, implementation
+            )
             if on_start is not None:
                 on_start(pipeline)
             return pipeline

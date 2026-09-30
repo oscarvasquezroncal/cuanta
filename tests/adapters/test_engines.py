@@ -35,6 +35,28 @@ from cuanta.domain.mandate import (
 from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner, FakeStream
 
+
+def test_process_startup_waits_for_first_parsed_event_with_fake_clock() -> None:
+    moments = iter((4.0, 6.25))
+    runner = FakeRunner(
+        streams={
+            "claude": FakeStream(
+                ["not-json", '{"type":"system","subtype":"init","session_id":"s","model":"m"}']
+            )
+        }
+    )
+    outcome = ClaudeCodeEngine(runner, lambda: next(moments)).run(
+        EngineRequest("hello", ".", {}), lambda event: None
+    )
+    assert outcome.startup_seconds == 2.25
+
+
+def test_empty_stream_has_unknown_startup_even_with_a_clock() -> None:
+    engine = ClaudeCodeEngine(FakeRunner(), lambda: 4.0)
+    outcome = engine.run(EngineRequest("hello", ".", {}), lambda event: None)
+    assert outcome.startup_seconds is None
+
+
 CODEX_LINES = [
     '{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}',
     '{"type":"turn.started"}',

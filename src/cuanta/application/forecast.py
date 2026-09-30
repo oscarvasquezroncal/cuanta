@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 
 from cuanta.application.instinct import DecisionMaker
 from cuanta.application.routing import RoutePlan
@@ -48,9 +48,10 @@ from cuanta.domain.models import TIER_ORDER, ModelEntry, Tier, parse_tier, tier_
 from cuanta.domain.overhead import first_request_split, prompt_length
 from cuanta.domain.pricing import PER_MILLION, Price, PriceTable, base_model
 from cuanta.domain.progress import Status, note
-from cuanta.domain.real_costs import known_cost
+from cuanta.domain.real_costs import attempts, known_cost
 from cuanta.domain.routing import Provider, Role, RoleRoute, candidates, single_model
 from cuanta.domain.spectrum import estimated_tokens
+from cuanta.domain.time_forecast import TimeForecast, time_forecast
 from cuanta.ports.instinct import Instinct
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.progress import ProgressSink
@@ -121,10 +122,11 @@ class PlannedForecast:
     base_p50: float | None = None
     context: tuple[tuple[str, float], ...] = ()
     tiers: tuple[tuple[Role, Tier], ...] = ()
+    time: TimeForecast = field(default_factory=TimeForecast)
 
     @property
     def messages(self) -> tuple[Message, ...]:
-        return forecast_messages(self.envelope, self.prefix)
+        return (*forecast_messages(self.envelope, self.prefix), self.time.message)
 
     @property
     def warning(self) -> bool:
@@ -417,6 +419,7 @@ class Forecaster:
         clock_iso: Callable[[], str],
         advisor: JevEnvelope | None = None,
         shapes: Shapes | None = None,
+        metadata: Callable[[str], Mapping[str, object]] | None = None,
     ) -> None:
         self._ledger = ledger
         self._prices = prices
@@ -426,6 +429,7 @@ class Forecaster:
         self._clock_iso = clock_iso
         self._advisor = advisor
         self._shapes = shapes
+        self._metadata = metadata
 
     def plan(
         self,
@@ -439,6 +443,8 @@ class Forecaster:
         native: bool = False,
         model: str = "",
         max_turns: int = 0,
+        implementation_profile: str = "balanced",
+        variant: str = "",
     ) -> PlannedForecast:
         engine = provider.value
         runs = self._ledger.runs()
@@ -480,8 +486,25 @@ class Forecaster:
         result = envelope(inputs)
         context = ((RISK_KEY, plan.risk),) if plan.risk is not None else ()
         tiers = tuple((route.role, route.tier) for route in plan.routes if route.tier is not None)
+        items = attempts(runs, self._clock_iso())
+        metadata = (
+            {item.run.id: self._metadata(item.run.id) for item in items}
+            if self._metadata is not None
+            else {}
+        )
+        models = ", ".join(sorted({base_model(role.model) for role in result.roles}))
+        timing = time_forecast(
+            task_type,
+            models,
+            variant,
+            implementation_profile,
+            items,
+            self._ledger.events(EventQuery()) if metadata else (),
+            metadata,
+            {name: entry.resolved or entry.id for entry in entries for name in model_names(entry)},
+        )
         return PlannedForecast(
-            inputs, result, prefix_state(result, warm), context=context, tiers=tiers
+            inputs, result, prefix_state(result, warm), context=context, tiers=tiers, time=timing
         )
 
     def record(
@@ -495,6 +518,10 @@ class Forecaster:
         )
         if record is None:
             return final
+        features = {**json.loads(record.features), "time": asdict(final.time)}
+        record = replace(
+            record, features=json.dumps(features, sort_keys=True, separators=(",", ":"))
+        )
         if final.advice is not None and final.base_p50 is not None:
             features = {**json.loads(record.features), **final.advice.features(final.base_p50)}
             text = json.dumps(features, sort_keys=True, separators=(",", ":"))
@@ -697,6 +724,7 @@ def envelope_json(planned: PlannedForecast) -> dict[str, object]:
     ]
     payload["cache"] = planned.prefix.value
     payload["source"] = planned.source
+    payload["time"] = asdict(planned.time)
     payload["lines"] = [english(message) for message in (*planned.notes, *planned.messages)]
     return payload
 

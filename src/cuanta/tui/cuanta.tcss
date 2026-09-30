@@ -1033,7 +1033,7 @@ Button.chip.step-chip.-done, Button.chip.step-chip.-done:hover {
     color: $success;
 }
 
-Button.chip.depth-chip.-current, Button.chip.layout-chip.-current, Button.chip.provider-chip.-current {
+Button.chip.depth-chip.-current, Button.chip.layout-chip.-current, Button.chip.provider-chip.-current, Button.chip.implementation-chip.-current {
     background: $primary;
     color: $background;
     text-style: bold;

@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from cuanta.cli.document import Block, Document, Table
     from cuanta.domain.real_costs import CostReport, CostRow, PhaseCostRow
     from cuanta.domain.run_metrics import Reactions, RunMetrics
+    from cuanta.domain.time_costs import TimeMedianRow
 
 TYPE_LABELS = {
     "investigation": "audit",
@@ -109,6 +110,8 @@ def _costs(session: Session, since: str, metrics: bool = False) -> "Document":
                 "Missing requests or costs exclude an attempt; covered absent phases count zero."
             )
         )
+    if report.time_medians:
+        blocks.extend(time_median_blocks(report.time_medians))
     if report.empty:
         blocks.append(Hint("no mandates in this window · run cuanta mandate"))
     else:
@@ -244,6 +247,8 @@ def row_payload(row: "CostRow") -> dict[str, object]:
 
 
 def costs_payload(report: "CostReport") -> dict[str, object]:
+    from dataclasses import asdict
+
     return {
         "since": report.since,
         "by_type": [row_payload(row) for row in report.by_type],
@@ -251,7 +256,37 @@ def costs_payload(report: "CostReport") -> dict[str, object]:
         "by_completion": [row_payload(row) for row in report.by_completion],
         "total": row_payload(report.total),
         "phase_medians": [phase_payload(row) for row in report.phase_medians],
+        "time_medians": [asdict(row) for row in report.time_medians],
     }
+
+
+def time_median_blocks(rows: "tuple[TimeMedianRow, ...]") -> "list[Block]":
+    from cuanta.cli.document import Column, Hint, Table
+    from cuanta.cli.time import seconds
+
+    blocks: list[Block] = []
+    for row in rows:
+        group = " · ".join(
+            value or "n/a"
+            for value in (
+                TYPE_LABELS.get(row.task_type, row.task_type),
+                row.model,
+                row.variant,
+                row.profile,
+            )
+        )
+        blocks.append(
+            Table(
+                f"median seconds by type · model · variant · profile: {group}",
+                (Column("phase"), Column("median (s)", numeric=True), Column("known/runs")),
+                tuple(
+                    (phase.phase, seconds(phase.seconds), f"{phase.samples}/{row.runs}")
+                    for phase in row.phases
+                ),
+            )
+        )
+    blocks.append(Hint("Unknown durations and grouping values stay n/a; medians exclude unknowns."))
+    return blocks
 
 
 def share(value: float | None) -> str:

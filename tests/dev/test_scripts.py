@@ -268,7 +268,7 @@ def test_a_codex_team_trial_is_capped_and_counted_as_one_launch_per_role(tmp_pat
     team = replace(matrix.trials[0], engine="codex")
     command = trial.command(matrix, team)
     assert "--cross-engine" not in command
-    assert command[command.index("--cross-budget-usd") + 1] == "0.4"
+    assert command[command.index("--cross-budget-usd") + 1] == "0.40"
     audit = replace(team, type="investigation")
     assert trial.per_role(team) and not trial.per_role(audit)
     assert "--cross-budget-usd" not in trial.command(matrix, audit)

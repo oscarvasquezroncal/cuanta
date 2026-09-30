@@ -25,6 +25,7 @@ from cuanta.application.route_apply import RouteOptions
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.change_plan import ChangePlan, apply_overrides, move_plan, path_matches
+from cuanta.domain.claude_variants import VARIANTS
 from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile, turn_limit
 from cuanta.domain.drafts import Draft
 from cuanta.domain.guarantees import (
@@ -150,6 +151,9 @@ class MandateWizard(Vertical):
         self.budget = 0.0
         self.max_turns = 0
         self.depth = DEFAULT_DEPTH.value
+        self.implementation_profile = ""
+        self.implementation_variant = ""
+        self.implementation_model = ""
         self.custom_cap = False
         self.no_cap = False
         self.sandbox = False
@@ -315,6 +319,33 @@ class MandateWizard(Vertical):
                     compact=True,
                 )
         yield Static("", id="wiz-provider-note")
+        with FlowRow(id="implementation-row", classes="chips"):
+            for name in ("balanced", "fast"):
+                yield Button(
+                    t(f"wizard.profile_{name}"),
+                    id=f"implementation-{name}",
+                    classes="chip implementation-chip",
+                    compact=True,
+                )
+        with Vertical(id="implementation-options", classes="wiz-section"):
+            yield Label(t("wizard.implementation_model"))
+            yield Select(
+                [
+                    (t("wizard.implementation_opus"), "claude-opus-5-5"),
+                    (t("wizard.implementation_sonnet"), "claude-sonnet-5"),
+                ],
+                allow_blank=False,
+                value="claude-sonnet-5",
+                id="wiz-implementation-model",
+            )
+            yield Label(t("wizard.implementation_variant"))
+            yield Select(
+                [(t(f"wizard.variant_{name}"), name) for name in VARIANTS],
+                allow_blank=False,
+                value="low",
+                id="wiz-implementation-variant",
+            )
+            yield Static(t("wizard.implementation_pure"))
         yield Static("", id="wiz-verify-note")
         with Horizontal(id="sandbox-row"):
             yield Checkbox(t("wizard.sandbox"), False, id="wiz-sandbox", compact=True)
@@ -354,6 +385,7 @@ class MandateWizard(Vertical):
         self.query_one("#forge-gate").display = False
         self.query_one("#preview-card").display = False
         self.query_one("#wiz-verify-note").display = False
+        self.query_one("#implementation-options").display = False
         self.query_one("#wiz-cap-field").display = False
         self.query_one("#team-cards").display = False
         self.query_one("#team-simple-note").display = False
@@ -382,6 +414,8 @@ class MandateWizard(Vertical):
         forge_ready: bool = True,
         init_estimate: float | None = None,
         max_turns: int = 0,
+        implementation_profile: str = "balanced",
+        implementation_variant: str = "",
     ) -> None:
         ready = {name for name, installed in engines if installed}
         self.engines = tuple(name for name in ENGINE_ORDER if name in ready)
@@ -393,6 +427,12 @@ class MandateWizard(Vertical):
             selector.value = self.engine
         self.budget = budget
         self.max_turns = max_turns
+        self.implementation_profile = implementation_profile
+        self.implementation_variant = implementation_variant
+        if implementation_variant in VARIANTS:
+            self.query_one("#wiz-implementation-variant", Select).value = implementation_variant
+        if implementation_profile == "fast":
+            self.choose_implementation(implementation_profile)
         self.forge_ready = forge_ready
         self.init_estimate = init_estimate
         label = (
@@ -506,6 +546,9 @@ class MandateWizard(Vertical):
         understood = self.understanding
         return MandateOptions(
             engine=engine,
+            profile=self.implementation_profile,
+            variant=self.implementation_variant,
+            model=self.implementation_model,
             budget_usd=custom or 0.0,
             route=RouteOptions(
                 role_models=pinned,
@@ -554,6 +597,13 @@ class MandateWizard(Vertical):
         for depth in DEPTHS:
             chip = self.query_one(f"#depth-{depth.value}", Button)
             chip.set_class(depth.value == self.depth, "-current")
+        for name in ("balanced", "fast"):
+            button = self.query_one(f"#implementation-{name}", Button)
+            button.set_class(name == self.implementation_profile, "-current")
+            button.disabled = self.engine != "claude" or self.kind == INVESTIGATION
+        self.query_one("#implementation-options").display = (
+            self.implementation_profile == "fast" and self.engine == "claude"
+        )
         for provider in Provider:
             chip = self.query_one(f"#provider-{provider.value}", Button)
             chip.set_class(provider.value == self.engine, "-current")
@@ -573,16 +623,19 @@ class MandateWizard(Vertical):
     def _paint_depth(self) -> None:
         t = self._t
         chosen = profile(parse_depth(self.depth), self.kind)
-        self.query_one("#wiz-depth-note", Static).update(
-            Content.styled(
-                t(
-                    f"wizard.depth_{chosen.depth.value}_help",
-                    reads=chosen.read_budget,
-                    tier=t(f"models.tier_{chosen.tier_cap.value}"),
-                ),
-                "$text-muted",
-            )
+        description = t(
+            f"wizard.depth_{chosen.depth.value}_help",
+            reads=chosen.read_budget,
+            tier=t(f"models.tier_{chosen.tier_cap.value}"),
         )
+        if self.implementation_profile == "fast":
+            description = t(
+                "wizard.depth_fast_help",
+                reads=chosen.read_budget,
+                model=self.implementation_model,
+                variant=t(f"wizard.variant_{self.implementation_variant or 'low'}"),
+            )
+        self.query_one("#wiz-depth-note", Static).update(Content.styled(description, "$text-muted"))
         if self.no_cap:
             note = t("wizard.cap_none")
         elif self.custom_cap:
@@ -619,7 +672,9 @@ class MandateWizard(Vertical):
         t = self._t
         kind = t(f"wizard.intent_{self.kind}") if self.kind else t("wizard.untyped")
         team = (
-            ", ".join(t(f"models.role_{route.role.value}") for route in self.plan.routes)
+            t("wizard.profile_fast")
+            if self.implementation_profile == "fast"
+            else ", ".join(t(f"models.role_{route.role.value}") for route in self.plan.routes)
             if self.plan is not None and not self.simple
             else t("wizard.simple_mode_short")
             if self.simple
@@ -776,6 +831,8 @@ class MandateWizard(Vertical):
                         for index, path in enumerate(paths)
                     )
                 self.query_one(f"#plan-{role}-area").display = bool(paths)
+            if revision != self._change_revision or request != self.request():
+                return
             self.change_plan = plan
             for chip in self.query(PlanChip):
                 chip.disabled = False
@@ -959,6 +1016,16 @@ class MandateWizard(Vertical):
             self.queue_change_plan()
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id in {"wiz-implementation-model", "wiz-implementation-variant"}:
+            if not isinstance(event.value, str) or self.implementation_profile != "fast":
+                return
+            if event.select.id == "wiz-implementation-model":
+                self.implementation_model = event.value
+            else:
+                self.implementation_variant = event.value
+            self._paint_depth()
+            self.refresh_team()
+            return
         if event.select.id == "wiz-deliverable":
             self.queue_change_plan()
             return
@@ -1277,6 +1344,8 @@ class MandateWizard(Vertical):
         selects: list[Select[str]] = []
         self.scout_launch = estimate.shape is not None and estimate.shape.launch
         routes = [route for route in plan.routes if not self.per_role or route.role in TEAM_ROLES]
+        if self.implementation_profile == "fast":
+            routes = []
         for route in routes:
             model = route.model.id if route.model else t("wizard.engine_default")
             tier = t(f"models.tier_{route.tier.value}") if route.tier else "–"
@@ -1332,7 +1401,7 @@ class MandateWizard(Vertical):
         self.estimate = estimate
         self._shaped_revision = revision
         self.query_one("#team-simple-note").display = False
-        cards.display = True
+        cards.display = self.implementation_profile != "fast"
         self.query_one("#wiz-estimate", Static).update(self._estimate_content(estimate))
         self._paint_summary()
 
@@ -1387,10 +1456,14 @@ class MandateWizard(Vertical):
 
     @property
     def per_role(self) -> bool:
+        if self.implementation_profile == "fast":
+            return False
         return runs_per_role(self.engine, self.pipeline) or (self.pipeline and self.scout_launch)
 
     @property
     def run_note(self) -> str:
+        if self.implementation_profile == "fast":
+            return "wizard.provider_single"
         if self.per_role:
             return "wizard.provider_per_role"
         if self.pipeline and self.engine == Provider.CLAUDE:
@@ -1461,7 +1534,24 @@ class MandateWizard(Vertical):
             "answer-": lambda rest, _: self.answer(*rest.partition("-")[::2]),
             "depth-": lambda rest, _: self.choose_depth(rest),
             "provider-": lambda rest, _: self.choose_provider(rest),
+            "implementation-": lambda rest, _: self.choose_implementation(rest),
         }
+
+    def choose_implementation(self, name: str) -> None:
+        self.implementation_profile = name
+        fast = name == "fast"
+        self.query_one("#implementation-options").display = fast
+        for value in ("balanced", "fast"):
+            self.query_one(f"#implementation-{value}", Button).set_class(value == name, "-current")
+        model = self.query_one("#wiz-implementation-model", Select).value
+        variant = self.query_one("#wiz-implementation-variant", Select).value
+        self.implementation_model = model if fast and isinstance(model, str) else ""
+        self.implementation_variant = variant if fast and isinstance(variant, str) else ""
+        if fast and self.engine != "claude":
+            self.choose_provider("claude")
+        self._paint()
+        self._paint_depth()
+        self.refresh_team()
 
     def understand_now(self) -> None:
         if self.check_story():

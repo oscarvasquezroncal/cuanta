@@ -38,6 +38,7 @@ class SandboxCopy:
     python_path: str = ""
     unreadable: tuple[str, ...] = ()
     state: Mapping[str, str] = field(default_factory=dict)
+    reused: bool = False
 
     def hashes(self) -> dict[str, str]:
         return {path: item.sha256 for path, item in self.base.items()}

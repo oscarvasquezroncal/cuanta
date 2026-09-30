@@ -386,6 +386,297 @@
       "leak": "repeated_read"
     }
   ],
+  "time": {
+    "phases": [
+      {
+        "phase": "index_refresh",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "forecast_plan",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "sandbox_copy",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "engine_startup",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "session_title",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "api_requests",
+        "samples": 4,
+        "seconds": null
+      },
+      {
+        "phase": "tools",
+        "samples": 4,
+        "seconds": null
+      },
+      {
+        "phase": "hooks",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "verification",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "repair",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "handoff",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "snapshots_guards",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "after_image",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "copy_removal",
+        "samples": 0,
+        "seconds": null
+      },
+      {
+        "phase": "tool:Bash",
+        "samples": 1,
+        "seconds": null
+      },
+      {
+        "phase": "tool:Edit",
+        "samples": 1,
+        "seconds": null
+      },
+      {
+        "phase": "tool:Read",
+        "samples": 2,
+        "seconds": null
+      }
+    ],
+    "requests": [
+      {
+        "duration_seconds": null,
+        "model": "claude-opus",
+        "purpose": "",
+        "request_id": "1",
+        "role": "main",
+        "ttft_seconds": null
+      },
+      {
+        "duration_seconds": null,
+        "model": "claude-opus",
+        "purpose": "",
+        "request_id": "3",
+        "role": "main",
+        "ttft_seconds": null
+      },
+      {
+        "duration_seconds": null,
+        "model": "claude-sonnet",
+        "purpose": "",
+        "request_id": "6",
+        "role": "tester",
+        "ttft_seconds": null
+      },
+      {
+        "duration_seconds": null,
+        "model": "claude-opus",
+        "purpose": "",
+        "request_id": "8",
+        "role": "main",
+        "ttft_seconds": null
+      }
+    ],
+    "roles": [
+      {
+        "phases": [
+          {
+            "phase": "index_refresh",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "forecast_plan",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "sandbox_copy",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "engine_startup",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "session_title",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "api_requests",
+            "samples": 3,
+            "seconds": null
+          },
+          {
+            "phase": "tools",
+            "samples": 3,
+            "seconds": null
+          },
+          {
+            "phase": "hooks",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "verification",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "repair",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "handoff",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "snapshots_guards",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "after_image",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "copy_removal",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "tool:Edit",
+            "samples": 1,
+            "seconds": null
+          },
+          {
+            "phase": "tool:Read",
+            "samples": 2,
+            "seconds": null
+          }
+        ],
+        "role": "main"
+      },
+      {
+        "phases": [
+          {
+            "phase": "index_refresh",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "forecast_plan",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "sandbox_copy",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "engine_startup",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "session_title",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "api_requests",
+            "samples": 1,
+            "seconds": null
+          },
+          {
+            "phase": "tools",
+            "samples": 1,
+            "seconds": null
+          },
+          {
+            "phase": "hooks",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "verification",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "repair",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "handoff",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "snapshots_guards",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "after_image",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "copy_removal",
+            "samples": 0,
+            "seconds": null
+          },
+          {
+            "phase": "tool:Bash",
+            "samples": 1,
+            "seconds": null
+          }
+        ],
+        "role": "tester"
+      }
+    ],
+    "wall_seconds": null
+  },
   "totals": {
     "cache_read": 86000,
     "cache_share": 0.8866,

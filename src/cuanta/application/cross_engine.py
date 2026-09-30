@@ -26,14 +26,16 @@ from cuanta.application.steering import (
     role_forecast,
     role_steering,
 )
+from cuanta.application.timing import PhaseRecorder
 from cuanta.domain.agents import AgentDefinition, role_of
 from cuanta.domain.capsules import capsule_id
 from cuanta.domain.change_plan import ChangePlan, guarded, plan_metrics
+from cuanta.domain.claude_variants import MODEL_ALIASES, resolve_variant
 from cuanta.domain.costs import CostSource, sum_costs
 from cuanta.domain.depth import DEFAULT_DEPTH, MAX_TURNS
 from cuanta.domain.engine import BUDGET_LIMIT_SUBTYPE, GOVERNOR_STOP_SUBTYPE, EngineOutcome
 from cuanta.domain.envelope import PIPELINE_SHAPE, SCOUT_SHAPE, is_fix
-from cuanta.domain.errors import CuantaError
+from cuanta.domain.errors import CuantaError, DomainFailure
 from cuanta.domain.estimates import RunEstimate
 from cuanta.domain.evidence_pack import (
     PackCheck,
@@ -63,6 +65,13 @@ from cuanta.domain.governor_report import (
     governor_metrics,
 )
 from cuanta.domain.guarantees import readonly_unavailable
+from cuanta.domain.implementation import (
+    REPAIR_FEEDBACK_BYTES,
+    ImplementationReport,
+    VerificationDelta,
+    implementation_prompt,
+    repair_feedback,
+)
 from cuanta.domain.mandate import (
     INLINE_EVIDENCE_LIMIT,
     INVESTIGATION,
@@ -70,6 +79,7 @@ from cuanta.domain.mandate import (
     clip_evidence,
 )
 from cuanta.domain.messages import Message, msg
+from cuanta.domain.models import ModelEntry
 from cuanta.domain.pack import ContextPack
 from cuanta.domain.progress import Status, finished, note, started
 from cuanta.domain.read_discipline import READ_LINE_LIMIT, discipline_prompt
@@ -122,6 +132,39 @@ WRITING_ROLES = frozenset({Role.SENIOR, Role.TESTER, Role.DOCS})
 REPAIR_MINIMUM_USD = 0.01
 BUDGET_EPSILON = 1e-9
 SHOWN_PATHS = 5
+
+
+def pure_plan(plan: RoutePlan, model: str) -> RoutePlan:
+    active = tuple(route for route in plan.routes if route.model is not None)
+    if any(route.engine != "claude" for route in active):
+        raise DomainFailure("pure implementation requires every role to use Claude")
+    names = {route.model.id for route in active if route.model is not None}
+    chosen = model or (next(iter(names)) if len(names) == 1 else "")
+    if not chosen:
+        raise DomainFailure("pure implementation requires one explicit model")
+    resolved = MODEL_ALIASES.get(chosen, chosen)
+    for pin in plan.policy.role_models.values():
+        name = pin.removeprefix("claude:")
+        if MODEL_ALIASES.get(name, name) != resolved:
+            raise DomainFailure("a role model conflicts with the pure implementation model")
+    entry = next(
+        (
+            route.model
+            for route in active
+            if route.model is not None
+            and MODEL_ALIASES.get(route.model.id, route.model.id) == resolved
+        ),
+        ModelEntry("claude", chosen, chosen, "anthropic", resolved=resolved),
+    )
+    return replace(
+        plan,
+        routes=tuple(
+            replace(route, model=entry, tier=entry.tier) if route.model is not None else route
+            for route in plan.routes
+        ),
+    )
+
+
 NO_NODE_COMMANDS = "Do not run node, npm or npx commands (builds or tests)"
 
 ReadRanges = tuple[tuple[str, int, int], ...]
@@ -170,10 +213,15 @@ class VerificationRound:
     attempt: int
     results: tuple[VerifyResult, ...]
     outputs: tuple[str, ...] = ()
+    delta: VerificationDelta | None = None
 
     @property
     def passed(self) -> bool:
-        return all(result.passed for result in self.results)
+        return (
+            self.delta.passed
+            if self.delta is not None
+            else all(result.passed for result in self.results)
+        )
 
     @property
     def seconds(self) -> float:
@@ -375,15 +423,16 @@ def role_prompt(
 
 
 def repair_prompt(prompt: str, results: Sequence[VerifyResult]) -> str:
+    failed = [result for result in results if not result.passed]
+    share = REPAIR_FEEDBACK_BYTES // max(1, len(failed))
     failures = "\n".join(
         "\n".join(
             (
                 f"- `{result.command}` exit {result.exit_code}",
-                *(f"  {line}" for line in result.errors),
+                *(f"  {line}" for line in repair_feedback(result.errors, share).splitlines()),
             )
         )
-        for result in results
-        if not result.passed
+        for result in failed
     )
     return (
         f"{prompt}\n\n=== REPAIR TURN ===\n"
@@ -536,7 +585,20 @@ class CrossEnginePipeline:
         read_discipline: Callable[[str], bool] | None = None,
         read_max_lines: int = READ_LINE_LIMIT,
         docs_mode: DocsMode = DocsMode.ON,
+        timing: PhaseRecorder | None = None,
+        implementation_profile: str = "balanced",
+        variant: str = "",
+        pure: bool = False,
+        model: str = "",
     ) -> None:
+        self._implementation_profile = implementation_profile
+        self._variant = variant
+        self._pure = pure
+        self._model = model
+        self._timing = timing or PhaseRecorder()
+        self._implementations: dict[str, ImplementationReport] = {}
+        self._timing_run = ""
+        self._timing_role = ""
         self._docs_mode = docs_mode
         self._read_discipline = read_discipline
         self._read_max_lines = read_max_lines
@@ -610,7 +672,8 @@ class CrossEnginePipeline:
         return pack.stable_prefix, pack.excerpts, True
 
     def _snap(self) -> Mapping[str, str]:
-        return self._snapshot() if self._snapshot is not None else {}
+        with self._timing.measure("snapshots_guards", self._timing_run, self._timing_role):
+            return self._snapshot() if self._snapshot is not None else {}
 
     def _reads(self, run_id: str) -> ReadRanges:
         if self._reads_of is None:
@@ -626,7 +689,8 @@ class CrossEnginePipeline:
         return tuple(resolved)
 
     def _refresh(self, chain: HandoffChain) -> HandoffChain:
-        return chain if self._lines_of is None else refresh_chain(chain, self._lines_of)
+        with self._timing.measure("handoff", self._timing_run, self._timing_role):
+            return chain if self._lines_of is None else refresh_chain(chain, self._lines_of)
 
     def _stamp(self, handoff: RoleHandoff) -> RoleHandoff:
         if self._lines_of is None:
@@ -634,6 +698,7 @@ class CrossEnginePipeline:
         return replace(handoff, facts=refresh_facts(handoff.facts, self._lines_of))
 
     def _launch(self, turn: _Turn, spec: LaunchSpec, steering: Steering | None = None) -> Launch:
+        spec = replace(spec, role=turn.role.value)
         engine = turn.launcher.engine
         self._active = engine
         if self._halted:
@@ -641,17 +706,25 @@ class CrossEnginePipeline:
 
         def started(run_id: str) -> None:
             self._started(run_id)
+            self._timing_run = run_id
+            self._timing.flush(run_id)
             if steering is not None:
                 steering.started(run_id)
 
         try:
             if steering is None:
-                return turn.launcher.launch(
-                    self._isolated(spec, turn.engine), lambda _: None, self._started
+                launch = turn.launcher.launch(
+                    self._isolated(spec, turn.engine), lambda _: None, started
                 )
-            return turn.launcher.launch(
-                replace(self._isolated(spec, turn.engine), steer=True), steering, started
-            )
+            else:
+                launch = turn.launcher.launch(
+                    replace(self._isolated(spec, turn.engine), steer=True), steering, started
+                )
+            self._timing_run = launch.run.id
+            if launch.implementation is not None:
+                self._implementations[launch.run.id] = launch.implementation
+            self._timing.flush(launch.run.id)
+            return launch
         finally:
             self._active = None
 
@@ -674,11 +747,27 @@ class CrossEnginePipeline:
         return state.report(final, msg("cross.stopped"))
 
     def run(self, request: MandateRequest, plan: RoutePlan, progress: ProgressSink) -> CrossReport:
+        if self._implementation_profile == "fast":
+            raise DomainFailure("fast implementation uses one native Claude launch")
+        if self._pure:
+            plan = pure_plan(plan, self._model)
+        if self._variant and any(
+            route.engine != "claude" for route in plan.routes if route.model is not None
+        ):
+            raise DomainFailure("Claude variants require every role to use Claude")
+        self._timing.reset()
+        self._timing_run = ""
+        self._timing_role = ""
+        wall_start = self._timing.start()
         if self._refresh_index is not None:
-            self._refresh_index()
-        protection = self._change_plan(request) if self._change_plan is not None else None
+            with self._timing.measure("index_refresh"):
+                self._refresh_index()
+        with self._timing.measure("forecast_plan"):
+            protection = self._change_plan(request) if self._change_plan is not None else None
         before = self._snap()
         result = self._run(request, plan, progress, protection, before)
+        self._timing_run = result.steps[0].run_id if result.steps else ""
+        self._timing_role = ""
         after = self._snap()
         outputs = set(result.verification_outputs)
         changed = tuple(path for path in _diff(before, after) if path not in outputs)
@@ -695,6 +784,9 @@ class CrossEnginePipeline:
             self._save_metrics(result.steps[0].run_id, cross_metrics(result))
         if result.steps and self._learn_run is not None:
             self._learn_run(result.steps[0].run_id)
+        if result.steps:
+            self._timing.flush(result.steps[0].run_id)
+            self._timing.record("run_wall", wall_start, result.steps[0].run_id)
         return result
 
     def _run(
@@ -721,6 +813,9 @@ class CrossEnginePipeline:
             if (route := plan.route(role)) is not None and route.model is not None
         )
         verify = protection.verify if protection is not None else ()
+        definitions = self._definitions()
+        if self._preflight(request, plan, routed, verify, definitions):
+            baseline = self._snap()
         repairable = bool(verify) and self._verifier is not None
         split = (
             self._allocator(plan, request.type, self._depth, self._budget, repairable, docs_off)
@@ -760,12 +855,14 @@ class CrossEnginePipeline:
             )
             progress.publish(note(Status.INFO, msg(key, cap=f"{reserve:.4f}")))
         self.completed = state.steps
-        definitions = self._definitions()
         for role in order:
             halt = self._halt(state)
             if halt is not None:
                 return halt
-            turn = self._admit(state, role, definitions)
+            self._timing_run = ""
+            self._timing_role = role.value
+            with self._timing.measure("forecast_plan", role=role.value):
+                turn = self._admit(state, role, definitions)
             if isinstance(turn, CrossReport):
                 return turn
             if turn is None:
@@ -783,6 +880,45 @@ class CrossEnginePipeline:
         elif final is CompletionState.PARTIAL and state.last_round is not None:
             cause = msg("cross.verify_unresolved", role=state.last_round.role.value)
         return state.report(final, cause)
+
+    def _preflight(
+        self,
+        request: MandateRequest,
+        plan: RoutePlan,
+        routed: Sequence[Role],
+        verify: tuple[str, ...],
+        definitions: Sequence[AgentDefinition],
+    ) -> bool:
+        if request.type == INVESTIGATION:
+            return False
+        checked = False
+        for role in routed:
+            route = plan.route(role)
+            if route is None or role in READ_ONLY_ROLES:
+                continue
+            launcher = self._launchers(route.engine)
+            if launcher is None:
+                continue
+            checked = True
+            definition = definition_for(role, definitions)
+            body = definition.prompt if definition is not None else ""
+            advice = guidance(role, False, verify, no_builds=route.engine in self._build_blocked)
+            prompt = "\n\n".join(part for part in (body, request_block(request), advice) if part)
+            spec = LaunchSpec(
+                kind=CROSS_KIND,
+                prompt=prompt,
+                cwd=self._cwd,
+                allowed_tools=(),
+                scope=role.value,
+                task_type=request.type,
+                depth=self._depth,
+                role=role.value,
+                profile=self._implementation_profile,
+                verify_commands=verify,
+            )
+            if launcher.preflight(spec):
+                return True
+        return checked
 
     def _admit(
         self, state: _Pass, role: Role, definitions: Sequence[AgentDefinition]
@@ -940,6 +1076,12 @@ class CrossEnginePipeline:
             stable_prefix=packed,
             index_tools=indexed,
             read_discipline=True if disciplined else None,
+            verify_commands=state.verify if not read_only else (),
+            append_system_prompt=implementation_prompt(False, False) if not read_only else "",
+            profile=self._implementation_profile,
+            variant=self._variant,
+            pure=self._pure,
+            effort=resolve_variant(self._variant, model).effort if self._variant else "",
         )
 
     def _scout_prompt(
@@ -1119,6 +1261,8 @@ class CrossEnginePipeline:
                 self._budget,
                 state.protection,
                 max_turns=self._max_turns if provider is Provider.CLAUDE else 0,
+                implementation_profile=self._implementation_profile,
+                variant=self._variant,
             )
             stored = self._forecaster.record(run_id, planned, state.request)
         except (CuantaError, ValueError) as error:
@@ -1314,6 +1458,10 @@ class CrossEnginePipeline:
         fresh = self._launch(turn, spec, steering)
         return replace(turn, spec=spec, role_cap=left), fresh, (launch.run.id,)
 
+    def _timed_forecast(self, state: _Pass, turn: _Turn) -> _Turn:
+        with self._timing.measure("forecast_plan", role=turn.role.value):
+            return self._root_forecast(state, turn)
+
     def _perform(self, state: _Pass, turn: _Turn) -> CrossReport | None:
         role = turn.role
         chain = self._refresh(merge_chain(state.handoffs))
@@ -1323,7 +1471,7 @@ class CrossEnginePipeline:
             created = self._new_files.prepare(turn.spec.change_plan)
             if created:
                 state.progress.publish(note(Status.INFO, msg("cross.prepared", count=len(created))))
-        turn = self._root_forecast(state, turn)
+        turn = self._timed_forecast(state, turn)
         turn, launch, earlier = self._steered(state, turn)
         self._record_cap(launch.run.id, turn.spec.max_budget_usd, turn.role_cap)
         state.parent = state.parent or launch.run.id
@@ -1345,23 +1493,24 @@ class CrossEnginePipeline:
         clipped, capsule = self._capsule(text)
         reads = tuple(item for run_id in (*earlier, launch.run.id) for item in self._reads(run_id))
         stopped = subtype if budget_stop and not carried else ""
-        handoff = (
-            self._scouted(state, turn, text, reads, launch.run.id, stopped)
-            if role is Role.SCOUT
-            else self._stamp(
-                build_handoff(
-                    text,
-                    role.value,
-                    engine=turn.engine,
-                    model=turn.model,
-                    changed=(*changed, *unreadable),
-                    reads=reads,
-                    run_id=launch.run.id,
-                    capsule=capsule,
-                    stopped=stopped,
+        with self._timing.measure("handoff", launch.run.id, role.value):
+            handoff = (
+                self._scouted(state, turn, text, reads, launch.run.id, stopped)
+                if role is Role.SCOUT
+                else self._stamp(
+                    build_handoff(
+                        text,
+                        role.value,
+                        engine=turn.engine,
+                        model=turn.model,
+                        changed=(*changed, *unreadable),
+                        reads=reads,
+                        run_id=launch.run.id,
+                        capsule=capsule,
+                        stopped=stopped,
+                    )
                 )
             )
-        )
         covered = _folded(chain.covered)
         read_files = tuple(dict.fromkeys(path for path, _, _ in reads))
         step = CrossStep(
@@ -1400,7 +1549,8 @@ class CrossEnginePipeline:
         )
         if role is Role.SENIOR:
             self._senior_scope(state, handoff)
-        stop = self._settle(state, turn, handoff, changed, ok, budget_stop, carried, subtype)
+        with self._timing.measure("snapshots_guards", launch.run.id, role.value):
+            stop = self._settle(state, turn, handoff, changed, ok, budget_stop, carried, subtype)
         if stop is not None:
             return stop
         if role in WRITING_ROLES and changed and not docs_only(changed):
@@ -1543,7 +1693,10 @@ class CrossEnginePipeline:
             started(key, msg("cross.verify_commands", commands=", ".join(state.verify)))
         )
         before = self._snap()
-        results = self._verifier(state.verify, self._stopped) if self._verifier is not None else ()
+        with self._timing.measure("verification", self.current, role.value):
+            results = (
+                self._verifier(state.verify, self._stopped) if self._verifier is not None else ()
+            )
         after = self._snap()
         state.baseline = after
         found = VerificationRound(role, attempt, results, _diff(before, after))
@@ -1572,6 +1725,20 @@ class CrossEnginePipeline:
         ok: bool,
         cost: float | None,
     ) -> tuple[RoleHandoff, CrossReport | None]:
+        implementation = self._implementations.pop(handoff.run_id, None)
+        if implementation is not None:
+            for attempt, check in enumerate(implementation.checks, 1):
+                found = VerificationRound(turn.role, attempt, check.results, delta=check)
+                state.rounds.append(found)
+                state.last_round = found
+            if implementation.checks:
+                handoff = replace(handoff, verification=implementation.checks[-1].results)
+            if not implementation.passed:
+                state.handoffs.append(handoff)
+                return handoff, state.report(
+                    CompletionState.FAILED, msg("cross.verify_unresolved", role=turn.role.value)
+                )
+            return handoff, self._guarded(state, handoff) or self._halt(state, handoff)
         if not state.verify or self._verifier is None:
             return handoff, None
         found = self._verify(state, turn.role, 1)
@@ -1599,7 +1766,9 @@ class CrossEnginePipeline:
             pipeline_budget_usd=0.0,
         )
         hidden = frozenset(self._hidden(turn))
+        repair_start = self._timing.start()
         fixed = self._launch(turn, repair)
+        self._timing.record("repair", repair_start, fixed.run.id, turn.role.value)
         self._record_cap(fixed.run.id, repair.max_budget_usd, left_share)
         state.spent = sum_costs((state.spent, fixed.run.cost_usd))
         unreadable = self._unreadable(state, turn, hidden)

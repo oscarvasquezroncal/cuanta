@@ -5,6 +5,7 @@ from dataclasses import replace
 
 from cuanta.adapters.engines.base import LineParser, StreamingEngine
 from cuanta.adapters.engines.claude_stream import parse_line
+from cuanta.domain.claude_variants import resolve_variant, variant_settings
 from cuanta.domain.engine import EngineEvent, EngineRequest
 from cuanta.domain.mandate import (
     READ_ONLY_DENIED,
@@ -82,8 +83,12 @@ def build_command(binary: tuple[str, ...], request: EngineRequest) -> list[str]:
         command.extend(["--max-turns", str(request.max_turns)])
     if request.agents_file:
         command.extend(["--agents", request.agents_file])
-    if request.effort:
-        command.extend(["--effort", request.effort])
+    variant = resolve_variant(request.variant, request.model)
+    effort = variant.effort or request.effort
+    if effort:
+        command.extend(["--effort", effort])
+    if request.pure:
+        command.extend(["--prompt-suggestions", "false"])
     if request.append_system_prompt:
         command.extend(["--append-system-prompt", request.append_system_prompt])
     if request.stable_prefix:
@@ -94,6 +99,9 @@ def build_command(binary: tuple[str, ...], request: EngineRequest) -> list[str]:
         command.extend(["--strict-mcp-config", "--mcp-config", request.mcp_config])
     if request.settings_file:
         command.extend(["--settings", request.settings_file])
+    elif request.variant or request.pure:
+        settings = variant_settings(request.model, request.variant, request.pure)
+        command.extend(["--settings", json.dumps(settings, separators=(",", ":"))])
     if request.setting_sources is not None:
         command.extend(["--setting-sources", ",".join(request.setting_sources)])
     return command

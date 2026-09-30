@@ -58,6 +58,9 @@ class MandateArgs:
     keep: bool = False
     scout_mode: str = ""
     classic: bool = False
+    profile: str = ""
+    variant: str = ""
+    pure: bool = False
 
 
 def mandate_command(
@@ -81,6 +84,19 @@ def mandate_command(
     ] = False,
     engine: Annotated[str, typer.Option("--engine", help="claude, codex or opencode.")] = "",
     model: Annotated[str, typer.Option("--model", help="Model for the run.")] = "",
+    profile: Annotated[
+        str, typer.Option("--profile", help="Implementation profile: balanced or fast.")
+    ] = "",
+    variant: Annotated[
+        str,
+        typer.Option(
+            "--variant",
+            help="Claude effort, ultracode, fast, or fast-<effort> (Opus fast output).",
+        ),
+    ] = "",
+    pure: Annotated[
+        bool, typer.Option("--pure", help="Pin Claude helpers and subagents to the chosen model.")
+    ] = False,
     budget: Annotated[
         float,
         typer.Option("--max-budget-usd", help="Spend cap; enforcement depends on the engine."),
@@ -181,6 +197,9 @@ def mandate_command(
         from_failure=from_failure,
         engine=engine,
         model=model,
+        profile=profile,
+        variant=variant,
+        pure=pure,
         budget=budget,
         hu=hu,
         dry_run=dry_run,
@@ -269,12 +288,15 @@ def _options(args: MandateArgs) -> "MandateOptions":
     from cuanta.application.mandate_flow import MandateOptions
     from cuanta.application.route_apply import RouteOptions
     from cuanta.cli.commands.route import PRESETS, ROUTE_MODES, check_choice, parse_role_models
+    from cuanta.domain.claude_variants import VARIANTS
     from cuanta.domain.depth import DEPTHS
     from cuanta.domain.errors import DomainFailure
     from cuanta.domain.mandate import Shape
     from cuanta.domain.plugins import SESSIONS
 
     check_choice(args.route, ROUTE_MODES, "--route")
+    check_choice(args.profile, ("balanced", "fast"), "--profile")
+    check_choice(args.variant, VARIANTS, "--variant")
     check_choice(args.session, SESSIONS, "--session")
     check_choice(args.preset, PRESETS, "--preset")
     check_choice(args.depth, tuple(depth.value for depth in DEPTHS), "--depth")
@@ -286,6 +308,9 @@ def _options(args: MandateArgs) -> "MandateOptions":
     return MandateOptions(
         engine=args.engine,
         model=args.model,
+        profile=args.profile,
+        variant=args.variant,
+        pure=args.pure,
         budget_usd=args.budget,
         hu=args.hu,
         parent=args.parent,
@@ -664,13 +689,18 @@ def run_cross_engine(
             max_turns,
             args.keep,
             options.depth,
+            implementation=options,
         )
         if isolated.cross is None:
             raise RuntimeError("sandbox cross-engine run ended without a report")
         report = isolated.cross
     else:
         pipeline = container.cross_engine(
-            container.shared_ledger(), budget, max_turns, depth=options.depth
+            container.shared_ledger(),
+            budget,
+            max_turns,
+            depth=options.depth,
+            implementation=options,
         )
         report = pipeline.run(request, plan, session.presenter)
     blocks = cross_blocks(report, budget, per_role_title(provider))
@@ -686,7 +716,12 @@ def run_cross_engine(
     if isolated is not None:
         payload["sandbox"] = sandbox_payload(isolated)
     ok = report.ok and not guard_tripped(isolated)
-    return Document(blocks=tuple(blocks), payload=payload, exit_code=0 if ok else 1)
+    return Document(
+        blocks=tuple(blocks),
+        payload=payload,
+        exit_code=0 if ok else 1,
+        after_render=isolated.shown if isolated is not None else None,
+    )
 
 
 def publish_cross_team(
@@ -1064,6 +1099,7 @@ def sandbox_payload(result: "SandboxResult") -> dict[str, object]:
     return {
         "copy_root": result.copy_root,
         "removed": result.removed,
+        "cleanup_pending": result.after_shown is not None,
         "record_error": result.record_error or None,
         "trial": trial_payload(result.trial) if result.trial is not None else None,
     }
@@ -1075,7 +1111,13 @@ def sandbox_blocks(result: "SandboxResult") -> "list[Block]":
     from cuanta.domain.progress import Status
 
     trial = result.trial
-    where = "removed" if result.removed else f"kept at {result.copy_root}"
+    where = (
+        "cleanup after result"
+        if result.after_shown is not None
+        else "removed"
+        if result.removed
+        else f"kept at {result.copy_root}"
+    )
     rows = [("isolated copy", where)]
     blocks: list[Block] = []
     if result.record_error:
@@ -1180,6 +1222,7 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
         ("utilization", f"{index} (heuristic v1)"),
         *audit_rows(report),
         *scout_rows(parse_scout(report.scout, docs_json(report.docs))),
+        *implementation_rows(report),
     )
     panel = Panel(
         "purr" if report.ok else "hiss",
@@ -1204,4 +1247,31 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
     if isolated is not None:
         payload["sandbox"] = sandbox_payload(isolated)
     ok = report.ok and not guard_tripped(isolated)
-    return Document(blocks=tuple(blocks), payload=payload, exit_code=0 if ok else 1)
+    return Document(
+        blocks=tuple(blocks),
+        payload=payload,
+        exit_code=0 if ok else 1,
+        after_render=isolated.shown if isolated is not None else None,
+    )
+
+
+def implementation_rows(report: "MandateReport") -> tuple[tuple[str, str], ...]:
+    implementation = report.implementation
+    if implementation is None:
+        return ()
+    rows = [("implementation", "green" if implementation.passed else "red")]
+    rows.append(("repair rounds", f"{implementation.repairs}/{implementation.repair_limit}"))
+    rows.append(
+        (
+            "repair rounds remaining",
+            str(max(0, implementation.repair_limit - implementation.repairs)),
+        )
+    )
+    rows.extend((step.title, step.state) for step in implementation.steps)
+    if implementation.reason:
+        rows.append(("implementation stop", implementation.reason.replace("_", " ")))
+    if implementation.checks:
+        last = implementation.checks[-1]
+        rows.extend(("introduced error", error) for error in last.introduced)
+        rows.extend(("pre-existing error", error) for error in last.preexisting)
+    return tuple(rows)

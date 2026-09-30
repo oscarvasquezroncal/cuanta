@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -111,3 +112,4 @@ class Document:
     blocks: tuple[Block, ...]
     payload: dict[str, JsonValue] = field(default_factory=dict)
     exit_code: int = 0
+    after_render: Callable[[], None] | None = field(default=None, compare=False, repr=False)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -11,6 +12,7 @@ import pytest
 from cuanta.adapters.engines.claude_code import ClaudeCodeEngine
 from cuanta.adapters.engines.opencode import OpenCodeEngine
 from cuanta.adapters.system.process_runner import SubprocessRunner
+from cuanta.adapters.system.process_tree import ProcessTree, creation_flags
 from cuanta.adapters.system.shell import descendants, process_table
 from cuanta.domain.engine import BUDGET_LIMIT_SUBTYPE, EngineRequest
 from tests.support import FIXTURES
@@ -149,3 +151,41 @@ def test_closing_a_stream_stops_the_tree_before_a_prompt_blocked_on_stdin(tmp_pa
     while _alive(grandchild) and time.monotonic() < deadline:
         time.sleep(0.1)
     assert not _alive(grandchild)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="job objects exist only on Windows")
+@pytest.mark.parametrize("breakaway", [True, False])
+def test_only_a_breakaway_job_lets_a_detached_worker_outlive_its_teardown(
+    tmp_path: Path, breakaway: bool
+) -> None:
+    script = tmp_path / "spawner.py"
+    marker = tmp_path / "worker.txt"
+    script.write_text(
+        "import subprocess, sys\n"
+        "from cuanta.adapters.system.process_tree import CREATE_BREAKAWAY_FROM_JOB\n"
+        "code = 'import pathlib, sys, time; time.sleep(1.5); "
+        'pathlib.Path(sys.argv[1]).write_text("alive")\'\n'
+        "subprocess.Popen([sys.executable, '-c', code, sys.argv[1]], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+        "close_fds=True, creationflags=subprocess.CREATE_NO_WINDOW "
+        "| subprocess.DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB)\n"
+        "print('spawned', flush=True)\n",
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [sys.executable, str(script), str(marker)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        creationflags=creation_flags(),
+    )
+    tree = ProcessTree(process, suspended=True, breakaway=breakaway)
+    try:
+        output = process.communicate(timeout=30)[0]
+    finally:
+        tree.close()
+    assert output.strip() == "spawned"
+    deadline = time.monotonic() + (8 if breakaway else 3)
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert marker.exists() is breakaway

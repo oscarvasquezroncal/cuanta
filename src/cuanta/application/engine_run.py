@@ -5,8 +5,11 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 
+from cuanta.application.implementer import ImplementationSession
 from cuanta.application.run_reports import RunReports
+from cuanta.application.timing import PhaseRecorder
 from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules, strict_tools
+from cuanta.domain.claude_variants import pure_environment
 from cuanta.domain.engine import (
     GOVERNOR_STOP_SUBTYPE,
     TURN_LIMIT_SUBTYPE,
@@ -16,8 +19,10 @@ from cuanta.domain.engine import (
     RunResult,
     cut_by_turns,
 )
+from cuanta.domain.errors import DomainFailure
 from cuanta.domain.estimates import RunEstimate
 from cuanta.domain.ids import trace_id_of, traceparent
+from cuanta.domain.implementation import ImplementationProfile, ImplementationReport
 from cuanta.domain.ledger import LedgerEvent, Run
 from cuanta.domain.messages import msg
 from cuanta.domain.overhead import spawn_event
@@ -68,12 +73,19 @@ class LaunchSpec:
     steer: bool = False
     resume_session: str = ""
     read_discipline: bool | None = None
+    role: str = ""
+    profile: str = "balanced"
+    variant: str = ""
+    pure: bool = False
+    verify_commands: tuple[str, ...] = ()
+    implementation_steps: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class Launch:
     run: Run
     outcome: EngineOutcome
+    implementation: ImplementationReport | None = None
 
 
 class EngineLauncher:
@@ -94,8 +106,10 @@ class EngineLauncher:
         guard_files: Callable[[LaunchSpec], tuple[str, str]] | None = None,
         index_tools: bool = False,
         index_server: tuple[str, ...] = (),
+        implementer: Callable[[LaunchSpec], ImplementationSession | None] | None = None,
     ) -> None:
         self._index_server = index_server
+        self._implementer = implementer
         self._lean_files = lean_files
         self._guard_files = guard_files
         self._index_tools = index_tools
@@ -104,6 +118,7 @@ class EngineLauncher:
         self._engine = engine
         self._ledger = ledger
         self._clock = clock
+        self._timing = PhaseRecorder(clock, ledger)
         self._new_run_id = new_run_id
         self._entropy = entropy
         self._project = project_name
@@ -124,9 +139,32 @@ class EngineLauncher:
     def engine(self) -> Engine:
         return self._engine
 
+    @property
+    def timing(self) -> PhaseRecorder:
+        return self._timing
+
     def steerable(self) -> bool:
         engine = self._engine
         return isinstance(engine, TurnInput) and engine.accepts_turns()
+
+    def _implementation(self, spec: LaunchSpec) -> ImplementationSession | None:
+        if self._implementer is None or spec.kind not in {"mandate", "cross"} or spec.read_only:
+            return None
+        if self.steerable():
+            return self._implementer(spec)
+        if spec.implementation_steps or (
+            spec.kind == "mandate" and spec.profile == ImplementationProfile.FAST
+        ):
+            name = self._engine.name
+            raise DomainFailure(
+                f"{name} cannot take follow-up turns in one session, which fast and ordered "
+                "implementation need",
+                f"upgrade {name} so its help lists --input-format, or use the balanced profile",
+            )
+        return None
+
+    def preflight(self, spec: LaunchSpec) -> bool:
+        return self._implementation(spec) is not None
 
     def send_turn(self, text: str) -> bool:
         engine = self._engine
@@ -165,6 +203,8 @@ class EngineLauncher:
         if port is not None and self._engine.name == "claude":
             env.update(claude_env(port, self._project, run_id, parent))
         env.update(dict(spec.env))
+        if spec.pure:
+            env.update(pure_environment(spec.model))
         mcp_config, settings_file = "", ""
         session = spec.session or self._default_session
         plan = spec.change_plan or (ChangePlan(read_only=True) if spec.read_only else None)
@@ -183,6 +223,8 @@ class EngineLauncher:
             tools = tuple(
                 tool for tool in strict_tools(plan) if delegation or tool not in {"Agent", "Task"}
             )
+            if spec.tools is not None:
+                tools = tuple(tool for tool in tools if tool in spec.tools)
             allowed = tools
             denied = tuple(dict.fromkeys((*denied, *deny_rules(plan), *EXECUTION)))
         system = spec.append_system_prompt
@@ -219,6 +261,8 @@ class EngineLauncher:
                 else ()
             ),
             resume_session=spec.resume_session,
+            pure=spec.pure,
+            variant=spec.variant,
         )
 
     def owns_profile(self, spec: LaunchSpec) -> bool:
@@ -230,6 +274,8 @@ class EngineLauncher:
             and self._guard_files is not None
             and (
                 strict
+                or spec.pure
+                or bool(spec.variant)
                 or (session == LEAN and spec.kind in {"mandate", "cross"})
                 or (spec.index_tools is True and spec.kind == "cross")
                 or (spec.read_discipline is True and spec.kind == "cross")
@@ -244,6 +290,31 @@ class EngineLauncher:
             return
         with self._listener.scoped(self._port) as status:
             yield status
+
+    def _save_metadata(self, run_id: str, spec: LaunchSpec) -> None:
+        if spec.role:
+            self._ledger.add_events(
+                [
+                    LedgerEvent(
+                        run_id=run_id,
+                        source="cuanta",
+                        agent=spec.role,
+                        kind="run_role",
+                        ts=self._clock.now_iso(),
+                    )
+                ]
+            )
+        if self._reports is None:
+            return
+        meta = self._reports.meta(run_id) or {}
+        meta["variant"] = spec.variant or spec.effort or None
+        meta["implementation_profile"] = spec.profile
+        meta["pure"] = spec.pure
+        if spec.shape or spec.kind == "cross":
+            meta["shape"] = spec.shape or "pipeline"
+        if spec.estimate is not None:
+            meta["estimate_factor"] = spec.estimate.factor
+        self._reports.save_meta(run_id, meta)
 
     def launch(
         self,
@@ -278,28 +349,28 @@ class EngineLauncher:
             cap_usd=spec.pipeline_budget_usd or spec.max_budget_usd,
         )
         self._ledger.add_run(run)
-        if self._reports is not None and (spec.shape or spec.kind == "cross" or guess is not None):
-            meta = self._reports.meta(run_id) or {}
-            if spec.shape or spec.kind == "cross":
-                meta["shape"] = spec.shape or "pipeline"
-            if guess is not None:
-                meta["estimate_factor"] = guess.factor
-            self._reports.save_meta(run_id, meta)
+        self._save_metadata(run_id, spec)
         if before is not None:
             before(run_id)
         outcome: EngineOutcome | None = None
         spawned: LedgerEvent | None = None
+        implementation: ImplementationSession | None = None
 
         def stream_event(event: EngineEvent) -> None:
+            if isinstance(event, RunResult) and implementation is not None:
+                implementation.on_result(event, self.send_turn)
             if not isinstance(event, RunResult):
                 on_event(event)
 
         try:
             with self._telemetry() as status:
+                implementation = self._implementation(replace(spec, run_id=run_id))
                 port = status.port if status is not None and status.running else None
                 request = self._steered(self.request(spec, run_id, parent, port), spec)
+                if implementation is not None:
+                    request = replace(request, stream_input=True, continue_results=True)
                 spawned = spawn_event(run_id, run.trace_id, self._clock.now_ms())
-                outcome = self._engine.run(request, stream_event)
+                outcome = self._run_engine(request, stream_event, implementation, run_id, spec.role)
         finally:
             if spawned is not None:
                 self._ledger.add_events([spawned])
@@ -352,7 +423,37 @@ class EngineLauncher:
                 self._reports.save_report(run_id, text)
             if result is not None:
                 on_event(result)
-        return Launch(run=finished, outcome=outcome)
+        return Launch(
+            run=finished,
+            outcome=outcome,
+            implementation=implementation.report if implementation is not None else None,
+        )
+
+    def _run_engine(
+        self,
+        request: EngineRequest,
+        on_event: Callable[[EngineEvent], None],
+        implementation: ImplementationSession | None,
+        run_id: str,
+        role: str,
+    ) -> EngineOutcome:
+        active = (
+            implementation.running(self._engine.cancel)
+            if implementation is not None
+            else nullcontext()
+        )
+        with active:
+            outcome = self._engine.run(request, on_event)
+        if implementation is not None:
+            outcome = implementation.settle(outcome)
+            if self._reports is not None:
+                meta = self._reports.meta(run_id) or {}
+                self._reports.save_meta(
+                    run_id, {**meta, "implementation": implementation.report.payload()}
+                )
+        if outcome.startup_seconds is not None:
+            self._timing.seconds("engine_startup", outcome.startup_seconds, run_id, role)
+        return outcome
 
 
 def _reported(outcome: EngineOutcome | None) -> float | None:

@@ -7,16 +7,19 @@ import os
 import shlex
 import subprocess
 import sys
+from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from cuanta.adapters.system.sandbox_cleanup import await_cleanup
 from cuanta.application.mandate_flow import MandateOptions, per_role_run
 from dev.acceptance import verify
 from dev.results import ROOT, Report, python
 from dev.spec import Spec, Trial, load
+from dev.trial_budget import TrialBudget
 
 
 def payload(path: Path) -> dict[str, Any]:
@@ -47,11 +50,25 @@ def display(arguments: list[str], windows: bool | None = None) -> str:
 
 
 def per_role(trial: Trial) -> bool:
-    options = MandateOptions(engine=trial.engine, simple=trial.simple, shape=trial.shape)
+    options = MandateOptions(
+        engine=trial.engine, simple=trial.simple, shape=trial.shape, profile=trial.profile
+    )
     return trial.cross_engine or per_role_run(options, trial.type, trial.engine)
 
 
+def request_headroom(trial: Trial) -> float:
+    if trial.headroom_usd:
+        return trial.headroom_usd
+    if trial.engine != "claude":
+        return 0.0
+    return min(trial.cap / 2, max(0.10, trial.cap / 4))
+
+
 def command(spec: Spec, trial: Trial) -> list[str]:
+    residual = Decimal(str(trial.cap)) - Decimal(str(request_headroom(trial)))
+    native_cap = residual.quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
+    if native_cap < Decimal("0.01"):
+        raise ValueError(f"{trial.name}: native cap after request headroom must be at least $0.01")
     arguments = [
         "mandate",
         "--sandbox",
@@ -70,12 +87,12 @@ def command(spec: Spec, trial: Trial) -> list[str]:
         "--engine",
         trial.engine,
         "--max-budget-usd",
-        str(trial.cap),
+        str(native_cap),
     ]
     if trial.cross_engine:
         arguments.append("--cross-engine")
     if per_role(trial):
-        arguments.extend(["--cross-budget-usd", str(trial.cap)])
+        arguments.extend(["--cross-budget-usd", str(native_cap)])
     if trial.simple:
         arguments.append("--simple")
     for value in trial.role_models:
@@ -89,6 +106,12 @@ def command(spec: Spec, trial: Trial) -> list[str]:
         arguments.extend(["--role-model", serialized])
     if trial.model:
         arguments.extend(["--model", trial.model])
+    if trial.profile:
+        arguments.extend(["--profile", trial.profile])
+    if trial.variant:
+        arguments.extend(["--variant", trial.variant])
+    if trial.pure:
+        arguments.append("--pure")
     if trial.shape:
         arguments.extend(["--shape", trial.shape])
     if trial.mode == "classic":
@@ -196,8 +219,14 @@ def collect(report: Report, spec: Spec, trial: Trial, launch: dict[str, Any]) ->
         "end_reason": run.get("end_reason"),
         "first_request": run.get("overhead"),
         "steps": launch.get("steps", []),
+        "implementation": run.get("implementation") or launch.get("implementation"),
         "mode": trial.mode,
         "provider": trial.engine,
+        "profile": trial.profile or "balanced",
+        "variant": trial.variant,
+        "model": trial.model,
+        "pure": trial.pure or trial.profile == "fast",
+        "headroom_usd": request_headroom(trial),
     }
     if show.code:
         row["metrics_error"] = "Run metrics unavailable"
@@ -254,45 +283,60 @@ def save(
     (report.directory / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def show_decisions(spec: Spec, row: dict[str, Any]) -> None:
+    for decision in ("accept", "reject"):
+        print(display(["cuanta", "--project", str(spec.project), "runs", decision, row["run_id"]]))
+
+
+def finish_cleanup(spec: Spec, trial: Trial, run_id: str) -> None:
+    if not await_cleanup(spec.project, run_id):
+        raise ValueError(f"{trial.name}: sandbox cleanup did not finish; stop")
+
+
+def preview_trials(spec: Spec, trials: list[Trial]) -> int:
+    for trial in trials:
+        print(f"{trial.name}: ${trial.cap:.2f}; {display(command(spec, trial))}")
+        if trial.recovery_note:
+            print(f"  Recovery: {trial.recovery_note}")
+    print(f"Caps: ${sum(trial.cap for trial in trials):.2f} / ${spec.total_cap:.2f}; spend $0.00")
+    return 0
+
+
 def run(spec: Spec, dry_run: bool, only: str | None, skip_accept: bool) -> int:
     trials = [trial for trial in spec.trials if only is None or trial.name == only]
     if not trials:
         raise ValueError("No trial matches --only")
     if dry_run:
-        for trial in trials:
-            print(f"{trial.name}: ${trial.cap:.2f}; {display(command(spec, trial))}")
-            if trial.recovery_note:
-                print(f"  Recovery: {trial.recovery_note}")
-        print(
-            f"Caps: ${sum(trial.cap for trial in trials):.2f} / ${spec.total_cap:.2f}; spend $0.00"
-        )
-        return 0
+        return preview_trials(spec, trials)
     if not spec.project.is_dir():
         raise ValueError("Project directory does not exist")
     report = Report("trial", ROOT)
     rows: list[dict[str, Any]] = []
     error = ""
     unknown: list[str] = []
+    budget = TrialBudget(
+        spec.budget_file or spec.project / ".cuanta" / "trial-budget.json",
+        spec.budget_group,
+        spec.total_cap,
+    )
     try:
         for trial in trials:
+            arguments = command(spec, trial)
             remaining = spec.total_cap - sum(row["cost_usd"] for row in rows)
             if remaining + 1e-9 < trial.cap:
                 raise ValueError(f"Refusing {trial.name}: ${remaining:.4f} remains")
-            launch = report.run(trial.name + "-mandate", command(spec, trial), timeout=3600)
+            reservation = budget.reserve(trial.name, trial.cap)
             unknown.append(trial.name)
+            launch = report.run(trial.name + "-mandate", arguments, timeout=3600)
             row = collect(report, spec, trial, payload(Path(launch.log)))
+            budget.settle(reservation, row["cost_usd"], row["run_id"])
             rows.append(row)
             unknown.remove(trial.name)
             save(report, rows, spec)
             print(
                 f"{trial.name}: ${row['cost_usd']:.4f} ({row['cost_source']}); cap ${trial.cap:.2f}"
             )
-            for decision in ("accept", "reject"):
-                print(
-                    display(
-                        ["cuanta", "--project", str(spec.project), "runs", decision, row["run_id"]]
-                    )
-                )
+            show_decisions(spec, row)
             if row["cost_usd"] > trial.cap + 1e-9:
                 raise ValueError(f"{trial.name} exceeded its cap; stop")
             if row.get("metrics_error"):
@@ -301,6 +345,8 @@ def run(spec: Spec, dry_run: bool, only: str | None, skip_accept: bool) -> int:
                 row["acceptance"] = verify(report, trial, spec.project, row["run_id"])
                 row["accepted"] = row["acceptance"]["passed"]
             save(report, rows, spec)
+            finish_cleanup(spec, trial, row["run_id"])
+            budget.complete(reservation)
             if launch.code:
                 raise ValueError(f"{trial.name} mandate failed; metrics saved")
     except (OSError, ValueError, KeyError, TypeError) as failure:

@@ -237,6 +237,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
     from cuanta.cli.commands.mandate import scout_rows
     from cuanta.cli.document import Document, Hint, KeyValues, Line, MarkdownText, Verbatim
     from cuanta.cli.fmt import usd
+    from cuanta.cli.time import time_blocks
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
     from cuanta.domain.governor_report import governor_payload
     from cuanta.domain.messages import english, msg
@@ -288,6 +289,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "outcome_at": run.outcome_at or None,
         "outcome_reason": run.outcome_reason or None,
         "duration_s": view.duration_s,
+        "time": asdict(view.time),
         "estimate_factor": view.estimate_factor,
         "turn_count_includes_terminal": view.terminal_turn,
         "changed_files": list(view.changed_files),
@@ -355,7 +357,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         *_governor_rows(view),
         *scout_rows(view.scout),
     )
-    blocks: list[Block] = [KeyValues(rows)]
+    blocks: list[Block] = [KeyValues(rows), *time_blocks(view.time)]
     if view.trial is not None and view.trial.trial.guard_tripped:
         blocks.append(_no_handoff(view.trial))
     if view.overhead is not None:

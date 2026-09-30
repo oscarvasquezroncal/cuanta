@@ -174,6 +174,31 @@ def test_queue_list_puts_the_same_engine_and_model_back_to_back(
     assert "warm prefix: unknown" in text
 
 
+def test_queue_keeps_implementation_profile_variant_and_pure_model() -> None:
+    arguments = (
+        "--type",
+        "feature",
+        "--what",
+        "Add a badge",
+        "--why",
+        "Missing",
+        "--out-of-scope",
+        "Other pages",
+        "--profile",
+        "fast",
+        "--variant",
+        "low",
+        "--model",
+        "claude-sonnet-5",
+        "--pure",
+    )
+    parsed = parse_mandate(arguments)
+    assert parsed.profile == "fast"
+    assert parsed.variant == "low"
+    assert parsed.pure
+    assert parsed.model == "claude-sonnet-5"
+
+
 def seed(root: Path, last: str) -> None:
     (root / ".cuanta").mkdir(exist_ok=True)
     ledger = SqliteLedger(root / ".cuanta" / "ledger.db")

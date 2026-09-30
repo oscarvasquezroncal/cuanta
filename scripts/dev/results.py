@@ -128,7 +128,7 @@ class Report:
                 ) as process:
                     tree: ProcessTree | None = None
                     try:
-                        tree = ProcessTree(process, suspended=os.name == "nt")
+                        tree = ProcessTree(process, suspended=os.name == "nt", breakaway=True)
                         code = process.wait(timeout=timeout)
                     finally:
                         if tree is not None:

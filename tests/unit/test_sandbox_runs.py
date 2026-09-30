@@ -26,6 +26,7 @@ from cuanta.application.mandate import MandateService
 from cuanta.application.mandate_flow import MandateFlow, MandateOptions
 from cuanta.application.progress import RecordingSink
 from cuanta.application.sandbox import SandboxRunner, TrialRecorder
+from cuanta.application.timing import PhaseRecorder
 from cuanta.application.trials import TrialStore, parse_trial
 from cuanta.domain.detection import Stack
 from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest, RunResult
@@ -46,6 +47,8 @@ from cuanta.domain.sandbox import (
     sandbox_launch,
 )
 from cuanta.domain.shells import Shell
+from cuanta.domain.time_anatomy import analyze_time
+from cuanta.ports.ledger import EventQuery
 from cuanta.ports.sandbox import SandboxCopy
 from tests.fakes import FakeRunner, FakeStream
 from tests.unit.test_engine_profiles import all_roles
@@ -202,6 +205,74 @@ def test_learning_runs_after_saved_trial_and_before_sandbox_removal(tmp_path: Pa
     assert harness.result.trial is not None
     assert learned == [harness.result.trial.run_id]
     assert not Path(harness.result.copy_root).exists()
+
+
+def test_cleanup_is_deferred_until_result_is_shown_and_after_images_survive(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, EditingEngine(_edits))
+    phases: list[str] = []
+
+    def cleanup(copy: SandboxCopy, run_id: str) -> Callable[[], None]:
+        assert harness.store.load(run_id) is not None
+        phases.append("captured")
+
+        def displayed() -> None:
+            phases.append("shown")
+            assert harness.sandbox.remove(copy)
+
+        return displayed
+
+    harness.runner = SandboxRunner(
+        harness.sandbox, harness.recorder, harness.ledger, harness.project, cleanup=cleanup
+    )
+    harness.run()
+    result = harness.result
+    assert result.trial is not None and result.trial.changes
+    saved = harness.storage.read_bytes(f".cuanta/trials/{result.trial.run_id}/files/src/app.ts")
+    assert saved == b"export const a = 2\r\n"
+    assert phases == ["captured"] and Path(result.copy_root).exists()
+    result.shown()
+    assert phases == ["captured", "shown"] and not Path(result.copy_root).exists()
+    assert (
+        harness.storage.read_bytes(f".cuanta/trials/{result.trial.run_id}/files/src/app.ts")
+        == saved
+    )
+
+
+def test_kept_copy_never_schedules_cleanup(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, EditingEngine(_edits))
+
+    def forbidden(copy: SandboxCopy, run_id: str) -> Callable[[], None]:
+        raise AssertionError(f"unexpected cleanup: {copy.root} {run_id}")
+
+    harness.runner = SandboxRunner(
+        harness.sandbox, harness.recorder, harness.ledger, harness.project, cleanup=forbidden
+    )
+    harness.run(keep=True)
+    assert harness.result.after_shown is None
+    assert Path(harness.result.copy_root).is_dir()
+
+
+def test_sandbox_timing_contains_copy_capture_guards_and_removal(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, EditingEngine(_edits))
+    harness.runner = SandboxRunner(
+        harness.sandbox,
+        harness.recorder,
+        harness.ledger,
+        harness.project,
+        timing=PhaseRecorder(harness.clock, harness.ledger),
+    )
+    harness.run()
+    trial = harness.result.trial
+    assert trial is not None
+    run = harness.ledger.get_run(trial.run_id)
+    assert run is not None
+    report = analyze_time(run, harness.ledger.events(EventQuery(run_id=run.id)))
+    phases = {row.phase: row for row in report.phases}
+    assert phases["sandbox_copy"].seconds == 0.5
+    assert phases["after_image"].seconds == 0.5
+    assert phases["copy_removal"].seconds == 0.5
+    assert phases["snapshots_guards"].seconds is not None
+    assert report.wall_seconds is not None and report.wall_seconds > 2
 
 
 def test_a_sandbox_run_edits_only_the_copy_and_stores_a_trial(tmp_path: Path) -> None:
