@@ -6,10 +6,11 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
-Teams by provider: a mandate's team runs on Claude or GPT (Codex), with a current model per role.
-A forecast envelope before launch: P50, P90, margin and verdict, stored with each run and
-calibrated against its actual cost. A governor that watches each role while it runs and finishes it
-before its share runs out.
+## [0.5.0] - 2026-09-30
+
+Teams by provider, forecast envelopes, a live governor, scout and senior execution, and a warm
+queue. Includes the unpublished 0.4.0 development changes; mixed-provider presets were retired
+before this release preparation. Release artifacts and publication are separate steps.
 
 ### Added
 - Default models per provider and tier in `model_tiers.toml`: Claude `haiku`, `sonnet`, `opus`;
@@ -125,6 +126,15 @@ before its share runs out.
   take `mode = "classic" | "v5"`, and the trial summary records the mode, the provider, the tokens
   by kind, the first request's fixed tokens, the blocked reads, the forecast's P50 and P90 against
   the actual and the outcome.
+- Engine-qualified role pins are honored or refused before launch with the reason.
+- Roles pass a structured, accumulating handoff: a summary, decisions, facts anchored as `path:start-end`
+  with line hashes, the plan's edit/read/verify sets, open questions and a status. Anchors are checked
+  against the working copy and stale ones are marked; the chain is compacted to the depth's budget and
+  full texts stay in capsules.
+- cuanta runs the project's type check, lint and build between roles, in the working copy and outside any
+  engine sandbox, with a timeout that stops the whole process tree. A failing writer gets one repair turn;
+  results appear as their own phase with $0 model spend. Only commands from cuanta's change plan run.
+- Claude's print-mode permission denials are stored as `permission_denied` events with tool and path.
 
 ### Changed
 - `--role-model role=model` pins a model within the team's provider; a pin to the other provider is
@@ -158,41 +168,12 @@ before its share runs out.
   in trials (isolated copies); `runs.docs = on` restores the old behaviour, and a
   `--role-model docs=...` pin runs it on any run. When docs is off, its
   share becomes the repair reserve of a team of separate launches, for features as for fixes.
-
-### Fixed
-- Stop, in the app's pipeline screen, stops a team run of one launch per role: the running role ends
-  and no later role starts. A stop during cuanta's checks between roles ends the running check and
-  starts no other.
-- Scout & senior on the GPT team: the senior is told that the scout's pack replaces the analyst's
-  plan, so it no longer stops for a missing plan; the scout treats index card flags as hints; and a
-  card is flagged "generated; do-not-edit" only by its path or an explicit do-not-edit note, not by
-  any rule that mentions generated code.
-
-### Removed
-- Mixed teams: `mandate --mix` and its presets `claude-only`, `claude-plans-codex-writes` and
-  `codex-plans-claude-writes`, the app's mix chips, and `docs/MIXED_TEAMS.md`.
-
-## [0.4.0] - 2026-09-27
-
-Mixed teams that finish: per-role engines and pins, anchored handoffs, verification between roles and budgets that end with a named state.
-
-### Added
-- Mixed teams: `mandate --cross-engine --mix claude-only|claude-plans-codex-writes|codex-plans-claude-writes`
-  runs each role separately on Claude or Codex. Role pins `role=engine:model` are honored in native and
-  cross runs or refused before launch with the reason. The app's Team step offers the same presets and
-  shows each role's engine, model, share, guarantees, context delivery and warnings; `docs/MIXED_TEAMS.md`
-  explains how to choose.
-- Roles pass a structured, accumulating handoff: a summary, decisions, facts anchored as `path:start-end`
-  with line hashes, the plan's edit/read/verify sets, open questions and a status. Anchors are checked
-  against the working copy and stale ones are marked; the chain is compacted to the depth's budget and
-  full texts stay in capsules.
-- cuanta runs the project's type check, lint and build between roles, in the working copy and outside any
-  engine sandbox, with a timeout that stops the whole process tree. A failing writer gets one repair turn;
-  results appear as their own phase with $0 model spend. Only commands from cuanta's change plan run.
-- Team recommends a preset for a task type from measured cost per accepted change.
-- Claude's print-mode permission denials are stored as `permission_denied` events with tool and path.
-
-### Changed
+- Recorded the V5 real-cost comparison: including failed attempts, cost per accepted change fell
+  11% for Claude and 37% for GPT against classic on this sample; neither team accepted the GSAP fix.
+  The V5 audit and forecast-error targets were missed. Historical E1 costs are distinguished from
+  their V4 replays in the report.
+- Recorded the WhatsApp feature trial: Claude produced a candidate rejected by lint; GPT was
+  blocked by its environment and changed no files. No WhatsApp patch was accepted or applied.
 - Cross-engine budgets finish: role floors, shares from role history once there are three samples, Claude
   native caps a learned margin below the share, salvage handoffs after a budget stop, optional docs and
   verified-tester skips, Codex overruns charged to the remainder, and a blocked role stops the pipeline.
@@ -247,8 +228,8 @@ Mixed teams that finish: per-role engines and pins, anchored handoffs, verificat
 - Cross-engine pipelines reserve a budget share for each role, carry unused shares forward,
   and show the complete pipeline duration. Estimates use completed runs of the same shape
   and depth, with a historical calibration factor when direct history is unavailable.
-- Windows Team identifies unverified Codex builds and keeps the default cross-engine tester
-  on Claude. Unreadable sandbox results retain their copy and cost without becoming applicable.
+- Windows Team identifies unverified Codex builds; cuanta performs project checks outside the
+  engine sandbox. Unreadable sandbox results retain their copy and cost without becoming applicable.
 - The maintainer's Git workflow, verification gates and release steps move from
   `CONTRIBUTING.md` to `docs/DEVELOPMENT.md`, and the README's Contributing section becomes
   Maintenance.
@@ -256,11 +237,20 @@ Mixed teams that finish: per-role engines and pins, anchored handoffs, verificat
   instead of a public issue requesting a private channel.
 
 ### Fixed
+- Stop, in the app's pipeline screen, stops a team run of one launch per role: the running role ends
+  and no later role starts. A stop during cuanta's checks between roles ends the running check and
+  starts no other.
+- Scout & senior on the GPT team: the senior is told that the scout's pack replaces the analyst's
+  plan, so it no longer stops for a missing plan; the scout treats index card flags as hints; and a
+  card is flagged "generated; do-not-edit" only by its path or an explicit do-not-edit note, not by
+  any rule that mentions generated code.
 - Read-discipline hooks now run on Windows: hook commands use a POSIX interpreter path, because Claude Code
   runs them through Git Bash.
 - Pins written as `engine:resolved-name` (for example `claude:claude-sonnet-5`) were ignored.
 
 ### Removed
+- Mixed teams: `mandate --mix` and its presets `claude-only`, `claude-plans-codex-writes` and
+  `codex-plans-claude-writes`, the app's mix chips, and `docs/MIXED_TEAMS.md`.
 - cuanta no longer accepts contributions: `CONTRIBUTING.md` and the bug report, feature
   request and pull request templates are removed.
 
