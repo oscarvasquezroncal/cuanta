@@ -91,6 +91,16 @@ def user_run() -> list[LedgerEvent]:
     return events
 
 
+def test_hook_total_duration_is_recovered_when_normalized_duration_is_zero() -> None:
+    event = otlp(
+        "hook_execution_complete",
+        "2026-01-01T00:00:00Z",
+        {"hook_name": "PreToolUse", "total_duration_ms": "235"},
+    )
+    assert event.duration_ms == 0
+    assert session_overhead([event], 0).hook_ms == 235
+
+
 def test_agents_md_share_estimates_bytes_over_fixed_context() -> None:
     split = ContextSplit(53_111, 0)
     assert agents_md_tokens(230) == 57

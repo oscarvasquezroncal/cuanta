@@ -36,7 +36,7 @@ HOOK_OUTPUT = (
     "output_size",
     "stdout_length",
 )
-DURATION = ("duration_ms", "duration", "elapsed_ms")
+DURATION = ("total_duration_ms", "duration_ms", "duration", "elapsed_ms")
 
 
 @dataclass(frozen=True, slots=True)
