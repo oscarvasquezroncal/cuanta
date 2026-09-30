@@ -3,7 +3,7 @@
 A pipeline mandate runs as a team of roles: analyst, senior, tester and docs, or, in the
 [scout and senior shape](#scout--senior), a scout in place of the analyst. A team uses one
 provider, Claude or GPT (Codex), and each role can use a different, current model from that
-provider. Teams that mix providers were retired after 0.4.0; see [Retired: mixed teams](#retired-mixed-teams).
+provider. Teams that mix providers were retired after the unpublished 0.4.0 development version; see [Retired: mixed teams](#retired-mixed-teams).
 
 ## Choosing the provider
 
@@ -350,7 +350,7 @@ premium tokens on the change, not on exploring.
   changed files against their text before the senior, the scout's test links and
   `cuanta test --affected`, and is told not to explore again. On Windows a GPT tester runs no tests
   (see below).
-- **Claude team.** `runs.scout_mode = native` (the default until the bench picks) runs the scout as a
+- **Claude team.** `runs.scout_mode = native` (the default; the bench did not measure separate scout launches) runs the scout as a
   subagent of the one Claude session: the main agent is told to call the scout first, pass the senior
   only the pack and its edit set, and give the tester the changed files and `cuanta test --affected`.
   cuanta cannot step in between subagents, so it trims nothing there; it reads the pack from the
@@ -489,9 +489,37 @@ A file Codex creates inside cuanta's private copy can be unreadable to the user,
 folder only grants access to its owner. Before a Codex writer runs, cuanta creates the plan's new
 files so they stay readable, removes the ones that stay empty, and reports any file it cannot read.
 
+## Measured V5 results
+
+The [R3 comparison](trials/2026-09-29-v5-real-cost.md) ran four frozen tasks with both teams in
+classic and V5 modes: 16 conditions and 20 launches, including four rejected first attempts.
+All attempts count below. Each cell accepted the two features and rejected the GSAP fix.
+
+| Changes only (fix and two features) | Classic USD per accepted change | V5 USD per accepted change | Observed change |
+|---|---:|---:|---:|
+| Claude | $1.2497 | $1.1082 | -11% |
+| GPT | $1.9844 | $1.2417 | -37% |
+
+These are one project's observations, not guaranteed savings. Claude costs are CLI-reported
+subscription-usage estimates; GPT costs are token-priced estimates. V5 audits cost $0.3611 for
+Claude and $0.5536 for GPT, both above the $0.25 target. Forecast P90 coverage was 15/20 and median
+absolute P90 error was 79%, missing the 25% target. No read was blocked in the saved R3 summaries,
+so this comparison does not isolate savings from read discipline. The report separates original
+E1 costs from their V4 replays and preserves observed models and acceptance limits.
+
+The [V5D bench](trials/2026-09-29-v5-bench.md) measured a warm-prefix share of 85% and a native
+scout saving of 22% with equal acceptance, short of its 40% goal. Separate scout launches were not
+measured, so native remains the default. Its two tight-cap runs were not cut off, but neither
+exercised the finish turn; that is not proof that every overrun can finish gracefully.
+
+The [WhatsApp feature trial](trials/2026-09-30-whatsapp-feature.md) accepted neither team: Claude
+produced a candidate that failed lint, and GPT's senior reported a directory-access block and
+made no changes. A passing pure link-builder harness or passing checks on unchanged source does
+not establish a completed feature. The report lists observed roles and untested behavior.
+
 ## Retired: mixed teams
 
-Version 0.4.0 offered `cuanta mandate --cross-engine --mix` with three presets: `claude-only`,
+The unpublished 0.4.0 development version offered `cuanta mandate --cross-engine --mix` with three presets: `claude-only`,
 `claude-plans-codex-writes` and `codex-plans-claude-writes`, the last two putting Claude and Codex
 roles in one team. `--mix`, the presets and the app's mix chips are gone, and a pin to the other
 provider is refused before launch. `--cross-engine` on a Claude team replaces `claude-only`.
