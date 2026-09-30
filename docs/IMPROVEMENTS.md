@@ -24,5 +24,6 @@ come from the M0 verification pass.
 - [x] IMP-005 — the Result screen and `cuanta runs show` time a cross-engine run by its first role only (182 s vs 9 min 10 s for the pipeline in T1) — src/cuanta/application/results.py:87 — found 2026-09-26 in T1 — severity: low
 - [x] IMP-006 — a Claude run can record more turns than its limit (21 of 20 for a T1 analyst); check whether `num_turns` counts the final result turn — src/cuanta/application/engine_run.py:232 — found 2026-09-26 in T1 — severity: low
 - [ ] IMP-007 — the gate's first-paint budget (0.7 s) fails under host load: 0.77 s, 0.74 s and 0.77 s in three V5B/V5D gates while a game and a background indexer ran on the host (whole suite 680–774 s instead of about 500 s), against 0.20–0.25 s for the same test run alone; no code change explains it, and the budget is not moved — tests/tui/test_app.py::test_first_paint_is_fast — found 2026-09-29 in V5D — severity: low
+- [ ] IMP-008 — on Windows a per-role run that completed can fail to record its trial with `PermissionError` (R3 GPT JSON-LD classic run: all four roles finished, the senior changed `src/app/layout.tsx`, the copy was kept for rescue but the next trial reused the same copy path, so the patch was lost); the error names only the exception type — src/cuanta/application/sandbox.py:537 — found 2026-09-29 in R3 — severity: med
 
 ## Deferred

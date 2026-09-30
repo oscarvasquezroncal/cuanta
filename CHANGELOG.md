@@ -163,6 +163,10 @@ before its share runs out.
 - Stop, in the app's pipeline screen, stops a team run of one launch per role: the running role ends
   and no later role starts. A stop during cuanta's checks between roles ends the running check and
   starts no other.
+- Scout & senior on the GPT team: the senior is told that the scout's pack replaces the analyst's
+  plan, so it no longer stops for a missing plan; the scout treats index card flags as hints; and a
+  card is flagged "generated; do-not-edit" only by its path or an explicit do-not-edit note, not by
+  any rule that mentions generated code.
 
 ### Removed
 - Mixed teams: `mandate --mix` and its presets `claude-only`, `claude-plans-codex-writes` and
