@@ -190,6 +190,24 @@ The trial script previews commands and caps with `--dry-run`, selects one trial 
 and skips acceptance commands and checks with `--skip-accept`. Live execution requires enough
 of the total cap to reserve the next trial's cap. It launches only sandbox mandates, stops
 on unknown costs or an exceeded cap, and labels reported and token-priced estimated costs.
+
+Implementation trials also preserve `profile`, `variant` and `pure`. `headroom_usd` reserves part
+of the trial cap for an in-flight request; the native launch cap is reduced by that amount and
+rounded down to cents. Residual caps below one cent are refused before reserving or launching. Without
+an explicit value, Claude trials keep a conservative planning margin. This margin is not a proof
+that arbitrary requests fit: bounded smoke runs and expensive variants need an explicit reserve
+calculation using their request and concurrency limits.
+
+Budget reservations persist in the project's ignored `.cuanta/trial-budget.json`. Optional
+top-level `budget_file` and `budget_group` share one milestone allowance across specs and project
+copies. Keep the same group across retries and edited specs. A changed cap, a concurrent lock or
+an unsettled reservation fails closed; reconcile recorded evidence before launching again. A
+dry run makes no reservation. Known cost is recorded before acceptance; its reservation remains
+active until acceptance and cleanup finish, including across separate invocations. Interrupted
+acceptance or cleanup requires reconciliation before another reservation.
+Candidate trial caps may add up to more than the milestone allowance: each individual cap must
+fit the total, and each actual launch must reserve its full cap from the remaining shared budget.
+Unused reservations are released only after the reported cost is known.
 Each acceptance run uses a fresh owned copy, validates stored after-image hashes, runs the
 commands and file/regex checks, and removes the copy. Full output, costs, estimates, turns,
 tokens and first-request cache metrics are saved in `summary.json` and a Markdown table. Each

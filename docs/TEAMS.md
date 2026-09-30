@@ -29,7 +29,53 @@ cost. Without such a provider it recommends none. The count includes Claude pipe
 runs of one launch per role on a single provider; a Codex pipeline mandate that ran as one Codex
 session is left out, because a GPT team does not run that way.
 
-## Models per role
+## Implementation profiles
+
+`--profile balanced` keeps the existing team behavior and remains the default. Claude features,
+fixes and refactors can select `--profile fast`, also available on `cuanta queue add`. The Team
+screen provides **Fast** / **Rápido** and **Balanced** / **Equilibrado** chips. Set `runs.profile`
+to persist the preference and `runs.variant` to persist a Claude variant.
+
+Fast uses one native Claude implementation session. It does not schedule documentation work or
+a separate tester; the writer handles requested tests. Small read sets go straight to the writer's
+context pack. The pack includes project lint and TypeScript rules, and the prompt asks for several
+anchored reads together. Read-discipline hooks are off for fast runs, avoiding their measured
+per-tool overhead. Balanced retains its existing behavior.
+
+Choose a single model with `--model` and a variant with `--variant`. The installed Claude Code
+2.1.283 catalog contains Opus 5.5 and Sonnet 5, each with low, medium, high, xhigh and max effort.
+`ultracode` adds dynamic workflows at xhigh effort. Opus also supports fast output: `fast-low`,
+`fast-medium`, `fast-high`, `fast-xhigh`, `fast-max` and `fast-ultracode`; `fast` uses the model's
+default effort. Fast output is separate from cuanta's fast implementation profile. Workflow and
+fast-output availability depend on account policy; see CC-25 and CC-26 in
+[the contract registry](CONTRACTS.md).
+
+Fast runs enable pure routing controls, and balanced runs can request `--pure`: the generated profile
+pins helpers and subagents to the chosen model, forces subagent precedence, disables automatic
+titles and prompt predictions, and isolates user plugins, hooks and MCP servers. Ordinary fast
+runs deny delegation (`Agent`, `Task`, `Skill`, `Workflow`), agent coordination and the scheduling
+or cloud tools listed in CC-29; Ultracode may run same-model workers inside its native session but
+still cannot schedule or trigger remote agents. Runtime
+request evidence, including auxiliary requests, is still needed to verify purity; local settings
+cannot prove server-side behavior or override managed policy. CC-27 records those limits.
+
+After the writer finishes, cuanta runs the project's typecheck and lint checks in parallel and
+builds when project policy or the request requires it. It compares failures against checks of the
+untouched project state, reuses the matching baseline, and sends only new errors back into the
+same session with their file and line references. Repairs stop at the configured round, elapsed
+time and cost limits. Results show remaining new errors separately from pre-existing failures.
+Large features use ordered steps; a step must verify green before the next starts, and the result
+lists each step's state. `runs.repair_rounds` and `runs.repair_timeout_s` control the repair rails.
+The optional `runs.tools` list narrows the built-in tools for fast runs, for example to `Write`
+for a deliberately bounded smoke test. Its default is unset; ordinary runs keep their tools.
+Repair feedback is bounded, while full diagnostic evidence remains in the result.
+
+The launch envelope includes P50 and P90 time estimates for the task, model, variant and profile;
+missing history stays unknown. Sandboxes can reuse a verified warm copy, fall back to a fresh copy
+on drift, and clean up after the result is displayed. Trial series wait for cleanup before timing
+the next run.
+
+## Models per balanced role
 
 Each role asks for a tier, and the provider's default model for that tier fills it.
 
@@ -127,7 +173,7 @@ tree and starts no other check. The run ends partial, or failed when no role had
 
 | Guarantee | Claude | Codex |
 |---|---|---|
-| Spend cap | enforced natively | checked after the run; no native spend limit |
+| Spend cap | native request-boundary check; reserve in-flight headroom | checked after the run; no native spend limit |
 | Turn limit | enforced | not available |
 | Read-only analyst | checked after each role from the working copy | enforced by the `read-only` sandbox |
 | Telemetry | checked after the run | checked after the run |

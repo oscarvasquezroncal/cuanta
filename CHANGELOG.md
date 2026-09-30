@@ -6,6 +6,27 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
+### Added
+- Opt-in fast Claude implementation profiles, pure model pins, installed effort and output-speed
+  variants, and Team controls in English and Spanish. Balanced remains the default.
+- Same-session verification and repair, baseline error separation, ordered green steps, warm
+  sandbox reuse and time forecasts grouped by implementation configuration.
+- Phase timing for runs and roles, with request durations, time to first token, tool and hook
+  time, and cuanta's launch and verification work. Missing measurements stay unknown, and
+  overlapping service durations are distinguished from complete wall time. Historical process
+  dates are not presented as a complete measurement of preparation through cleanup.
+
+### Fixed
+- Sandbox trial budget reservations persist across separate selections and retries, block unknown
+  spend, and leave native request headroom before launching another trial.
+- Hook timing reads Claude's `total_duration_ms` attribute, including retained events whose
+  normalized duration was zero.
+- Fast runs deny Claude's `Workflow`, agent coordination and scheduling or cloud tools, so one
+  native session does the work; Ultracode keeps its workflows but not the scheduling tools.
+- The background sandbox cleanup on Windows breaks away from job objects that allow it, and hands
+  the copy to its worker before the command exits, so another launch cannot sweep a copy that is
+  still being recycled.
+
 ## [0.5.0] - 2026-09-30
 
 Teams by provider, forecast envelopes, a live governor, scout and senior execution, and a warm
