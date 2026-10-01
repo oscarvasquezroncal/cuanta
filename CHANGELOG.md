@@ -6,31 +6,11 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
-### Added
-- Opt-in fast Claude implementation profiles, pure model pins, installed effort and output-speed
-  variants, and Team controls in English and Spanish. Balanced remains the default.
-- Same-session verification and repair, baseline error separation, ordered green steps, warm
-  sandbox reuse and time forecasts grouped by implementation configuration.
-- Phase timing for runs and roles, with request durations, time to first token, tool and hook
-  time, and cuanta's launch and verification work. Missing measurements stay unknown, and
-  overlapping service durations are distinguished from complete wall time. Historical process
-  dates are not presented as a complete measurement of preparation through cleanup.
+## [0.5.0] - 2026-10-01
 
-### Fixed
-- Sandbox trial budget reservations persist across separate selections and retries, block unknown
-  spend, and leave native request headroom before launching another trial.
-- Hook timing reads Claude's `total_duration_ms` attribute, including retained events whose
-  normalized duration was zero.
-- Fast runs deny Claude's `Workflow`, agent coordination and scheduling or cloud tools, so one
-  native session does the work; Ultracode keeps its workflows but not the scheduling tools.
-- The background sandbox cleanup on Windows breaks away from job objects that allow it, and hands
-  the copy to its worker before the command exits, so another launch cannot sweep a copy that is
-  still being recycled.
-
-## [0.5.0] - 2026-09-30
-
-Teams by provider, forecast envelopes, a live governor, scout and senior execution, and a warm
-queue. Includes the unpublished 0.4.0 development changes; mixed-provider presets were retired
+Teams by provider, forecast envelopes, a live governor, scout and senior execution, a warm queue,
+and a fast implementer that runs Claude features and bug fixes in one verified session by default.
+Includes the unpublished 0.4.0 development changes; mixed-provider presets were retired
 before this release preparation. Release artifacts and publication are separate steps.
 
 ### Added
@@ -156,8 +136,25 @@ before this release preparation. Release artifacts and publication are separate 
   engine sandbox, with a timeout that stops the whole process tree. A failing writer gets one repair turn;
   results appear as their own phase with $0 model spend. Only commands from cuanta's change plan run.
 - Claude's print-mode permission denials are stored as `permission_denied` events with tool and path.
+- Fast Claude implementation profiles, pure model pins, installed effort and output-speed
+  variants, and Team controls in English and Spanish.
+- Same-session verification and repair, baseline error separation, ordered green steps, warm
+  sandbox reuse and time forecasts grouped by implementation configuration.
+- Phase timing for runs and roles, with request durations, time to first token, tool and hook
+  time, and cuanta's launch and verification work. Missing measurements stay unknown, and
+  overlapping service durations are distinguished from complete wall time. Historical process
+  dates are not presented as a complete measurement of preparation through cleanup.
 
 ### Changed
+- `runs.profile` defaults to `auto`: Claude features and bug fixes, including the fix steps of
+  `cuanta loop`, run with the fast implementation profile. Refactors, investigations, other
+  engines, `--classic`, runs that choose another shape or routing, Claude Code versions that
+  cannot take follow-up turns and projects without a typecheck command or `lint` script keep the
+  balanced team. A fast run without `--model` uses the variant measured fastest for its kind among
+  those accepted on every trial task of that kind: Opus 5.5 at low effort for features, Opus 5.5
+  at high effort for bug fixes. Fast runs stop at the native cap, the turn rail and the repair
+  limits; the live governor steers team runs. `--profile auto` restores the default when the
+  project config sets another profile, and the Team screen offers the by-kind model choice.
 - `--role-model role=model` pins a model within the team's provider; a pin to the other provider is
   refused before launch with the reason. `--cross-engine` now runs each role as its own launch on the
   same provider.
@@ -268,6 +265,15 @@ before this release preparation. Release artifacts and publication are separate 
 - Read-discipline hooks now run on Windows: hook commands use a POSIX interpreter path, because Claude Code
   runs them through Git Bash.
 - Pins written as `engine:resolved-name` (for example `claude:claude-sonnet-5`) were ignored.
+- Sandbox trial budget reservations persist across separate selections and retries, block unknown
+  spend, and leave native request headroom before launching another trial.
+- Hook timing reads Claude's `total_duration_ms` attribute, including retained events whose
+  normalized duration was zero.
+- Fast runs deny Claude's `Workflow`, agent coordination and scheduling or cloud tools, so one
+  native session does the work; Ultracode keeps its workflows but not the scheduling tools.
+- The background sandbox cleanup on Windows breaks away from job objects that allow it, and hands
+  the copy to its worker before the command exits, so another launch cannot sweep a copy that is
+  still being recycled.
 
 ### Removed
 - Mixed teams: `mandate --mix` and its presets `claude-only`, `claude-plans-codex-writes` and
