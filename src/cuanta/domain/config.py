@@ -71,7 +71,7 @@ class Config:
     scout_threshold: float = DEFAULT_SCOUT_THRESHOLD
     docs_mode: str = "auto"
     governor: bool = True
-    implementation_profile: str = "balanced"
+    implementation_profile: str = "auto"
     implementation_variant: str = ""
     repair_rounds: int = 3
     repair_timeout_s: int = 900
@@ -233,7 +233,7 @@ def layer_from_table(table: Mapping[str, object]) -> dict[str, object]:
         del layer["scout_mode"]
     if layer.get("docs_mode") not in (None, *DOCS_MODES):
         del layer["docs_mode"]
-    if layer.get("implementation_profile") not in (None, "fast", "balanced"):
+    if layer.get("implementation_profile") not in (None, "auto", "fast", "balanced"):
         del layer["implementation_profile"]
     rounds = layer.get("repair_rounds")
     if isinstance(rounds, int) and not 0 <= rounds <= 3:

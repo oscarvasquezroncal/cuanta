@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from cuanta.domain.engine import COST_UNKNOWN_SUBTYPE, GOVERNOR_STOP_SUBTYPE, cut_by_turns
+from cuanta.domain.mandate import MandateType
 from cuanta.domain.role_handoff import VerifyResult, last_json_object
+from cuanta.domain.routing import Provider
 from cuanta.domain.stable import stable_json
 
 MAX_REPAIRS = 3
@@ -42,8 +44,46 @@ class ImplementationProfile(StrEnum):
     BALANCED = "balanced"
 
 
-def implementation_profile(value: str, default: str = "balanced") -> ImplementationProfile:
-    return ImplementationProfile(value or default)
+AUTO_PROFILE = "auto"
+PROFILE_CHOICES = (
+    AUTO_PROFILE,
+    ImplementationProfile.BALANCED.value,
+    ImplementationProfile.FAST.value,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class FastChoice:
+    model: str
+    variant: str
+
+
+SMALL_FEATURE_CHOICE = FastChoice("claude-opus-5-5", "low")
+STEPPED_FEATURE_CHOICE = FastChoice("claude-opus-5-5", "low")
+FIX_CHOICE = FastChoice("claude-opus-5-5", "high")
+
+
+def large_feature(task_type: str, edit_tokens: int) -> bool:
+    return task_type == MandateType.FEATURE and edit_tokens >= LARGE_EDIT_TOKENS
+
+
+def fast_choice(task_type: str, large: bool) -> FastChoice | None:
+    if task_type == MandateType.BUG:
+        return FIX_CHOICE
+    if task_type == MandateType.FEATURE:
+        return STEPPED_FEATURE_CHOICE if large else SMALL_FEATURE_CHOICE
+    return None
+
+
+def resolve_profile(
+    value: str, default: str, engine: str, task_type: str, team: bool
+) -> ImplementationProfile:
+    chosen = value or default or AUTO_PROFILE
+    if chosen != AUTO_PROFILE:
+        return ImplementationProfile(chosen)
+    if engine == Provider.CLAUDE and not team and fast_choice(task_type, False) is not None:
+        return ImplementationProfile.FAST
+    return ImplementationProfile.BALANCED
 
 
 @dataclass(frozen=True, slots=True)

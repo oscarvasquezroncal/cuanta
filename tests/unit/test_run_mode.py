@@ -8,9 +8,11 @@ import pytest
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.adapters.system.clock import FixedClock
 from cuanta.adapters.system.workspace import LocalWorkspace
+from cuanta.application.mandate_flow import MandateOptions
 from cuanta.application.run_reports import RunReports
 from cuanta.bootstrap import Container
 from cuanta.domain.config import Config, layer_from_table, merge
+from cuanta.domain.mandate import MandateRequest, Shape
 from cuanta.domain.run_mode import (
     CLASSIC,
     V5,
@@ -19,6 +21,7 @@ from cuanta.domain.run_mode import (
     classic_shape,
     run_mode,
 )
+from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner
 
 
@@ -49,9 +52,11 @@ def test_classic_turns_off_v5_steering_and_discipline_and_keeps_docs_on() -> Non
             read_discipline=True,
             pipeline_read_discipline=True,
             governor=True,
+            implementation_profile=base.implementation_profile,
         )
         == base
     )
+    assert classic.implementation_profile == "balanced"
     assert classic_shape("", "feature", False) == "pipeline"
     assert classic_shape("", "bug", False) == "pipeline"
     assert classic_shape("", "investigation", False) == ""
@@ -93,3 +98,52 @@ def test_a_classic_container_records_the_mode_on_every_saved_run(tmp_path: Path)
     assert plain is not None
     plain("run-2", {"spent_usd": 0.1})
     assert reports.meta("run-2") == {"spent_usd": 0.1}
+
+
+def test_shaped_options_resolve_the_profile_before_any_team_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feature = MandateRequest(
+        "feature", "add a badge", "users ask", tests="badge", out_of_scope="cart"
+    )
+    auto = container(tmp_path, Config())
+    asked: list[str] = []
+
+    def ready(name: str) -> bool:
+        asked.append(name)
+        return True
+
+    def no_shape(*args: object) -> object:
+        raise AssertionError("a fast run needs no team shape")
+
+    monkeypatch.setattr(auto, "fast_ready", ready)
+    monkeypatch.setattr(auto, "team_shape", no_shape)
+    options, choice = auto.shaped_options(feature, MandateOptions())
+    assert options.profile == "fast" and choice.shape is Shape.SINGLE and asked == ["claude"]
+    with pytest.raises(AssertionError, match="no team shape"):
+        auto.shaped_options(feature, MandateOptions(), cross_engine=True)
+    classic = container(tmp_path, Config())
+    classic.classic()
+    monkeypatch.setattr(classic, "fast_ready", ready)
+    monkeypatch.setattr(classic, "team_shape", no_shape)
+    with pytest.raises(AssertionError, match="no team shape"):
+        classic.shaped_options(feature, MandateOptions(shape="single"))
+    assert asked == ["claude"]
+
+
+def test_fast_needs_an_engine_that_takes_turns_and_a_project_check(tmp_path: Path) -> None:
+    def ready(help_text: str) -> tuple[tuple[str, ...], bool]:
+        runner = FakeRunner(binaries={"claude": "/bin/claude"})
+        runner.responses["claude --help"] = Completed(0, help_text, "")
+        found = Container(
+            project=tmp_path, config=Config(), runner=runner, clock=FixedClock(), home=tmp_path
+        )
+        first = found.fast_ready("claude")
+        assert found.fast_ready("claude") is first
+        assert sum(call[-1] == "--help" for call in runner.calls) == 1
+        return found.static_checks(), first
+
+    assert ready("--input-format stream-json") == ((), False)
+    (tmp_path / "package.json").write_text('{"scripts": {"lint": "eslint ."}}', encoding="utf-8")
+    assert ready("--input-format stream-json") == (("npm run lint",), True)
+    assert ready("--output-format json") == (("npm run lint",), False)

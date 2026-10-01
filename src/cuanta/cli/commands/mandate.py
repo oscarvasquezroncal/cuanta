@@ -85,7 +85,7 @@ def mandate_command(
     engine: Annotated[str, typer.Option("--engine", help="claude, codex or opencode.")] = "",
     model: Annotated[str, typer.Option("--model", help="Model for the run.")] = "",
     profile: Annotated[
-        str, typer.Option("--profile", help="Implementation profile: balanced or fast.")
+        str, typer.Option("--profile", help="Implementation profile: auto, balanced or fast.")
     ] = "",
     variant: Annotated[
         str,
@@ -291,11 +291,12 @@ def _options(args: MandateArgs) -> "MandateOptions":
     from cuanta.domain.claude_variants import VARIANTS
     from cuanta.domain.depth import DEPTHS
     from cuanta.domain.errors import DomainFailure
+    from cuanta.domain.implementation import PROFILE_CHOICES
     from cuanta.domain.mandate import Shape
     from cuanta.domain.plugins import SESSIONS
 
     check_choice(args.route, ROUTE_MODES, "--route")
-    check_choice(args.profile, ("balanced", "fast"), "--profile")
+    check_choice(args.profile, PROFILE_CHOICES, "--profile")
     check_choice(args.variant, VARIANTS, "--variant")
     check_choice(args.session, SESSIONS, "--session")
     check_choice(args.preset, PRESETS, "--preset")

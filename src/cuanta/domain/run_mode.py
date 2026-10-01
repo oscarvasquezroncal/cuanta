@@ -24,6 +24,7 @@ def classic_config(config: Config) -> Config:
         read_discipline=False,
         pipeline_read_discipline=False,
         governor=False,
+        implementation_profile="balanced",
     )
 
 

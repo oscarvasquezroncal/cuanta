@@ -633,6 +633,7 @@ class FakeServices:
     requests: list[MandateRequest] = field(default_factory=list)
     stops: int = 0
     evidence_files: dict[str, str] = field(default_factory=dict)
+    profile: str = "balanced"
 
     def mandate_setup(self) -> MandateSetup:
         return MandateSetup(
@@ -642,6 +643,7 @@ class FakeServices:
             0.0,
             self.forge_ready,
             1.59,
+            profile=self.profile,
         )
 
     def failure_evidence(self) -> tuple[str, int]:

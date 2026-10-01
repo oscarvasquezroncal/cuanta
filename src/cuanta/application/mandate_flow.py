@@ -41,10 +41,12 @@ from cuanta.domain.estimates import RunEstimate
 from cuanta.domain.evidence_pack import LinesOf
 from cuanta.domain.guarantees import readonly_unavailable
 from cuanta.domain.implementation import (
-    LARGE_EDIT_TOKENS,
+    AUTO_PROFILE,
     ImplementationProfile,
-    implementation_profile,
+    fast_choice,
     implementation_prompt,
+    large_feature,
+    resolve_profile,
 )
 from cuanta.domain.mandate import (
     INVESTIGATION,
@@ -124,6 +126,43 @@ def scout_launch(options: MandateOptions, task_type: str) -> bool:
     )
 
 
+def team_requested(options: MandateOptions, cross_engine: bool = False) -> bool:
+    return (
+        cross_engine
+        or options.simple
+        or bool(options.route.role_models)
+        or bool(options.route.preset)
+        or parse_forced_shape(options.shape) is not None
+    )
+
+
+def resolved_profile(
+    options: MandateOptions,
+    default_profile: str,
+    default_engine: str,
+    task_type: str,
+    cross_engine: bool = False,
+    ready: Callable[[str], bool] = lambda _: True,
+) -> ImplementationProfile:
+    engine = options.engine or default_engine
+    found = resolve_profile(
+        options.profile, default_profile, engine, task_type, team_requested(options, cross_engine)
+    )
+    automatic = (options.profile or default_profile or AUTO_PROFILE) == AUTO_PROFILE
+    if found is ImplementationProfile.FAST and automatic and not ready(engine):
+        return ImplementationProfile.BALANCED
+    return found
+
+
+def fast_defaults(options: MandateOptions, task_type: str, large: bool) -> MandateOptions:
+    if options.profile != ImplementationProfile.FAST or options.model:
+        return options
+    choice = fast_choice(task_type, large)
+    if choice is None:
+        return options
+    return replace(options, model=choice.model, variant=options.variant or choice.variant)
+
+
 def per_role_run(options: MandateOptions, task_type: str, default_engine: str) -> bool:
     if options.profile == ImplementationProfile.FAST:
         return False
@@ -182,14 +221,8 @@ def implementation_spec(base: LaunchSpec, claude: bool) -> LaunchSpec:
     return base
 
 
-def stepped_prepared(prepared: Prepared) -> Prepared:
-    large = (
-        prepared.spec.profile == ImplementationProfile.FAST
-        and prepared.spec.task_type == MandateType.FEATURE
-        and prepared.forecast is not None
-        and sum(prepared.forecast.inputs.edit_tokens) >= LARGE_EDIT_TOKENS
-    )
-    if not large:
+def stepped_prepared(prepared: Prepared, large: bool) -> Prepared:
+    if prepared.spec.profile != ImplementationProfile.FAST or not large:
         return prepared
     return replace(
         prepared,
@@ -324,7 +357,9 @@ class MandateFlow:
         default_profile: str = "balanced",
         default_variant: str = "",
         implementation_tools: tuple[str, ...] = (),
+        fast_ready: Callable[[str], bool] | None = None,
     ) -> None:
+        self._fast_ready = fast_ready or self._engine_steerable
         self._implementation_tools = implementation_tools
         self._default_profile = default_profile
         self._default_variant = default_variant
@@ -376,7 +411,13 @@ class MandateFlow:
         started = self._timing.start()
         options = replace(
             options,
-            profile=implementation_profile(options.profile, self._default_profile).value,
+            profile=resolved_profile(
+                options,
+                self._default_profile,
+                self._default_engine,
+                request.type,
+                ready=self._fast_ready,
+            ).value,
             variant=options.variant or self._default_variant,
         )
         self._validate(request, options)
@@ -424,6 +465,13 @@ class MandateFlow:
         run_id = "" if preview or self._new_run_id is None else self._new_run_id()
         key = decision_key(request)
         self._scope.set(run_id, key, preview)
+        protection = self._protection(request, options.plan_overrides)
+        large = (
+            options.profile == ImplementationProfile.FAST
+            and request.type == MandateType.FEATURE
+            and large_feature(request.type, self._edit_tokens(protection))
+        )
+        options = fast_defaults(options, request.type, large)
         engine_name = options.engine or self._default_engine
         engine = self._engines(engine_name)
         if engine is None:
@@ -449,7 +497,6 @@ class MandateFlow:
         )
         if single:
             applied = single_applied(applied, options)
-        protection = self._protection(request, options.plan_overrides)
         if claude and applied is not None and protection is not None and self._routing is not None:
             applied = self._routing.protect(applied, protection, options.session)
         pack = (
@@ -577,7 +624,7 @@ class MandateFlow:
             docs=docs,
             read_hooks=self._hooked(launcher, spec),
         )
-        return stepped_prepared(prepared)
+        return stepped_prepared(prepared, large)
 
     def _tools(
         self, options: MandateOptions, investigation: bool, claude: bool, graph: bool
@@ -592,6 +639,17 @@ class MandateFlow:
         if options.variant.endswith("ultracode"):
             return (*tools, "Workflow")
         return tuple(tool for tool in tools if tool not in DELEGATION_TOOLS)
+
+    def _engine_steerable(self, name: str) -> bool:
+        engine = self._engines(name)
+        if engine is None:
+            return False
+        return self._launchers(engine).steerable()
+
+    def _edit_tokens(self, protection: ChangePlan | None) -> int:
+        if self._forecaster is None or protection is None:
+            return 0
+        return self._forecaster.edit_tokens(protection)
 
     def _hooked(self, launcher: EngineLauncher, spec: LaunchSpec) -> bool:
         wanted = self._read_discipline if spec.read_discipline is None else spec.read_discipline
@@ -863,7 +921,7 @@ class MandateSetup:
     forge_ready: bool = True
     init_estimate: float | None = None
     max_turns: int = 0
-    profile: str = "balanced"
+    profile: str = AUTO_PROFILE
     variant: str = ""
 
 

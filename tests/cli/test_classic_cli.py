@@ -61,7 +61,7 @@ def test_a_classic_run_launches_without_steering_and_records_its_mode(
     forge(tmp_path)
     fake_runner.responses["claude --help"] = Completed(0, CLAUDE_HELP + " --input-format", "")
     fake_runner.streams["claude -p"] = FakeStream([RESULT])
-    governed, v5_run = launch(tmp_path, fake_runner)
+    governed, v5_run = launch(tmp_path, fake_runner, "--profile", "balanced")
     assert governed[governed.index("--input-format") + 1] == "stream-json"
     plain, classic_run = launch(tmp_path, fake_runner, "--classic")
     assert "--input-format" not in plain
