@@ -31,16 +31,44 @@ session is left out, because a GPT team does not run that way.
 
 ## Implementation profiles
 
-`--profile balanced` keeps the existing team behavior and remains the default. Claude features,
-fixes and refactors can select `--profile fast`, also available on `cuanta queue add`. The Team
-screen provides **Fast** / **Rápido** and **Balanced** / **Equilibrado** chips. Set `runs.profile`
-to persist the preference and `runs.variant` to persist a Claude variant.
+The default profile is `auto`. It runs Claude features and bug fixes with the fast profile. It
+keeps the balanced team for refactors, investigations, Codex and OpenCode, for runs that choose
+another shape or routing (simple mode, role pins, a route preset, a forced pipeline or scout shape,
+`--classic`, or a cross-engine run), and whenever the fast profile cannot work: the installed
+Claude Code cannot take follow-up turns (its help lacks `--input-format`), or the project has
+neither a typecheck command nor a `lint` script for cuanta to verify with. `--profile balanced`
+and `--profile fast` force a profile, also on `cuanta queue add`; `runs.profile` persists the
+choice and `runs.variant` a Claude variant. The Team screen marks the profile `auto` picks for the
+engine and kind of change with its **Fast** / **Rápido** and **Balanced** / **Equilibrado** chips
+(it does not check the installed Claude Code or the project's checks); choosing a chip forces that
+profile. `cuanta loop` and the app's fix loop launch bug fixes, so they run fast under `auto`.
+
+A fast run without `--model` takes the variant measured fastest for its kind of change, among
+those accepted on every task of that kind in the implementer trials
+([screen](trials/2026-09-30-implementer-screen.md), [hard tasks](trials/2026-10-01-implementer-hard.md)).
+The kinds follow cuanta's own split, the one that decides ordered steps: a feature is large when
+its change plan's edit set reaches the ordered-steps threshold.
+
+| Kind | Model and variant | Evidence |
+|---|---|---|
+| Small feature (no ordered steps) | Opus 5.5, low effort | the sitemap/canonical feature (76.3 s) and the third WhatsApp step (160.8 s), both accepted |
+| Large feature (ordered steps) | Opus 5.5, low effort | the JSON-LD feature (119.7 s) and the first two WhatsApp steps (131.2 s, 236.3 s), all accepted |
+| Bug fix | Opus 5.5, high effort | the only GSAP fix accepted on behaviour, 180.2 s |
+
+Sonnet 5 at medium effort was the fastest on the two screen features (185.9 s against 196.0 s for
+Opus 5.5 low), but it was rejected on the first WhatsApp step and never ran the third, so it was
+not accepted on every task of either feature kind. Refactors have no measured default: a fast
+refactor needs `--model`, or it uses the balanced team's senior model. An explicit `--variant` or
+`runs.variant` replaces the kind's variant; an explicit `--model` replaces both. The Team screen
+offers the same choice as **By kind of change** / **Según el tipo de cambio**.
 
 Fast uses one native Claude implementation session. It does not schedule documentation work or
 a separate tester; the writer handles requested tests. Small read sets go straight to the writer's
 context pack. The pack includes project lint and TypeScript rules, and the prompt asks for several
 anchored reads together. Read-discipline hooks are off for fast runs, avoiding their measured
-per-tool overhead. Balanced retains its existing behavior.
+per-tool overhead. Fast runs have no live governor (it steers team pipelines); they stop at the
+native budget cap and the turn rail, and the repair loop's round, time and cost limits. Balanced
+retains its existing behavior.
 
 Choose a single model with `--model` and a variant with `--variant`. The installed Claude Code
 2.1.283 catalog contains Opus 5.5 and Sonnet 5, each with low, medium, high, xhigh and max effort.
