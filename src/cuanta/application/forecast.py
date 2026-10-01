@@ -431,6 +431,9 @@ class Forecaster:
         self._shapes = shapes
         self._metadata = metadata
 
+    def edit_tokens(self, change_plan: ChangePlan) -> int:
+        return sum(self._sizes(change_plan).edit)
+
     def plan(
         self,
         task_type: str,

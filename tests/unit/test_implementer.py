@@ -13,20 +13,37 @@ from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.adapters.system.clock import FixedClock
 from cuanta.adapters.system.workspace import LocalWorkspace
 from cuanta.application.engine_run import EngineLauncher, LaunchSpec
+from cuanta.application.forecast import Forecaster, PlanSizes
 from cuanta.application.implementer import ImplementationSession, VerificationBaselines
-from cuanta.application.mandate_flow import MandateOptions, per_role_run
+from cuanta.application.mandate_flow import (
+    MandateFlow,
+    MandateOptions,
+    per_role_run,
+    resolved_profile,
+)
+from cuanta.application.route_apply import RouteOptions
 from cuanta.application.verification import Verifier
+from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.config import Config, layer_from_table, merge
+from cuanta.domain.detection import Stack
 from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest, RunResult
 from cuanta.domain.errors import DomainFailure
 from cuanta.domain.implementation import (
+    AUTO_PROFILE,
+    FIX_CHOICE,
+    LARGE_EDIT_TOKENS,
+    SMALL_FEATURE_CHOICE,
+    STEPPED_FEATURE_CHOICE,
+    ImplementationProfile,
     VerificationDelta,
     baseline_key,
+    fast_choice,
     implementation_fingerprint,
-    implementation_profile,
+    large_feature,
     planned_steps,
     project_rules,
     repair_feedback,
+    resolve_profile,
     unavailable_checks,
     verification_delta,
 )
@@ -34,6 +51,7 @@ from cuanta.domain.role_handoff import VerifyResult
 from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner, FakeStream
 from tests.unit.test_engine_profiles import REQUEST, flow
+from tests.unit.test_forecast import COLD_CLOCK, PRICES
 
 COMMANDS = ("npx tsc --noEmit", "npm run lint")
 BASE_ERROR = "src/old.ts:2 error TS2322: old mismatch"
@@ -487,7 +505,8 @@ def test_fast_profile_defaults_and_pins_native_writer(tmp_path: Path) -> None:
     assert not per_role_run(
         MandateOptions(profile="fast", shape="scout", scout_mode="launch"), "feature", "claude"
     )
-    assert implementation_profile("").value == Config().implementation_profile == "balanced"
+    assert Config().implementation_profile == AUTO_PROFILE
+    assert layer_from_table({"runs": {"profile": "auto"}}) == {"implementation_profile": "auto"}
     configured = merge([layer_from_table({"runs": {"profile": "fast", "repair_rounds": 2}})])
     assert configured.implementation_profile == "fast" and configured.repair_rounds == 2
     assert (
@@ -507,7 +526,11 @@ def test_fast_rejects_investigation_missing_model_and_allows_forced_ultracode(
             MandateOptions(profile="fast", model="sonnet"),
         )
     with pytest.raises(DomainFailure, match="requires"):
-        service.prepare(REQUEST, 0, MandateOptions(profile="fast"))
+        service.prepare(
+            replace(REQUEST, type="refactor", constraints="same output"),
+            0,
+            MandateOptions(profile="fast"),
+        )
     prepared = service.prepare(
         REQUEST, 0, MandateOptions(profile="fast", model="opus", variant="ultracode")
     )
@@ -1547,3 +1570,165 @@ def test_passing_test_file_headers_with_error_words_are_never_errors(tmp_path: P
         tmp_path, "npm test", JEST_ADDS, [*added, " FAIL  app/error.test.tsx", "  ● boom"]
     )
     assert "npm test: app/error.test.tsx ● boom" in worse.introduced
+
+
+@pytest.mark.parametrize(
+    ("value", "default", "engine", "kind", "team", "expected"),
+    [
+        ("", AUTO_PROFILE, "claude", "feature", False, ImplementationProfile.FAST),
+        ("", "", "claude", "bug", False, ImplementationProfile.FAST),
+        (AUTO_PROFILE, "balanced", "claude", "bug", False, ImplementationProfile.FAST),
+        ("", AUTO_PROFILE, "claude", "refactor", False, ImplementationProfile.BALANCED),
+        ("", AUTO_PROFILE, "claude", "investigation", False, ImplementationProfile.BALANCED),
+        ("", AUTO_PROFILE, "codex", "feature", False, ImplementationProfile.BALANCED),
+        ("", AUTO_PROFILE, "claude", "feature", True, ImplementationProfile.BALANCED),
+        ("", "balanced", "claude", "feature", False, ImplementationProfile.BALANCED),
+        ("fast", "balanced", "claude", "refactor", True, ImplementationProfile.FAST),
+        ("balanced", AUTO_PROFILE, "claude", "bug", False, ImplementationProfile.BALANCED),
+    ],
+)
+def test_auto_profile_is_fast_only_for_claude_features_and_fixes_without_a_team(
+    value: str,
+    default: str,
+    engine: str,
+    kind: str,
+    team: bool,
+    expected: ImplementationProfile,
+) -> None:
+    assert resolve_profile(value, default, engine, kind, team) is expected
+
+
+def test_fast_choice_follows_the_measured_winner_of_each_kind() -> None:
+    assert fast_choice("bug", False) == fast_choice("bug", True) == FIX_CHOICE
+    assert (FIX_CHOICE.model, FIX_CHOICE.variant) == ("claude-opus-5-5", "high")
+    assert fast_choice("feature", False) == SMALL_FEATURE_CHOICE
+    assert (SMALL_FEATURE_CHOICE.model, SMALL_FEATURE_CHOICE.variant) == (
+        "claude-opus-5-5",
+        "low",
+    )
+    assert fast_choice("feature", True) == STEPPED_FEATURE_CHOICE
+    assert (STEPPED_FEATURE_CHOICE.model, STEPPED_FEATURE_CHOICE.variant) == (
+        "claude-opus-5-5",
+        "low",
+    )
+    assert fast_choice("refactor", False) is None and fast_choice("investigation", True) is None
+    assert large_feature("feature", LARGE_EDIT_TOKENS)
+    assert not large_feature("feature", LARGE_EDIT_TOKENS - 1)
+    assert not large_feature("bug", LARGE_EDIT_TOKENS * 10)
+
+
+@pytest.mark.parametrize(
+    ("options", "team"),
+    [
+        (MandateOptions(), False),
+        (MandateOptions(simple=True), True),
+        (MandateOptions(shape="pipeline"), True),
+        (MandateOptions(shape="scout"), True),
+        (MandateOptions(shape="single"), False),
+        (MandateOptions(route=RouteOptions(role_models=(("senior", "opus"),))), True),
+        (MandateOptions(route=RouteOptions(preset="quality")), True),
+    ],
+)
+def test_a_requested_team_keeps_the_auto_profile_balanced(
+    options: MandateOptions, team: bool
+) -> None:
+    found = resolved_profile(options, AUTO_PROFILE, "claude", "feature")
+    assert found is (ImplementationProfile.BALANCED if team else ImplementationProfile.FAST)
+    crossed = resolved_profile(options, AUTO_PROFILE, "claude", "feature", True)
+    assert crossed is ImplementationProfile.BALANCED
+
+
+@pytest.mark.parametrize(
+    ("kind", "options", "model", "effort"),
+    [
+        ("bug", MandateOptions(profile="fast"), "claude-opus-5-5", "high"),
+        ("feature", MandateOptions(profile="fast"), "claude-opus-5-5", "low"),
+        ("feature", MandateOptions(profile="fast", variant="high"), "claude-opus-5-5", "high"),
+        ("feature", MandateOptions(profile="fast", variant="fast-low"), "claude-opus-5-5", "low"),
+        ("bug", MandateOptions(profile="fast", model="claude-sonnet-5"), "claude-sonnet-5", ""),
+    ],
+)
+def test_fast_runs_without_a_model_take_the_default_of_their_kind(
+    tmp_path: Path, kind: str, options: MandateOptions, model: str, effort: str
+) -> None:
+    service = flow(tmp_path, ClaudeCodeEngine(FakeRunner()))
+    prepared = service.prepare(replace(REQUEST, type=kind, tests="add(2, 3) == 5"), 0, options)
+    assert prepared.spec.profile == "fast" and prepared.spec.pure
+    assert prepared.spec.model == model and prepared.spec.effort == effort
+    assert not prepared.spec.implementation_steps
+
+
+def large_flow(root: Path, edit_tokens: int, profile: str = "balanced") -> MandateFlow:
+    base = flow(root, ClaudeCodeEngine(FakeRunner()))
+    return MandateFlow(
+        base.service,
+        lambda _: ClaudeCodeEngine(FakeRunner()),
+        lambda engine: EngineLauncher(
+            engine,
+            MemoryLedger(),
+            FixedClock(),
+            lambda: "RUN1",
+            lambda size: b"\x01" * size,
+            "project",
+            4318,
+            None,
+        ),
+        Stack,
+        lambda _: ({}, None),
+        str(root),
+        "claude",
+        0.0,
+        change_plan=lambda request: ChangePlan(edit=(EditTarget("src/page.tsx", 0.9),)),
+        forecaster=Forecaster(
+            MemoryLedger(),
+            PRICES,
+            lambda: (),
+            lambda plan: PlanSizes((edit_tokens,), ()),
+            lambda engine: COLD_CLOCK,
+            lambda: "2026-10-01T10:00:00Z",
+        ),
+        default_profile=profile,
+        fast_ready=lambda name: name == "claude",
+    )
+
+
+def test_a_large_fast_feature_runs_in_steps_on_the_stepped_default(tmp_path: Path) -> None:
+    feature = replace(REQUEST, type="feature", tests="add(2, 3) == 5")
+    auto = large_flow(tmp_path, LARGE_EDIT_TOKENS, AUTO_PROFILE)
+    large = auto.prepare(feature, 0, MandateOptions())
+    assert large.spec.profile == "fast" and large.spec.implementation_steps
+    assert large.spec.model == "claude-opus-5-5" and large.spec.effort == "low"
+    small = large_flow(tmp_path, LARGE_EDIT_TOKENS - 1, AUTO_PROFILE).prepare(
+        feature, 0, MandateOptions()
+    )
+    assert small.spec.model == "claude-opus-5-5" and small.spec.effort == "low"
+    assert not small.spec.implementation_steps
+    pinned = large_flow(tmp_path, LARGE_EDIT_TOKENS).prepare(
+        feature, 0, MandateOptions(profile="fast", model="claude-sonnet-5", variant="high")
+    )
+    assert pinned.spec.model == "claude-sonnet-5" and pinned.spec.effort == "high"
+    assert pinned.spec.implementation_steps
+    balanced = large_flow(tmp_path, LARGE_EDIT_TOKENS).prepare(feature, 0, MandateOptions())
+    assert balanced.spec.profile == "balanced" and not balanced.spec.implementation_steps
+
+
+def test_auto_falls_back_to_balanced_when_the_engine_or_project_is_not_ready(
+    tmp_path: Path,
+) -> None:
+    asked: list[str] = []
+
+    def ready(name: str) -> bool:
+        asked.append(name)
+        return False
+
+    options = MandateOptions()
+    found = resolved_profile(options, AUTO_PROFILE, "claude", "bug", ready=ready)
+    assert found is ImplementationProfile.BALANCED and asked == ["claude"]
+    forced = resolved_profile(
+        replace(options, profile="fast"), AUTO_PROFILE, "claude", "bug", ready=ready
+    )
+    assert forced is ImplementationProfile.FAST and asked == ["claude"]
+    prepared = flow(tmp_path, ClaudeCodeEngine(FakeRunner())).prepare(
+        REQUEST, 0, MandateOptions(profile=AUTO_PROFILE)
+    )
+    assert prepared.spec.profile == "balanced"

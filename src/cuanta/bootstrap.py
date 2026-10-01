@@ -175,6 +175,7 @@ class Container:
     _opened: list[Ledger] = field(default_factory=list, repr=False)
     decision_scope: DecisionScope = field(default_factory=_new_scope, repr=False)
     _pack_cache: dict[str, ContextPack] = field(default_factory=dict, repr=False)
+    _fast_ready: dict[str, bool] = field(default_factory=dict, repr=False)
 
     @classmethod
     def for_project(cls, project: Path) -> Container:
@@ -536,6 +537,30 @@ class Container:
             return None
         return cast("Engine", factory(self.runner))
 
+    def fast_ready(self, name: str) -> bool:
+        from cuanta.ports.engine import TurnInput
+
+        if name not in self._fast_ready:
+            engine: object = self.engine(name)
+            steerable = isinstance(engine, TurnInput) and engine.accepts_turns()
+            self._fast_ready[name] = steerable and bool(self.static_checks())
+        return self._fast_ready[name]
+
+    def static_checks(self) -> tuple[str, ...]:
+        stack = self.detector().run(with_engines=False).stack
+        package = self.workspace().read_text("package.json")
+        try:
+            parsed = json.loads(package or "{}")
+        except ValueError:
+            parsed = {}
+        scripts = parsed.get("scripts", {}) if isinstance(parsed, dict) else {}
+        lint = (
+            f"{stack.package_manager or 'npm'} run lint"
+            if isinstance(scripts, dict) and isinstance(scripts.get("lint"), str)
+            else ""
+        )
+        return tuple(command for command in (stack.typecheck_command, lint) if command)
+
     def shared_ledger(self) -> Ledger:
         if self._shared is None:
             self._shared = self.ledger()
@@ -587,23 +612,11 @@ class Container:
         if spec.read_only or spec.kind not in {"mandate", "cross"}:
             return None
         stack = self.detector().run(with_engines=False).stack
-        package = self.workspace().read_text("package.json")
-        try:
-            parsed = json.loads(package or "{}")
-        except ValueError:
-            parsed = {}
-        scripts = parsed.get("scripts", {}) if isinstance(parsed, dict) else {}
-        lint = (
-            f"{stack.package_manager or 'npm'} run lint"
-            if isinstance(scripts, dict) and isinstance(scripts.get("lint"), str)
-            else ""
-        )
         commands = tuple(
             dict.fromkeys(
                 command
                 for command in (
-                    stack.typecheck_command,
-                    lint,
+                    *self.static_checks(),
                     *spec.verify_commands,
                     stack.build_command if "build" in spec.prompt.casefold() else "",
                 )
@@ -1224,6 +1237,22 @@ class Container:
     def shaped_options(
         self, request: MandateRequest, options: MandateOptions, cross_engine: bool = False
     ) -> tuple[MandateOptions, ShapeChoice]:
+        from cuanta.application.mandate_flow import resolved_profile
+        from cuanta.domain.implementation import ImplementationProfile
+        from cuanta.domain.mandate import Shape
+        from cuanta.domain.scout import ShapeChoice
+
+        profile = resolved_profile(
+            options,
+            self.config.implementation_profile,
+            self.config.engine,
+            request.type,
+            cross_engine,
+            self.fast_ready,
+        )
+        options = replace(options, profile=profile.value)
+        if profile is ImplementationProfile.FAST:
+            return options, ShapeChoice(Shape.SINGLE)
         choice = self.team_shape(request, options, cross_engine)
         if not choice.scout:
             return options, choice
@@ -1507,8 +1536,13 @@ class Container:
         from cuanta.application.cross_engine import CrossEnginePipeline
         from cuanta.application.run_reports import RunReports
         from cuanta.application.timing import PhaseRecorder
+        from cuanta.domain.implementation import AUTO_PROFILE, ImplementationProfile
         from cuanta.domain.run_mode import classic_meta
         from cuanta.domain.scout import parse_docs_mode
+
+        profile = (
+            implementation.profile if implementation is not None else ""
+        ) or self.config.implementation_profile
 
         reports = RunReports(self.state_workspace())
         mode = classic_meta(self.run_mode)
@@ -1558,9 +1592,9 @@ class Container:
             read_max_lines=self.config.read_max_lines,
             docs_mode=parse_docs_mode(self.config.docs_mode),
             timing=PhaseRecorder(self.clock, ledger),
-            implementation_profile=implementation.profile or self.config.implementation_profile
-            if implementation is not None
-            else self.config.implementation_profile,
+            implementation_profile=ImplementationProfile.BALANCED.value
+            if profile == AUTO_PROFILE
+            else profile,
             variant=implementation.variant or self.config.implementation_variant
             if implementation is not None
             else self.config.implementation_variant,
@@ -1949,11 +1983,13 @@ class Container:
         from cuanta.application.route_apply import RouteOptions
         from cuanta.domain.bench import Condition
         from cuanta.domain.errors import DomainFailure
+        from cuanta.domain.implementation import ImplementationProfile
 
         flow = self.mandate_flow(ledger)
         mode = "auto" if condition is Condition.ROUTED else "off"
         options = MandateOptions(
             engine="claude",
+            profile=ImplementationProfile.BALANCED.value,
             model=model,
             budget_usd=cap,
             route=RouteOptions(mode=mode),
@@ -2087,6 +2123,7 @@ class Container:
             default_profile=self.config.implementation_profile,
             default_variant=self.config.implementation_variant,
             implementation_tools=self.config.implementation_tools,
+            fast_ready=self.fast_ready,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:

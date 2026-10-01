@@ -8,12 +8,13 @@ import pytest
 
 from cuanta.application.cross_engine import CompletionState, CrossReport, CrossStep
 from cuanta.application.estimate import Estimate, estimate
-from cuanta.application.forecast import PlannedForecast
+from cuanta.application.forecast import PlannedForecast, PlanSizes
 from cuanta.application.mandate_flow import MandateOptions
 from cuanta.application.routing import RoutePlan
-from cuanta.domain.change_plan import ChangePlan
+from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.config import Config
 from cuanta.domain.errors import NotAvailable
+from cuanta.domain.implementation import LARGE_EDIT_TOKENS
 from cuanta.domain.ledger import Run
 from cuanta.domain.mandate import MandateRequest, Shape
 from cuanta.domain.messages import english, msg
@@ -113,6 +114,7 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
         change_plan=lambda request: ChangePlan(),
         team_forecast=team_forecast,
         shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
+        fast_ready=lambda name: True,
         docs_choice=lambda request, options: None,
         shape_plan=lambda plan, shape, docs: plan,
         close=lambda: None,
@@ -130,3 +132,48 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
         "Forecast unavailable, the launch goes ahead without one: the code index is being written"
     )
     assert reserves == [False]
+
+
+@pytest.mark.parametrize(
+    ("kind", "ready", "seen"),
+    [
+        ("bug", True, ("fast", "claude-opus-5-5", "high")),
+        ("feature", True, ("fast", "claude-opus-5-5", "low")),
+        ("refactor", True, ("balanced", "", "")),
+        ("bug", False, ("balanced", "", "")),
+    ],
+)
+def test_the_team_step_forecasts_the_auto_profile_with_the_default_of_its_kind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    ready: bool,
+    seen: tuple[str, str, str],
+) -> None:
+    team = RoutePlan(RoutingPolicy(engines=("claude",)), None, None, (), (), "heuristic")
+    forecasts: list[tuple[object, object, object]] = []
+
+    def team_forecast(*args: object, **kwargs: object) -> PlannedForecast:
+        forecasts.append((kwargs["implementation_profile"], kwargs["model"], kwargs["variant"]))
+        raise ValueError("no forecast in this test")
+
+    container = SimpleNamespace(
+        config=Config(engine="claude"),
+        plan_route=lambda *args, **kwargs: (team, None),
+        team_estimate=lambda plan, task_type, depth, cap, shape="pipeline", repair=True, docs_off=False: (
+            estimate(plan, (), PriceTable({}), task_type, depth, cap, shape, None, repair, docs_off)
+        ),
+        change_plan=lambda request: ChangePlan(edit=(EditTarget("src/page.tsx", 0.9),)),
+        plan_sizes=lambda plan: PlanSizes((LARGE_EDIT_TOKENS,), ()),
+        team_forecast=team_forecast,
+        shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
+        fast_ready=lambda name: ready,
+        docs_choice=lambda request, options: None,
+        shape_plan=lambda plan, shape, docs: plan,
+        close=lambda: None,
+    )
+    services = ContainerServices(tmp_path)
+    monkeypatch.setattr(services, "_container", lambda: cast("Container", container))
+    request = MandateRequest(kind, "fix add", "wrong sum", constraints="same output", tests="sum")
+    services.team_plan(request, MandateOptions())
+    assert forecasts == [seen]

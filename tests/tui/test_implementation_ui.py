@@ -66,7 +66,7 @@ def test_fast_chip_preserves_the_selected_model_and_variant() -> None:
         assert options.variant == "fast-low"
         assert not wizard.per_role
         depth = str(wizard.query_one("#wiz-depth-note", Static).render())
-        assert "claude-opus-5-5" in depth and "medium effort" not in depth
+        assert "Opus 5.5 · Fast output · low (Opus)" in depth and "medium effort" not in depth
 
     drive(make_app(FakeServices()), scenario, size=(120, 50))
 
@@ -117,3 +117,39 @@ def test_an_engine_budget_stop_is_shown_from_the_catalog() -> None:
     content = str(implementation_content(Catalog("es"), session.report.payload()))
     assert "Detenido: límite de presupuesto alcanzado" in content
     assert "error_max_budget_usd" not in content
+
+
+def test_auto_profile_shows_fast_for_a_claude_change_and_the_default_of_its_kind() -> None:
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+
+        def fast() -> bool:
+            return wizard.fast_profile
+
+        await tell(wizard, pilot, "Add a badge to the cart. Don't touch payments.")
+        await pilot.pause()
+        assert wizard.kind == "feature" and fast()
+        assert wizard.query_one("#implementation-fast").has_class("-current")
+        assert not wizard.query_one("#implementation-balanced").has_class("-current")
+        assert not wizard.per_role
+        options = wizard.options()
+        assert (options.profile, options.model, options.variant) == ("auto", "", "")
+        depth = str(wizard.query_one("#wiz-depth-note", Static).render())
+        assert "Opus 5.5 · Low effort for features" in depth
+        wizard.query_one("#wiz-implementation-variant", Select).value = "high"
+        await pilot.pause()
+        assert wizard.options().variant == "high"
+        depth = str(wizard.query_one("#wiz-depth-note", Static).render())
+        assert "Opus 5.5 · High effort for features" in depth
+        wizard.kind = "refactor"
+        assert not fast()
+        wizard.kind = "bug"
+        wizard.simple = True
+        assert not fast()
+        assert (wizard.options().model, wizard.options().variant) == ("", "")
+        wizard.query_one("#implementation-balanced", Button).press()
+        await pilot.pause()
+        wizard.simple = False
+        assert not fast() and wizard.options().profile == "balanced"
+
+    drive(make_app(FakeServices(profile="auto")), scenario, size=(120, 50))

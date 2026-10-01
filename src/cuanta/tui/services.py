@@ -39,10 +39,12 @@ from cuanta.application.mandate_flow import (
     MandateOptions,
     MandatePreview,
     MandateSetup,
+    fast_defaults,
     launch_turns,
     per_role_run,
     preview_of,
     resolve_budget,
+    resolved_profile,
 )
 from cuanta.application.map import MapFile, MapQuery, MapStatus
 from cuanta.application.models import CatalogView, ProbeOutcome
@@ -64,7 +66,7 @@ from cuanta.domain.engine import EngineEvent
 from cuanta.domain.errors import CuantaError, DomainFailure, NotAvailable
 from cuanta.domain.fixes import Fix, FixAction
 from cuanta.domain.handoff import Handoff, parse_workflow
-from cuanta.domain.implementation import ImplementationProfile, implementation_profile
+from cuanta.domain.implementation import ImplementationProfile, large_feature
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import Decision, Run
 from cuanta.domain.loop import LOOP_OUT_OF_SCOPE, LoopGate, loop_gate
@@ -943,8 +945,12 @@ class ContainerServices:
         container = self._container()
         route = options.route
         try:
-            profile = implementation_profile(
-                options.profile, container.config.implementation_profile
+            profile = resolved_profile(
+                options,
+                container.config.implementation_profile,
+                container.config.engine,
+                request.type,
+                ready=container.fast_ready,
             )
             options = replace(
                 options,
@@ -998,6 +1004,9 @@ class ContainerServices:
                 docs=docs,
             )
             per_role = per_role_run(options, request.type, container.config.engine)
+            if fast and not options.model:
+                edits = sum(container.plan_sizes(protection).edit)
+                options = fast_defaults(options, request.type, large_feature(request.type, edits))
             writer = plan.route(Role.SENIOR) or single_model(plan.routes)
             model = options.model
             if fast and not model and writer is not None and writer.model is not None:
