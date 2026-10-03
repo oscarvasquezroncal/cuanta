@@ -6,6 +6,113 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
+### Changed
+- **Limits are opt-in (surprising).** A run has no spend cap, no turn limit and no wall-time limit
+  unless you set one: `--max-budget-usd`, `--max-turns` and the new `--max-wall` (minutes) on
+  `cuanta mandate`, `queue add` and `loop` (each fix); `[limits] budget_usd`, `max_turns` and
+  `wall_min` in `.cuanta/config.toml` for every run; `[runs] limits = "depth"` to restore the depth
+  caps and turn rails; and the app's Límites/Limits switch in the Team step, off by default.
+  `--depth` now chooses model tiers, effort and the read budget only. Teams of separate launches
+  lose their implicit $1.00 and depth caps. `--max-turns 0` now means no turn limit for that run.
+  The launch card says `no limits` or lists the active ones, and hides the spend and turn
+  guarantee rows that do not apply. Bench runs and trial replays set their caps explicitly.
+  With `[limits]` values and `[runs] limits = "off"`, the app's switch starts on with exactly those
+  values (every other field reads 0); an empty field takes the depth default only in depth mode
+  or when you turn the switch on with nothing configured. The card's limits line and the dry-run
+  `limits` key list the limits the launch applies (a turn limit is dropped on Codex and OpenCode),
+  while the guarantee rows still say "Turn limit: not available" when one was asked for.
+- A role pin set in `[routing] models.*` keeps the auto profile on the balanced team, where pins are
+  honored; an explicit `--profile fast` with a pin naming another model is refused before launch.
+- `cuanta mandate --docs auto|on|off` and `cuanta queue add --docs` choose the docs role for one run,
+  over `runs.docs`; contradictions (`--classic` with `--docs off|auto`, `--docs off` with a docs pin,
+  `--docs on` with `--simple`, an investigation or the fast profile) are refused before launch, and
+  `--docs on` keeps the auto profile on the balanced team.
+- The background listener writes to `.cuanta/logs/listener.log` (it was `.cuanta/listener.log`).
+  Stored raw telemetry re-encodes JSON found inside string values compactly; email redaction covers
+  non-ASCII local parts, and scalar values under secret-named keys are redacted. A body that is not
+  OTLP gets HTTP 400. The background listener's own console output goes to
+  `.cuanta/logs/listener.out.log`, rewritten at each start, so `listener.log` rotates on Windows too.
+
+### Fixed
+- A run is no longer killed after 15 minutes: `runs.repair_timeout_s` bounds the time spent in
+  repair rounds only, counted from the first repair turn, and stops further repairs instead of
+  halting the engine. This applies to the native team, fast runs and the per-role runner.
+- A finished run never shows a step as running: steps cut off by a stop or an engine exit read
+  `stopped`, and the result names the stop in one line with its number ("stopped by the time
+  limit of 900 s", "stopped at the spend cap of $5.00", "the agent finished"), in the console,
+  `cuanta runs show` and the app.
+- A run that ends before the engine's result shows its cost and turns from what was received
+  (telemetry requests priced with the catalog, or the stream's usage), marked `partial`, instead of
+  `cost n/a` and `turns 0`. Partial costs count as lower bounds in totals and never calibrate
+  forecasts. The ledger moves to schema 14 (`runs.partial`, `runs.max_wall_s`).
+- The app's run screen settles its cards when a run is stopped or fails without a result.
+- The telemetry listener never prints to the console. A record it cannot read is dropped and
+  counted, the run gets one Note ("N telemetry records could not be read; details in
+  .cuanta/logs/listener.log"), and tracebacks go to that file, echoed only with `--verbose`.
+  Redaction now works on values before JSON encoding, so stored raw telemetry is always valid
+  JSON (a key assignment such as `API_KEY=...` inside a tool input, or an email after a newline,
+  used to corrupt it and drop the whole batch).
+- The context pack and the change plan read the whole request: `path:line` and `path:start-end`
+  anchors from every field, the evidence included, come first in the pack with their cards and the
+  anchored lines, the native scout gets the pack too, and the launch card names anchors that did not
+  resolve (missing, ambiguous, past the end of the file, protected or left out by the budget). A long
+  request takes at most a quarter of the pack budget. The change plan no longer guesses new files
+  from tokens such as `2.1` or `POST /consult`.
+- Read-only words inside one numbered phase of a phased mandate no longer make a feature, fix or
+  refactor read-only for the whole run; when a writing request still compiles read-only, the card
+  says which words did it.
+- The docs decision reads the evidence too and recognizes the `docs-updater` agent and docs paths
+  (`docs/`, `CHANGELOG.*`, `README.*`); links are ignored. The launch card and the result name the
+  rule, the term and the field that turned docs on or off.
+- `--pure` plans pure: the route plan, the scout's tier, the agents file, the estimate, the forecast
+  and the audit all use the forced model, with the reason `pure`; a premium or higher pure model keeps
+  the pipeline without a scout unless `--shape scout` or a scout pin asks for one, and the live launch
+  card now prints the shape line. Pure and fast runs no longer teach the tier learner.
+- The forecast counts the request's own tokens (every field, the evidence included), and a mandate
+  with several numbered phases or steps gets one line saying the forecast covers one change.
+- A wall limit that fires after the final result, or while cuanta verifies it, no longer fails a
+  finished run; a team's shared deadline also stops repair, resume and rotation launches (the team
+  ends partial with the time-limit line), role runs record the team's limit, and a huge `--max-wall`
+  no longer crashes the timer. A wall halt or a user stop during verification is no longer reported
+  as "session closed", and a user stop always reads "stopped by the user" unless the run finished.
+- Per-role results label partial costs and their total ("spent $1.80 (partial) of $5.00") instead
+  of `n/a`; Codex and OpenCode runs cut before their turn ended are partial too; similar-run
+  estimates skip partial runs; `cuanta runs show` of a team gives the team's stop.
+- Out-of-scope files the index never holds (lock files, a backticked `.env`, `go.mod`, `*.tf`,
+  `*.pem`) are guarded again. Relative anchors resolve to the deeper file they name. A prohibition
+  scoped to one phase ("en esta fase") no longer guards the whole run, and a phase prohibition on a
+  path the request also names for change is dropped with a note. Read-only words after the first
+  numbered phase of any field no longer freeze a writing request. Absolute and third-party paths
+  never become new-file targets, and ranges longer than the pack window are reported as packed in
+  part.
+- The docs rule is narrower in the evidence: docs words count only on headings, numbered phase or
+  step lines and bold lines; the agent name and docs paths count anywhere except log lines; negated
+  mentions ("no actualices la documentación") never turn docs on; a docs path starts with `docs/`
+  or `doc/`.
+- The listener stays quiet when the ledger fails to open or close; a value the ledger cannot store
+  no longer drops its batch (it becomes a `telemetry_unreadable` marker, and `/health` reports
+  `dropped`); non-finite numbers are stored as strings, so stored raw is strict JSON; `init` and
+  `refresh` show the unreadable-telemetry Note too.
+- In the app, per-role team cards hide the spend and turn guarantee rows that do not apply, typing a
+  limit refreshes the forecast, the three limit fields wrap at 80 columns, validation skips the
+  hidden turns field, the run summary labels estimated and partial costs, and the metrics panel says
+  `cap none` instead of `$0.0000`. Stop and limits lines use the singular for one ("found 1 new
+  error", "limits: 1 turn").
+- A governed run whose governor turn was answered before its result settles at that result, so a
+  wall limit during the final verification no longer fails it. A team repair or a Codex finish
+  resume cut by the shared wall ends the team with the time-limit line and no verification after
+  the deadline; a role stopped by the wall before its launch finishes as skipped. Trials and the
+  bench treat a partial (lower-bound) cost like an unknown one and stop before the next paid run.
+- A phase runs from its labelled line to the next heading of the same or a higher level, so a
+  trailing section such as `## Reglas generales` is global again for read-only words and
+  prohibitions. The docs negation counts only a negated change, creation or invocation verb that
+  governs the docs term, or "sin"/"without" right before it ("has no README yet" keeps docs on).
+  Home-relative and variable paths (`~/`, `$HOME/`, `%APPDATA%/`) never become new-file targets.
+  An OTLP record that overflows while decoding becomes a counted marker and the rest of the batch
+  lands.
+- In the app, per-role model picks in the team cards survive limit, Limits and depth refreshes on
+  the same engine, and the Team step follows configured role pins under `auto` (the balanced team).
+
 ## [0.5.0] - 2026-10-01
 
 Teams by provider, forecast envelopes, a live governor, scout and senior execution, a warm queue,
