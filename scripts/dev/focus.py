@@ -105,8 +105,13 @@ def run(paths: list[str], snapshot_update: bool = False) -> int:
     if targets:
         commands.extend(
             [
-                ("ruff", python("-m", "ruff", "check", "--output-format=json", *targets)),
-                ("format", python("-m", "ruff", "format", "--check", *targets)),
+                (
+                    "ruff",
+                    python(
+                        "-m", "ruff", "check", "--force-exclude", "--output-format=json", *targets
+                    ),
+                ),
+                ("format", python("-m", "ruff", "format", "--force-exclude", "--check", *targets)),
             ]
         )
     commands.append(("mypy", python("-m", "mypy", "--strict", "--incremental")))
