@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, fields
 from enum import StrEnum
 
@@ -25,6 +26,101 @@ class MandateRequest:
     constraints: str = ""
     tests: str = ""
     out_of_scope: str = ""
+
+
+class PartKind(StrEnum):
+    PHASE = "phase"
+    STEP = "step"
+
+
+@dataclass(frozen=True, slots=True)
+class RequestParts:
+    kind: PartKind = PartKind.PHASE
+    count: int = 0
+
+
+MIN_PARTS = 2
+NUMBERED_PART = re.compile(
+    r"^[ \t>]*+(?:#{1,6}[ \t]*+)?(?:(?:[-*+]|\d{1,2}[.)])[ \t]++)?(?:\*\*|__|\*|_)?[ \t]*"
+    r"(?P<word>fase|etapa|hito|phase|stage|milestone|paso|step)s?[ \t]+"
+    r"(?P<number>\d{1,2}|[ivx]{1,4})\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+STEP_WORDS = frozenset({"paso", "step"})
+LINE_LEAD = r"(?:[ ]{0,3}>[ ]?)*+[ ]{0,3}+"
+HEADING_LINE = re.compile(
+    LINE_LEAD + r"(?:(?P<atx>#{1,6})(?:[ \t\r]|$)"
+    r"|(?:[-*+][ \t]++)?(?:\*\*|__)[^*_\n]++(?:\*\*|__)[ \t\r]*+:?[ \t\r]*+$)"
+)
+FENCE_LINE = re.compile(LINE_LEAD + r"(?:```[^`]*+$|~~~)")
+LABEL_LEVEL = 7
+
+Span = tuple[int, int]
+
+
+def request_text(request: MandateRequest) -> str:
+    values = (getattr(request, item.name).strip() for item in fields(MandateRequest))
+    return "\n".join(value for value in values if value)
+
+
+def numbered_parts(text: str) -> RequestParts:
+    found: dict[PartKind, set[str]] = {PartKind.PHASE: set(), PartKind.STEP: set()}
+    for match in NUMBERED_PART.finditer(text):
+        kind = PartKind.STEP if match["word"].lower() in STEP_WORDS else PartKind.PHASE
+        found[kind].add(match["number"].lower())
+    phases, steps = len(found[PartKind.PHASE]), len(found[PartKind.STEP])
+    if phases >= MIN_PARTS or phases >= steps:
+        return RequestParts(PartKind.PHASE, phases)
+    return RequestParts(PartKind.STEP, steps)
+
+
+def first_part_offset(text: str) -> int | None:
+    found = NUMBERED_PART.search(text)
+    return found.start() if found is not None else None
+
+
+def _line_level(line: str, part: bool) -> int | None:
+    found = HEADING_LINE.match(line)
+    if found is None:
+        return LABEL_LEVEL if part else None
+    return len(found["atx"]) if found["atx"] else LABEL_LEVEL
+
+
+def _merged(spans: list[Span]) -> tuple[Span, ...]:
+    merged: list[Span] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
+
+
+def part_spans(text: str) -> tuple[Span, ...]:
+    spans: list[Span] = []
+    open_parts: list[tuple[int, int]] = []
+    fenced = False
+    offset = 0
+    for line in text.split("\n"):
+        start, offset = offset, offset + len(line) + 1
+        if FENCE_LINE.match(line) is not None:
+            fenced = not fenced
+            continue
+        part = not fenced and NUMBERED_PART.match(line) is not None
+        level = None if fenced else _line_level(line, part)
+        if level is None:
+            continue
+        while open_parts and open_parts[-1][0] >= level:
+            spans.append((open_parts.pop()[1], start))
+        if part:
+            open_parts.append((level, start))
+    spans.extend((begin, len(text)) for _, begin in open_parts)
+    return _merged(spans)
+
+
+def in_parts(position: int, spans: tuple[Span, ...]) -> bool:
+    index = bisect_right(spans, position, key=lambda span: span[0]) - 1
+    return index >= 0 and position < spans[index][1]
 
 
 LABELS: dict[str, str] = {

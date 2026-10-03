@@ -7,9 +7,13 @@ import pytest
 
 from cuanta.application.context_pack import IndexContextPack
 from cuanta.bootstrap import Container
+from cuanta.domain.anchors import AnchorState, anchor_notes
 from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.mandate import MandateRequest
-from cuanta.domain.pack import Layer
+from cuanta.domain.messages import english
+from cuanta.domain.pack import ContextPack, Layer
+from tests.fakes import copy_repo
+from tests.real_run import phased_mandate
 
 
 def _project(tmp_path: Path) -> Container:
@@ -158,3 +162,138 @@ def test_investigation_keeps_fresh_observational_facts_and_windows_without_write
     finally:
         reader.close()
         container.close()
+
+
+def _backend_packs(
+    tmp_path: Path,
+    request: MandateRequest,
+    depth: str = "deep",
+    roles: tuple[str, ...] = ("",),
+) -> tuple[ChangePlan, tuple[ContextPack, ...]]:
+    container = Container.for_project(copy_repo("python_backend", tmp_path))
+    try:
+        plan = container.change_plan(request)
+        return plan, tuple(container.context_pack(request, depth, role, plan) for role in roles)
+    finally:
+        container.close()
+
+
+def _mandate(why: str) -> MandateRequest:
+    return MandateRequest(
+        "feature",
+        "Implementar el mandato adjunto",
+        why=why,
+        tests="pytest en verde",
+        out_of_scope="el frontend",
+    )
+
+
+def test_anchors_only_in_the_evidence_come_first_as_cards_and_ranges(tmp_path: Path) -> None:
+    _, (pack,) = _backend_packs(tmp_path, _mandate(phased_mandate()), roles=("orchestrator",))
+    window = next(
+        item for item in pack.items if item.key == "anchor:app/services/interpreter.py:287-289"
+    )
+    assert (window.layer, window.line, window.end_line) == (Layer.L2, 284, 292)
+    assert "ANCHOR_287" in window.text and "287: " in window.text
+    keys = {item.key for item in pack.items}
+    assert "anchor:app/routers/consult.py:67" in keys
+    assert "window:app/services/interpreter.py" not in keys
+    assert [item.key for item in pack.items if item.layer is Layer.L1][:2] == [
+        "anchor:app/routers/consult.py",
+        "anchor:app/services/interpreter.py",
+    ]
+    assert (
+        "[L2 anchor:app/services/interpreter.py:287-289 app/services/interpreter.py:284-292]"
+        in pack.excerpts
+    )
+    assert pack.tokens <= pack.budget == 6000
+
+
+def test_unresolved_anchors_are_reported_and_a_long_evidence_still_leaves_room_for_them(
+    tmp_path: Path,
+) -> None:
+    why = phased_mandate() + "\n" + "relleno " * 6000
+    _, (pack,) = _backend_packs(tmp_path, _mandate(why))
+    assert {check.anchor.label: check.state for check in pack.anchors} == {
+        "app/services/interpreter.py:287-289": AnchorState.PACKED,
+        "app/routers/consult.py:67": AnchorState.PACKED,
+        "app/models/legacy.py:12": AnchorState.MISSING,
+        "app/routers/consult.py:900": AnchorState.OUT_OF_RANGE,
+    }
+    keys = {item.key for item in pack.items}
+    assert {
+        "anchor:app/services/interpreter.py",
+        "anchor:app/services/interpreter.py:287-289",
+        "anchor:app/routers/consult.py",
+        "anchor:app/routers/consult.py:67",
+    } <= keys
+    request = next(item for item in pack.items if item.key == "request")
+    assert len(request.text.encode("utf-8")) <= pack.budget
+    assert f"[{len(why):,} characters in total]" in request.text
+    assert [english(message) for message in anchor_notes(pack.anchors, pack.budget)] == [
+        "File:line references not found among the indexed files: app/models/legacy.py:12",
+        "File:line references past the last line of their file: app/routers/consult.py:900",
+    ]
+
+
+def test_the_senior_gets_ranges_of_its_anchored_edit_files_and_guarded_anchors_stay_cards(
+    tmp_path: Path,
+) -> None:
+    request = MandateRequest(
+        "bug",
+        "Corregir app/services/interpreter.py:287-289",
+        why="El router app/routers/consult.py:67 toma solo la primera respuesta.",
+        out_of_scope="app/routers/consult.py",
+    )
+    plan, (senior, orchestrator) = _backend_packs(
+        tmp_path, request, "normal", ("senior", "orchestrator")
+    )
+    edits = {item.path for item in plan.edit}
+    assert "app/services/interpreter.py" in edits and "app/routers/consult.py" in plan.guard
+    senior_keys = {item.key for item in senior.items}
+    assert "anchor:app/services/interpreter.py:287-289" in senior_keys
+    assert all(item.path in edits for item in senior.items if item.path)
+    assert not any(key.startswith("window:") for key in senior_keys)
+    keys = {item.key for item in orchestrator.items}
+    assert "anchor:app/routers/consult.py" in keys
+    assert "anchor:app/routers/consult.py:67" not in keys
+    states = {check.anchor.label: check.state for check in orchestrator.anchors}
+    assert states == {
+        "app/services/interpreter.py:287-289": AnchorState.PACKED,
+        "app/routers/consult.py:67": AnchorState.PROTECTED,
+    }
+    assert [english(message) for message in anchor_notes(orchestrator.anchors, 4000)] == [
+        "Referenced files the change plan protects (context only, not editable): "
+        "app/routers/consult.py:67"
+    ]
+
+
+def test_an_anchored_range_longer_than_the_depth_window_is_reported_as_packed_in_part(
+    tmp_path: Path,
+) -> None:
+    request = MandateRequest(
+        "bug",
+        "Corregir app/services/interpreter.py:100-200",
+        why="El bucle corta la lista.",
+        out_of_scope="docs",
+    )
+    _, (pack,) = _backend_packs(tmp_path, request, "quick", ("orchestrator",))
+    item = next(
+        item for item in pack.items if item.key == "anchor:app/services/interpreter.py:100-200"
+    )
+    assert (item.line, item.end_line) == (97, 108)
+    assert [(check.anchor.label, check.state) for check in pack.anchors] == [
+        ("app/services/interpreter.py:100-200", AnchorState.PARTIAL)
+    ]
+    assert [english(message) for message in anchor_notes(pack.anchors, pack.budget)] == [
+        "Referenced ranges longer than the pack window, packed in part (range → packed lines): "
+        "app/services/interpreter.py:100-200 → 100-108"
+    ]
+    _, (deep,) = _backend_packs(tmp_path / "deep", request, "deep", ("orchestrator",))
+    assert [check.state for check in deep.anchors] == [AnchorState.PARTIAL]
+    whole = MandateRequest(
+        "bug", "Corregir app/services/interpreter.py:100-104", "El bucle.", out_of_scope="docs"
+    )
+    _, (fits,) = _backend_packs(tmp_path / "fits", whole, "quick", ("orchestrator",))
+    assert [check.state for check in fits.anchors] == [AnchorState.PACKED]
+    assert anchor_notes(fits.anchors, fits.budget) == ()

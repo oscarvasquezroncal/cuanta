@@ -16,7 +16,7 @@ from cuanta.domain.governor_report import GovernorSummary, blocked_calls, parse_
 from cuanta.domain.index_metrics import IndexMetrics
 from cuanta.domain.ledger import Run
 from cuanta.domain.mandate import INVESTIGATION, MandateRequest, Shape
-from cuanta.domain.messages import english
+from cuanta.domain.messages import Message, english, msg, parse_message
 from cuanta.domain.outcomes import CROSS_KIND, is_attempt, pipeline_running
 from cuanta.domain.overhead import SessionOverhead, session_overhead
 from cuanta.domain.read_efficiency import ReadEfficiency, read_efficiency
@@ -113,6 +113,7 @@ class ResultView:
     trial: TrialSummary | None = None
     actual_usd: float | None = None
     actual_estimated: bool = False
+    actual_partial: bool = False
     in_flight: bool = False
     pipeline_seconds: float | None = None
     estimate_factor: float | None = None
@@ -126,6 +127,7 @@ class ResultView:
     metrics: RunMetrics = field(default_factory=RunMetrics)
     time: TimeReport = field(default_factory=TimeReport)
     implementation: dict[str, object] | None = None
+    stopped: Message | None = None
 
     @property
     def decidable(self) -> bool:
@@ -133,6 +135,8 @@ class ResultView:
 
     @property
     def estimate_error(self) -> float | None:
+        if self.run.partial or self.actual_partial:
+            return None
         return estimate_error(self.run.estimate_low, self.run.estimate_high, self.actual_usd)
 
     @property
@@ -200,7 +204,10 @@ def stored_shape(meta: Mapping[str, object], run: Run, task_type: str) -> tuple[
 def run_markdown(view: ResultView) -> str:
     run = view.run
     cost = "n/a" if run.cost_usd is None else f"${run.cost_usd:,.2f}"
-    if run.cost_usd is not None and run.cost_source == "estimated":
+    if run.cost_usd is not None and run.partial:
+        key = "result.partial_estimated_cost" if run.cost_source == "estimated" else ""
+        cost = english(msg(key or "result.partial_cost", cost=cost))
+    elif run.cost_usd is not None and run.cost_source == "estimated":
         cost += " (estimated)"
     duration = "n/a" if view.duration_s is None else f"{view.duration_s:,.0f} s"
     mode = "unknown shape"
@@ -221,12 +228,16 @@ def run_markdown(view: ResultView) -> str:
     ]
     if run.max_turns > 0:
         turns = f"{run.turns}/{run.max_turns}"
+        if run.partial:
+            turns = english(msg("result.partial_turns", turns=turns))
         cut = " · cut by turn limit" if run.end_reason == TURN_LIMIT_SUBTYPE else ""
         lines.append(f"- Turns: {turns}{cut}")
         if view.terminal_turn:
             lines.append("- The engine's raw count includes the terminal turn-limit result.")
     elif run.end_reason == TURN_LIMIT_SUBTYPE:
         lines.append(f"- Turns: {run.turns} · cut by turn limit")
+    elif run.partial and run.turns > 0:
+        lines.append(f"- Turns: {english(msg('result.partial_turns', turns=run.turns))}")
     if view.split is not None:
         lines.append(
             f"- Context of the first request: {view.split.first_request:,} tokens · "
@@ -320,6 +331,7 @@ class ResultQuery:
             trial=trial,
             actual_usd=attempt.cost if attempt is not None else run.cost_usd,
             actual_estimated=attempt.estimated if attempt is not None else False,
+            actual_partial=attempt.partial if attempt is not None else run.partial,
             in_flight=pipeline_running(run, roles, now),
             pipeline_seconds=attempt.seconds if attempt is not None else None,
             estimate_factor=(
@@ -328,6 +340,7 @@ class ResultQuery:
                 else None
             ),
             completion=str(meta.get("completion") or ""),
+            stopped=parse_message(meta.get("stopped")),
             verification=verify_rounds(meta.get("verification_rounds")),
             index=run_index_metrics(index_events, (run, *roles), self._reports.meta),
             anatomy=analyze_anatomy(resolved),

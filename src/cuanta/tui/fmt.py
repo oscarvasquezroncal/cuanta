@@ -51,9 +51,20 @@ def cost_money(
 
 def run_money(run: Run, catalog: Catalog) -> str:
     value = money(run.cost_usd, catalog("spectrum.na"))
-    if run.cost_usd is not None and run.cost_source == "estimated":
-        return catalog("cost.estimated", cost=value)
-    return value
+    return labeled_money(value, run.cost_usd, run.cost_source == "estimated", run.partial, catalog)
+
+
+def labeled_money(
+    value: str, cost: float | None, estimated: bool, partial: bool, catalog: Catalog
+) -> str:
+    if cost is None:
+        return value
+    if partial:
+        from cuanta.domain.messages import msg
+
+        key = "result.partial_estimated_cost" if estimated else "result.partial_cost"
+        return catalog.message(msg(key, cost=value))
+    return catalog("cost.estimated", cost=value) if estimated else value
 
 
 def glyph(status: Status) -> str:

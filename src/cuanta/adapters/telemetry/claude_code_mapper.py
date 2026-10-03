@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from cuanta.adapters.telemetry.mapping import (
     as_bool,
     as_cost,
@@ -87,7 +85,7 @@ def _raw(
     keep_prompts: bool,
     default_agent: bool,
 ) -> str:
-    base = json.loads(raw_json(record.raw, keep_prompts))
+    base: dict[str, object] = dict(record.raw)
     if parameters:
         base["cuanta.parameters"] = parameters
     if default_agent:

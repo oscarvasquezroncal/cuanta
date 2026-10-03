@@ -22,11 +22,25 @@ def percent(share: float) -> str:
     return f"{share * 100:.1f}%"
 
 
-def usd(value: float | None, source: str = "") -> str:
+def usd(value: float | None, source: str = "", partial: bool = False) -> str:
     if value is None:
         return "n/a"
     text = f"${value:,.4f}" if value < 1 else f"${value:,.2f}"
+    if partial:
+        from cuanta.domain.messages import english, msg
+
+        key = "result.partial_estimated_cost" if source == "estimated" else "result.partial_cost"
+        return english(msg(key, cost=text))
     return f"{text} (estimated)" if source == "estimated" else text
+
+
+def turn_count(turns: int, max_turns: int, partial: bool = False) -> str:
+    count = f"{turns}/{max_turns}" if max_turns > 0 else str(turns)
+    if not partial:
+        return count
+    from cuanta.domain.messages import english, msg
+
+    return english(msg("result.partial_turns", turns=count))
 
 
 def duration(seconds: float) -> str:

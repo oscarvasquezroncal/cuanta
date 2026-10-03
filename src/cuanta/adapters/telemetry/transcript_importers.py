@@ -9,7 +9,7 @@ from typing import Any
 
 from cuanta.adapters.telemetry.mapping import as_int, as_text
 from cuanta.domain.ledger import LedgerEvent
-from cuanta.domain.redaction import redact_for_storage
+from cuanta.domain.redaction import storage_json
 from cuanta.domain.telemetry import MAIN_AGENT
 
 CLAUDE_SOURCE = "claude_transcript"
@@ -133,7 +133,7 @@ def _tool_use(block: dict[str, Any], base: dict[str, Any]) -> LedgerEvent:
         tool_input_bytes=len(json.dumps(tool_input, default=str)),
         file_path=file_path,
         command=as_text(tool_input.get("command"))[:500],
-        raw=redact_for_storage(json.dumps({"spawned_agent": spawned} if spawned else {})),
+        raw=storage_json({"spawned_agent": spawned} if spawned else {}),
     )
 
 

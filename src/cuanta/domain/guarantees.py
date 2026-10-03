@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from cuanta.domain.limits import RunLimits
 from cuanta.domain.messages import Message, msg
 
 
@@ -28,7 +29,9 @@ class Guarantee:
         )
 
 
-def engine_guarantees(engine: str, *, file_checks: bool = True) -> tuple[Guarantee, ...]:
+def engine_guarantees(
+    engine: str, *, file_checks: bool = True, limits: RunLimits | None = None
+) -> tuple[Guarantee, ...]:
     enforced = GuaranteeStatus.ENFORCED
     checked = GuaranteeStatus.CHECKED
     unavailable = GuaranteeStatus.UNAVAILABLE
@@ -39,6 +42,14 @@ def engine_guarantees(engine: str, *, file_checks: bool = True) -> tuple[Guarant
     }.get(engine, (unavailable,) * 4)
     names = ("spend", "turns", "readonly", "telemetry")
     known = engine if engine in ("claude", "codex", "opencode") else "unknown"
+    hidden = (
+        set()
+        if limits is None
+        else {
+            *(("spend",) if limits.budget_usd <= 0 else ()),
+            *(("turns",) if limits.max_turns <= 0 else ()),
+        }
+    )
     return tuple(
         Guarantee(
             name,
@@ -50,6 +61,7 @@ def engine_guarantees(engine: str, *, file_checks: bool = True) -> tuple[Guarant
             ),
         )
         for name, status in zip(names, statuses, strict=True)
+        if name not in hidden
     )
 
 
@@ -63,11 +75,3 @@ def cap_warning(engine: str, budget_usd: float) -> Message | None:
 
 def readonly_unavailable(engine: str) -> Message | None:
     return msg("guarantee.opencode_refused") if engine == "opencode" else None
-
-
-def budget_stop_reason(reason: str) -> Message | None:
-    if reason == "error_cost_unknown":
-        return msg("engine.cost_unknown")
-    if reason == "error_max_budget_usd":
-        return msg("engine.budget_stopped")
-    return None

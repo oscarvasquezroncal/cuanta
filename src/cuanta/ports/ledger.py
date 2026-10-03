@@ -27,6 +27,7 @@ class EventQuery:
     since: str = ""
     trace_id: str = ""
     limit: int = 0
+    kind: str = ""
 
 
 class Ledger(Protocol):

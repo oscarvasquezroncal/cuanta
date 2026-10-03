@@ -86,6 +86,21 @@ def test_events_filtering(ledger: Ledger) -> None:
     assert ledger.add_events([]) == 0
 
 
+def test_events_filter_by_kind(ledger: Ledger) -> None:
+    ledger.add_events(
+        [
+            LedgerEvent(run_id="r1", kind="telemetry_unreadable", ts="2026-01-01T00:00:02Z"),
+            LedgerEvent(run_id="r1", kind="api_request", ts="2026-01-01T00:00:01Z"),
+            LedgerEvent(run_id="r2", kind="telemetry_unreadable", ts="2026-01-01T00:00:00Z"),
+            LedgerEvent(run_id="r1", kind="telemetry_unreadable", ts="2026-01-01T00:00:03Z"),
+        ]
+    )
+    marked = ledger.events(EventQuery(run_id="r1", kind="telemetry_unreadable"))
+    assert [event.ts for event in marked] == ["2026-01-01T00:00:02Z", "2026-01-01T00:00:03Z"]
+    assert len(ledger.events(EventQuery(kind="telemetry_unreadable"))) == 3
+    assert len(ledger.events(EventQuery(run_id="r1"))) == 3
+
+
 def test_test_runs_and_signature_history(ledger: Ledger) -> None:
     ledger.add_test_run(
         _test_run("T1", "R", "2026-01-01T00:00:00Z"),

@@ -34,13 +34,15 @@ from cuanta.domain.envelope import ENVELOPE_SOURCE, JEV_SOURCE, RoleSample, Verd
 from cuanta.domain.errors import EnvironmentFailure
 from cuanta.domain.instinct import Answer, Ask, Choice, Context, Noul, Primitive, Receipt, Score
 from cuanta.domain.ledger import Forecast, LedgerEvent, Run
-from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.mandate import MandateRequest, PartKind, RequestParts, request_text
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.pricing import Price, PriceTable
 from cuanta.domain.progress import Note, ProgressEvent, Status
 from cuanta.domain.routing import ROLES, Provider, Role, RoleRoute, RoutingPolicy
+from cuanta.domain.spectrum import estimated_tokens
 from cuanta.tui.i18n import Catalog
+from tests.real_run import FASES_LINE, PHASES_LINE, phased_mandate
 
 REQUEST = MandateRequest("bug", "fix add", "add(2, 3) == -1", out_of_scope="tests")
 SONNET = Price(3.0, 15.0, 3.75, 0.3)
@@ -451,6 +453,22 @@ def test_a_pinned_launch_model_is_the_one_the_forecast_prices() -> None:
     assert unknown.envelope.verdict is Verdict.UNKNOWN
 
 
+def test_a_pure_plan_prices_its_scout_on_the_pure_model_not_the_economy_one() -> None:
+    from cuanta.application.routing import pure_plan
+
+    def scout_model(plan: RoutePlan) -> tuple[str, PlannedForecast]:
+        found = forecaster(MemoryLedger()).plan(
+            "bug", plan, Provider.CLAUDE, "normal", "scout", 50.0, PLAN
+        )
+        return next(item.model for item in found.envelope.roles if item.role is Role.SCOUT), found
+
+    routed, plain = scout_model(team())
+    assert routed == "claude-haiku-4-5" and plain.inputs.economy is not None
+    pure, forced = scout_model(pure_plan(team(), "claude-opus-5-5", CATALOG))
+    assert pure == "claude-opus-5-5" and forced.inputs.economy is None
+    assert {item.model for item in forced.envelope.roles} == {"claude-opus-5-5"}
+
+
 def test_only_separate_launches_with_checks_plan_a_repair_contingency() -> None:
     ledger = MemoryLedger()
     checked = ChangePlan(edit=PLAN.edit, read=PLAN.read, verify=("pytest -q",))
@@ -583,6 +601,60 @@ def test_publishing_warns_on_tight_verdicts_and_the_json_names_the_suggestions()
     assert isinstance(suggestions, list) and suggestions
     assert {"kind", "key", "text", "p90_usd", "saving_usd"} <= set(suggestions[0])
     assert payload["lines"] == [note.text for note in notes]
+
+
+def test_a_phased_mandate_counts_its_own_tokens_and_the_card_says_it_covers_one_change() -> None:
+    mandate = MandateRequest(
+        "feature",
+        "Refactor del intérprete y del endpoint",
+        phased_mandate(),
+        tests="pytest tests/test_consult.py",
+        out_of_scope="frontend",
+    )
+    ledger = MemoryLedger()
+
+    def card(request: MandateRequest | None) -> PlannedForecast:
+        return forecaster(ledger).plan(
+            "feature",
+            team(),
+            Provider.CLAUDE,
+            "deep",
+            "scout",
+            500.0,
+            ChangePlan(),
+            True,
+            "claude-opus-5-5",
+            100_000,
+            request=request,
+        )
+
+    plain, asked = card(None), card(mandate)
+    tokens = estimated_tokens(len(request_text(mandate).encode("utf-8")))
+    assert asked.inputs.request_tokens == tokens > 2_500
+    assert asked.inputs.parts == RequestParts(PartKind.PHASE, 5)
+    assert plain.inputs.request_tokens == 0 and plain.inputs.parts == RequestParts()
+    roles = asked.envelope.roles
+    assert roles[0].role is Role.ORCHESTRATOR and len(roles) > 1
+    grown = [
+        after.buckets.start - before.buckets.start
+        for before, after in zip(plain.envelope.roles, roles, strict=True)
+    ]
+    assert grown == [tokens, *([0] * (len(roles) - 1))]
+    assert asked.envelope.p50_usd is not None and plain.envelope.p50_usd is not None
+    assert asked.envelope.p50_usd > plain.envelope.p50_usd
+    lines = [english(message) for message in asked.messages]
+    assert lines[0].startswith("Forecast $") and "margin $" in lines[0]
+    assert lines[1:] == [PHASES_LINE, "Time forecast: P50 n/a · P90 n/a · n=0"]
+    assert Catalog("es").message(asked.messages[1]) == FASES_LINE
+    assert [english(message) for message in plain.messages][1:] == lines[2:]
+    payload = envelope_json(asked)
+    assert payload["parts"] == {"kind": "phase", "count": 5}
+    assert payload["request_tokens"] == tokens
+    assert payload["lines"] == lines
+    assert envelope_json(plain)["parts"] == {"kind": "phase", "count": 0}
+    recorder = Recorder()
+    publish_forecast(recorder, asked)
+    assert [event.text for event in recorder.events if isinstance(event, Note)] == lines
 
 
 def test_jev_is_sent_numbers_only_and_its_answer_is_weighted_by_its_track_record() -> None:

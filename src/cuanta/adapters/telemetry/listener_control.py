@@ -12,17 +12,19 @@ from pathlib import Path
 
 import httpx
 
+from cuanta.adapters.system.log_file import LogFile
 from cuanta.adapters.telemetry.otlp_receiver import (
     bind_listener,
     build_listener,
     next_free_port,
 )
 from cuanta.domain.errors import EnvironmentFailure
-from cuanta.domain.telemetry import endpoint
+from cuanta.domain.telemetry import LISTENER_LOG_NAME, LOCALHOST, LOGS_DIR, endpoint
 from cuanta.ports.ledger import Ledger
 from cuanta.ports.listener import ListenerStatus
 
 PIDFILE = "listener.json"
+OUT_LOG_NAME = "listener.out.log"
 HEALTH_TIMEOUT_S = 1.0
 START_TIMEOUT_S = 15.0
 
@@ -35,16 +37,27 @@ class LocalListenerControl:
         ledger_factory: Callable[[], Ledger],
         keep_prompts: bool = False,
         linger_s: float = 1.5,
+        verbose: bool = False,
     ) -> None:
         self._linger = linger_s
         self._dir = cuanta_dir
         self._project = project
         self._ledger_factory = ledger_factory
         self._keep_prompts = keep_prompts
+        self._log = LogFile(self.log_path, echo=verbose)
+        self._notice = LogFile(None, echo=verbose)
 
     @property
     def pidfile(self) -> Path:
         return self._dir / PIDFILE
+
+    @property
+    def log_path(self) -> Path:
+        return self._dir / LOGS_DIR / LISTENER_LOG_NAME
+
+    @property
+    def out_path(self) -> Path:
+        return self._dir / LOGS_DIR / OUT_LOG_NAME
 
     def _record(self) -> dict[str, object]:
         try:
@@ -102,8 +115,8 @@ class LocalListenerControl:
             "--port",
             str(chosen),
         ]
-        self._dir.mkdir(parents=True, exist_ok=True)
-        with (self._dir / "listener.log").open("ab") as log:
+        self.out_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.out_path.open("wb") as out:
             if os.name == "nt":
                 flags = (
                     getattr(subprocess, "DETACHED_PROCESS", 0)
@@ -113,8 +126,8 @@ class LocalListenerControl:
                 subprocess.Popen(
                     command,
                     stdin=subprocess.DEVNULL,
-                    stdout=log,
-                    stderr=log,
+                    stdout=out,
+                    stderr=out,
                     cwd=self._project,
                     close_fds=True,
                     creationflags=flags,
@@ -123,8 +136,8 @@ class LocalListenerControl:
                 subprocess.Popen(
                     command,
                     stdin=subprocess.DEVNULL,
-                    stdout=log,
-                    stderr=log,
+                    stdout=out,
+                    stderr=out,
                     cwd=self._project,
                     close_fds=True,
                     start_new_session=True,
@@ -135,9 +148,7 @@ class LocalListenerControl:
             if probe.running:
                 return probe
             time.sleep(0.2)
-        raise EnvironmentFailure(
-            f"listener did not start on port {chosen}", f"see {self._dir / 'listener.log'}"
-        )
+        raise EnvironmentFailure(f"listener did not start on port {chosen}", f"see {self.out_path}")
 
     def stop(self) -> bool:
         record = self._record()
@@ -162,7 +173,9 @@ class LocalListenerControl:
 
     def serve(self, port: int, on_ready: Callable[[ListenerStatus], None]) -> None:
         token = secrets.token_hex(16)
-        listener = build_listener(port, self._ledger_factory, self._keep_prompts, token)
+        listener = build_listener(
+            port, self._ledger_factory, self._keep_prompts, token, log=self._log
+        )
         self._write_record(listener.port, os.getpid(), token)
         on_ready(ListenerStatus(True, listener.port, os.getpid(), owned=True))
         try:
@@ -176,10 +189,16 @@ class LocalListenerControl:
     def scoped(self, port: int) -> Iterator[ListenerStatus]:
         current = self.status()
         if current.running:
+            self._notice.write(
+                f"background listener on {LOCALHOST}:{current.port} records this run; "
+                f"its errors go to {self.log_path} and are not echoed"
+            )
             yield current
             return
         token = secrets.token_hex(16)
-        listener = bind_listener(port, self._ledger_factory, self._keep_prompts, token)
+        listener = bind_listener(
+            port, self._ledger_factory, self._keep_prompts, token, log=self._log
+        )
         listener.start()
         self._write_record(listener.port, os.getpid(), token)
         try:

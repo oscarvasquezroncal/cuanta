@@ -8,6 +8,7 @@ from cuanta.application.routing import (
     RouteAdvisor,
     RouteInputs,
     RoutePlan,
+    policy_pinned,
     with_overrides,
     without_role,
 )
@@ -19,6 +20,7 @@ from cuanta.domain.agents import (
     contextual_agents,
     guarded_agents,
     parse_agent,
+    pure_agents,
     with_scout,
 )
 from cuanta.domain.audit import MAIN_AGENT, AuditRow, audit
@@ -273,8 +275,31 @@ class MandateRouting:
         return found if options.docs else without_role(found, Role.DOCS)
 
     def record(self, run_id: str, task_type: str, applied: Applied) -> None:
-        if applied.active:
+        if applied.active and applied.plan.pure is None:
             self._advisor.record(run_id, task_type, applied.plan)
+
+    def pinned(self, mode: str = "") -> bool:
+        return policy_pinned(self._policy(), mode)
+
+    def pure(self, applied: Applied, model: str, fast: bool = False) -> Applied:
+        if not applied.active or not model:
+            return applied
+        plan = self._advisor.pure(applied.plan, model, fast)
+        entry = plan.pure
+        if entry is None:
+            return applied
+        chosen = entry.resolved or entry.id
+        agents = pure_agents(applied.agents, chosen) if applied.agents is not None else None
+        return replace(
+            applied,
+            plan=plan,
+            agents=agents,
+            agents_file=self._write(agents) if agents is not None else applied.agents_file,
+            orchestrator=chosen if applied.orchestrator else "",
+            single=chosen if applied.single else "",
+            env_override="",
+            unset=(),
+        )
 
     def protect(self, applied: Applied, plan: ChangePlan, session: str = "") -> Applied:
         if applied.engine != CLAUDE or applied.agents is None:

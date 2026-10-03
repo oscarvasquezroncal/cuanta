@@ -36,6 +36,7 @@ from cuanta.domain.progress import Status, note
 from cuanta.domain.report import strip_preamble
 from cuanta.domain.scout import DocsChoice
 from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, docs_payload
+from cuanta.domain.telemetry import unreadable_note
 from cuanta.domain.testing import GatewayStatus
 from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.ledger import Ledger
@@ -129,6 +130,7 @@ class MandateReport:
     governed: bool = False
     read_hooks: bool = False
     implementation: ImplementationReport | None = None
+    unreadable_telemetry: int = 0
 
 
 class MandateService:
@@ -286,6 +288,8 @@ class MandateService:
                 self.snapshot(run_id, "start")
 
         launch = launcher.launch(spec, view, before_launch)
+        if launch.unreadable > 0:
+            progress.publish(note(Status.WARN, unreadable_note(launch.unreadable)))
         run = launch.run
         with launcher.timing.measure("snapshots_guards", run.id):
             end = self.snapshot(run.id, "end")
@@ -331,6 +335,7 @@ class MandateService:
             prompt_chars=len(composed.prompt),
             change_plan=spec.change_plan,
             implementation=launch.implementation,
+            unreadable_telemetry=launch.unreadable,
         )
         if launch.implementation is not None:
             report = replace(report, tests="green" if launch.implementation.passed else "red")
@@ -354,6 +359,7 @@ def report_payload(report: MandateReport) -> dict[str, object]:
         "started_at": run.started_at,
         "ended_at": run.ended_at,
         "cost_usd": run.cost_usd,
+        "partial": run.partial,
         "cost_source": run.cost_source,
         "changed_files": list(report.changed_files),
         "tests": report.tests,
@@ -393,4 +399,6 @@ def report_payload(report: MandateReport) -> dict[str, object]:
         payload.update(plan_metrics(report.change_plan, report.changed_files, run.engine))
     if report.implementation is not None:
         payload["implementation"] = report.implementation.payload()
+    if report.unreadable_telemetry > 0:
+        payload["telemetry_unreadable"] = report.unreadable_telemetry
     return payload

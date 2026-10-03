@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -231,3 +232,13 @@ def test_runs_accept_and_reject_record_outcomes_once(
     text = invoke(["runs", "show", "01JB", "--project", str(tmp_path)]).stdout
     assert "rejected" in text and "fixed the wrong function" in text
     assert "$0.2000–$0.4000 · from history (n=3)" in text
+
+
+def test_runs_show_keeps_the_partial_label_on_a_pipeline_cost(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    halted = replace(_run("01JQ", "", 0.2, kind="cross", parent_id="01JP"), partial=True)
+    _seed(tmp_path, _run("01JP", "feature", 1.0, kind="cross"), halted)
+    shown = invoke(["runs", "show", "01JP", "--plain", "--project", str(tmp_path)])
+    assert shown.exit_code == 0, shown.stdout
+    assert "pipeline cost $1.20 (partial)" in " ".join(shown.stdout.split())

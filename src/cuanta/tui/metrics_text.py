@@ -16,6 +16,12 @@ def usd(t: Catalog, value: float | None, estimated: bool = False) -> str:
     return t("cost.estimated", cost=shown) if estimated else shown
 
 
+def cap_text(t: Catalog, value: float | None) -> str:
+    if value is not None and value <= 0:
+        return t("metrics_panel.no_cap")
+    return usd(t, value)
+
+
 def count(t: Catalog, value: int | None) -> str:
     return t("spectrum.na") if value is None else f"{value:,}"
 
@@ -61,7 +67,7 @@ def metrics_content(t: Catalog, metrics: RunMetrics) -> Content:
                 p50=usd(t, metrics.p50_usd),
                 p90=usd(t, metrics.p90_usd),
                 actual=usd(t, metrics.actual_usd, metrics.estimated),
-                cap=usd(t, metrics.cap_usd),
+                cap=cap_text(t, metrics.cap_usd),
             )
         ),
         Content(

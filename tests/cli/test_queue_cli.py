@@ -137,14 +137,65 @@ def test_every_mandate_option_is_mapped_for_the_queue(tmp_path: Path) -> None:
             "--override-env-model",
             "--max-turns",
             "12",
+            "--max-wall",
+            "30",
             "--sandbox",
             "--keep",
+            "--docs",
+            "on",
         ]
     )
     assert args.type == "feature" and args.evidence == evidence
     assert (args.budget, args.cross_budget, args.max_turns) == (0.5, 2.0, 12)
+    assert args.max_wall == 30.0
     assert args.role_models == ("senior=opus", "scout=haiku")
     assert args.keep_env_model is False and args.sandbox and args.keep
+    assert args.docs == "on"
+
+
+def test_queue_add_keeps_the_docs_choice_and_refuses_contradictions(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    added = queue(tmp_path, "add", *asked("Explain the cart", "--docs", "off"), "--json")
+    assert added.exit_code == 0, added.stdout
+    kept = stored(tmp_path)[0]["args"]
+    assert isinstance(kept, list) and kept[-2:] == ["--docs", "off"]
+    assert parse_mandate([str(item) for item in kept]).docs == "off"
+    for bad, message in (
+        (asked("Bad", "--docs", "maybe"), "unknown --docs maybe"),
+        (asked("Explain", "--docs", "on"), "simple mode runs without the docs role"),
+        ([*asked("Explain")[1:], "--docs", "on"], "investigations run without the docs role"),
+        (
+            [*bug("Fix")[1:], "--docs", "off", "--role-model", "docs=haiku"],
+            "--docs off and a docs pin disagree",
+        ),
+        ([*bug("Fix")[1:], "--classic", "--docs", "auto"], "--classic runs with docs on"),
+        ([*bug("Fix")[1:], "--profile", "fast", "--docs", "on"], "without the docs role"),
+    ):
+        refused = queue(tmp_path, "add", *bad, "--json")
+        assert refused.exit_code == 1, bad
+        error = payload(refused)["error"]
+        assert isinstance(error, dict) and message in str(error["message"]), bad
+    assert [item["id"] for item in stored(tmp_path)] == ["q1"]
+    assert not launches(fake_runner)
+
+
+def test_queue_add_keeps_each_limit_flag_and_lists_its_value(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    flags = ("--max-budget-usd", "0.5", "--max-turns", "12", "--max-wall", "30")
+    added = queue(tmp_path, "add", *asked("Explain the cart", *flags), "--json")
+    assert added.exit_code == 0, added.stdout
+    entry = payload(added)["added"]
+    assert isinstance(entry, dict)
+    assert entry["limits"] == {"budget_usd": 0.5, "max_turns": 12, "wall_min": 30.0}
+    kept = stored(tmp_path)[0]["args"]
+    assert isinstance(kept, list) and kept[-6:] == list(flags)
+    parsed = parse_mandate([str(item) for item in kept])
+    assert (parsed.budget, parsed.max_turns, parsed.max_wall) == (0.5, 12, 30.0)
+    listed = items(payload(queue(tmp_path, "list", "--json"))["queue"])
+    assert listed[0]["limits"] == {"budget_usd": 0.5, "max_turns": 12, "wall_min": 30.0}
+    assert not launches(fake_runner)
 
 
 def test_queue_list_puts_the_same_engine_and_model_back_to_back(

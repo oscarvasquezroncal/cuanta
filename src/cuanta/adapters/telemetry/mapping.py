@@ -4,19 +4,30 @@ import json
 import math
 from typing import Any
 
-from cuanta.domain.redaction import redact_for_storage
+from cuanta.domain.redaction import storage_json
+
+INT64_MIN = -(2**63)
+INT64_MAX = 2**63 - 1
+
+
+def _int64(value: int) -> int:
+    return value if INT64_MIN <= value <= INT64_MAX else 0
+
+
+def _whole(value: float) -> int:
+    return _int64(int(value)) if math.isfinite(value) else 0
 
 
 def as_int(value: Any) -> int:
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, int):
-        return value
+        return _int64(value)
     if isinstance(value, float):
-        return int(value)
+        return _whole(value)
     if isinstance(value, str):
         try:
-            return int(float(value))
+            return _whole(float(value))
         except ValueError:
             return 0
     return 0
@@ -102,4 +113,4 @@ def raw_json(record: dict[str, Any], keep_prompts: bool) -> str:
         }
     for key in dropped & set(cleaned):
         cleaned.pop(key)
-    return redact_for_storage(json.dumps(cleaned, default=str, separators=(",", ":")))
+    return storage_json(cleaned)

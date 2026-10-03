@@ -231,3 +231,24 @@ def test_runner_stops_before_next_paid_run_when_cost_is_unknown(tmp_path: Path) 
         for event in sink.events
     )
     assert "n/a spent" in runner.report(result)
+
+
+def test_runner_stops_before_next_paid_run_when_a_cost_is_only_a_lower_bound(
+    tmp_path: Path,
+) -> None:
+    executor = BenchExecutor(
+        Sandbox(), lambda *_: replace(_attempt(0.5), partial=True), lambda: 0.0
+    )
+    runner = BenchRunner(executor, LocalWorkspace(tmp_path))
+    sink = RecordingSink()
+    result = runner.run(_meta(budget=7.0), [TASK, OTHER], CONDITIONS, sink)
+    assert len(result.metrics) == 1 and result.stopped_early
+    assert result.metrics[0].partial and result.metrics[0].cost_usd == 0.5
+    keys = [
+        event.message.key
+        for event in sink.events
+        if isinstance(event, Note) and event.message is not None
+    ]
+    assert keys == ["bench.cost_partial"]
+    loaded = runner.load()
+    assert loaded is not None and loaded.metrics == result.metrics

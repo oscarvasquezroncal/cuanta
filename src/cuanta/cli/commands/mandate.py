@@ -17,13 +17,12 @@ if TYPE_CHECKING:
     from cuanta.cli.document import Block, Document
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.governor_report import BlockedCalls
+    from cuanta.domain.limits import RunLimits
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.routing import Provider
     from cuanta.domain.scout import DocsChoice, ShapeChoice
     from cuanta.domain.scout_report import ScoutSummary
-
-TEAM_BUDGET_USD = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +38,7 @@ class MandateArgs:
     from_failure: bool = False
     engine: str = ""
     model: str = ""
-    budget: float = 0.0
+    budget: float | None = None
     hu: str = ""
     dry_run: bool = False
     parent: str = ""
@@ -52,7 +51,8 @@ class MandateArgs:
     simple: bool = False
     session: str = ""
     depth: str = ""
-    max_turns: int = 0
+    max_turns: int | None = None
+    max_wall: float | None = None
     shape: str = ""
     sandbox: bool = False
     keep: bool = False
@@ -61,6 +61,7 @@ class MandateArgs:
     profile: str = ""
     variant: str = ""
     pure: bool = False
+    docs: str = ""
 
 
 def mandate_command(
@@ -98,9 +99,13 @@ def mandate_command(
         bool, typer.Option("--pure", help="Pin Claude helpers and subagents to the chosen model.")
     ] = False,
     budget: Annotated[
-        float,
-        typer.Option("--max-budget-usd", help="Spend cap; enforcement depends on the engine."),
-    ] = 0.0,
+        float | None,
+        typer.Option(
+            "--max-budget-usd",
+            min=0.0,
+            help="Spend cap in USD; none unless set; enforcement depends on the engine.",
+        ),
+    ] = None,
     hu: Annotated[str, typer.Option("--hu", help="Tag the run with a story, e.g. HU-007.")] = "",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Print prompt and command.")] = False,
     route: Annotated[str, typer.Option("--route", help="Model routing: auto, fixed or off.")] = "",
@@ -127,9 +132,8 @@ def mandate_command(
         typer.Option(
             "--cross-budget-usd",
             help=(
-                "Spend cap for a team run as one launch per role; a codex team defaults to "
-                "--max-budget-usd, the --depth cap, the budget.usd setting, then the normal "
-                "depth cap; --cross-engine defaults to $1.00."
+                "Spend cap for a team run as one launch per role; none unless set "
+                "(--max-budget-usd or [limits] budget_usd also cap it)."
             ),
         ),
     ] = None,
@@ -145,14 +149,16 @@ def mandate_command(
     ] = "",
     depth: Annotated[
         str,
-        typer.Option(
-            "--depth", help="quick, normal or deep: tier cap, read budget and default spend cap."
-        ),
+        typer.Option("--depth", help="quick, normal or deep: model tiers, effort and read budget."),
     ] = "",
     max_turns: Annotated[
-        int,
-        typer.Option("--max-turns", help="Turn limit for claude runs; 0 uses the depth default."),
-    ] = 0,
+        int | None,
+        typer.Option("--max-turns", min=0, help="Turn limit for Claude runs; none unless set."),
+    ] = None,
+    max_wall: Annotated[
+        float | None,
+        typer.Option("--max-wall", min=0.0, help="Wall-time limit in minutes; none unless set."),
+    ] = None,
     shape: Annotated[
         str,
         typer.Option(
@@ -174,6 +180,15 @@ def mandate_command(
     keep: Annotated[
         bool, typer.Option("--keep", help="Keep the isolated copy after the run (--sandbox).")
     ] = False,
+    docs: Annotated[
+        str,
+        typer.Option(
+            "--docs",
+            help=(
+                "Docs role: auto (when the request asks for docs), on or off; overrides runs.docs."
+            ),
+        ),
+    ] = "",
     classic: Annotated[
         bool,
         typer.Option(
@@ -213,10 +228,12 @@ def mandate_command(
         session=session,
         depth=depth,
         max_turns=max_turns,
+        max_wall=max_wall,
         shape=shape,
         sandbox=sandbox,
         keep=keep,
         classic=classic,
+        docs=docs,
     )
     execute(ctx, lambda cli: run_mandate(cli, args))
 
@@ -289,11 +306,15 @@ def _options(args: MandateArgs) -> "MandateOptions":
     from cuanta.application.route_apply import RouteOptions
     from cuanta.cli.commands.route import PRESETS, ROUTE_MODES, check_choice, parse_role_models
     from cuanta.domain.claude_variants import VARIANTS
+    from cuanta.domain.config import DOCS_MODES
     from cuanta.domain.depth import DEPTHS
     from cuanta.domain.errors import DomainFailure
-    from cuanta.domain.implementation import PROFILE_CHOICES
+    from cuanta.domain.implementation import PROFILE_CHOICES, ImplementationProfile
     from cuanta.domain.mandate import Shape
+    from cuanta.domain.messages import english
     from cuanta.domain.plugins import SESSIONS
+    from cuanta.domain.routing import Role
+    from cuanta.domain.scout import docs_refusal
 
     check_choice(args.route, ROUTE_MODES, "--route")
     check_choice(args.profile, PROFILE_CHOICES, "--profile")
@@ -302,10 +323,22 @@ def _options(args: MandateArgs) -> "MandateOptions":
     check_choice(args.preset, PRESETS, "--preset")
     check_choice(args.depth, tuple(depth.value for depth in DEPTHS), "--depth")
     check_choice(args.shape, tuple(shape.value for shape in Shape), "--shape")
+    check_choice(args.docs, DOCS_MODES, "--docs")
     if args.keep and not args.sandbox:
         raise DomainFailure("--keep only applies to --sandbox runs", "add --sandbox")
     if args.classic and args.shape == Shape.SCOUT.value:
         raise DomainFailure("--classic runs without a scout", "drop --shape scout or --classic")
+    role_models = parse_role_models(list(args.role_models))
+    refused = docs_refusal(
+        args.docs,
+        args.type,
+        simple=args.simple,
+        fast=args.profile == ImplementationProfile.FAST.value,
+        classic=args.classic,
+        pinned=Role.DOCS.value in role_models,
+    )
+    if refused is not None:
+        raise DomainFailure(english(refused[0]), refused[1])
     return MandateOptions(
         engine=args.engine,
         model=args.model,
@@ -318,17 +351,19 @@ def _options(args: MandateArgs) -> "MandateOptions":
         route=RouteOptions(
             mode=args.route,
             preset=args.preset,
-            role_models=tuple(parse_role_models(list(args.role_models)).items()),
+            role_models=tuple(role_models.items()),
             keep_env_model=args.keep_env_model,
         ),
         simple=args.simple,
         session=args.session,
         depth=args.depth,
         max_turns=args.max_turns,
+        max_wall_min=args.max_wall,
         shape=args.shape,
         sandbox=args.sandbox,
         keep_copy=args.keep,
         scout_mode=args.scout_mode,
+        docs=args.docs,
     )
 
 
@@ -355,11 +390,12 @@ def run_mandate_core(
     args: MandateArgs,
     verdict: bool = True,
     built: "tuple[MandateRequest, int] | None" = None,
+    shape: "ShapeChoice | None" = None,
 ) -> "MandateReport":
     from cuanta.domain.progress import Status, StepFinished, StepStarted
 
     flow, prepared = _prepare(session, container, args, built)
-    publish_team(session, prepared)
+    publish_team(session, prepared, shape)
     label = f"pounce · {prepared.engine_name} · {prepared.composed.hint.option}"
     session.presenter.publish(StepStarted("mandate", label))
     report = flow.run(prepared, session.presenter, verdict=verdict)
@@ -374,9 +410,11 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
     from cuanta.application.mandate_flow import display_command
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Document, Line, Verbatim
+    from cuanta.domain.limits import limits_payload
+    from cuanta.domain.messages import english
     from cuanta.domain.progress import Status
 
-    container = Container.for_project(session.project)
+    container = Container.for_project(session.project, verbose=session.options.verbose)
     try:
         options = _options(args)
         built = _build_request(session, container.mandate_service(container.shared_ledger()), args)
@@ -392,8 +430,13 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
             _, prepared = _prepare(session, container, args, built)
             composed = prepared.composed
             shown = display_command(composed.command, composed.prompt)
-            lines = [*team_lines(prepared), *shape_lines(choice, prepared.docs)]
-            team = tuple(Line(line, Status.INFO) for line in lines)
+            notes = [english(message) for message in prepared.pack_notes]
+            told = [*team_lines(prepared), *shape_lines(choice, prepared.docs)]
+            lines = [*told, *notes]
+            team = (
+                *(Line(line, Status.INFO) for line in told),
+                *(Line(line, Status.WARN) for line in notes),
+            )
             forecast = tuple(forecast_blocks(prepared.forecast, prepared.forecast_error))
             copy_note = (
                 (Line("isolated copy: not created in a dry run", Status.INFO),)
@@ -421,13 +464,15 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
                     "envelope": forecast_payload(prepared.forecast),
                     "shape": choice.payload(),
                     "docs": docs_json(prepared.docs),
+                    "limits": limits_payload(prepared.limits),
+                    "pack_notes": notes,
                 },
             )
         if per_role:
             return run_cross_engine(session, container, args, request, choice)
         if args.sandbox:
-            return run_sandbox(session, container, args, built)
-        report = run_mandate_core(session, container, args, built=built)
+            return run_sandbox(session, container, args, built, choice)
+        report = run_mandate_core(session, container, args, built=built, shape=choice)
     finally:
         container.close()
     return _final(report)
@@ -456,6 +501,7 @@ def run_sandbox(
     container: "Container",
     args: MandateArgs,
     built: "tuple[MandateRequest, int]",
+    shape: "ShapeChoice | None" = None,
 ) -> "Document":
     from cuanta.domain.progress import Status, StepFinished, StepStarted
 
@@ -463,7 +509,7 @@ def run_sandbox(
     request, signatures = built
 
     def started(_: "MandateFlow", prepared: "Prepared") -> None:
-        publish_team(session, prepared)
+        publish_team(session, prepared, shape)
         label = f"pounce · {prepared.engine_name} · {prepared.composed.hint.option} · isolated copy"
         session.presenter.publish(StepStarted("mandate", label))
 
@@ -488,30 +534,24 @@ def _per_role(
     return per_role_run(options, task_type, container.config.engine)
 
 
-def team_budget(
+def team_limits(
     container: "Container",
     args: MandateArgs,
     options: "MandateOptions",
     task_type: str,
     provider: "Provider",
-) -> float:
-    from cuanta.application.mandate_flow import resolve_budget
-    from cuanta.domain.depth import DEFAULT_DEPTH, profile
+) -> "RunLimits":
+    from dataclasses import replace
+
     from cuanta.domain.routing import Provider
 
-    if args.cross_budget is not None:
-        chosen = args.cross_budget
-    elif provider is Provider.CODEX:
-        default = container.config.budget_usd
-        chosen = (
-            resolve_budget(options, task_type, default)
-            or profile(DEFAULT_DEPTH, task_type).cost_cap_usd
-        )
-    else:
-        chosen = TEAM_BUDGET_USD
-    if args.budget > 0 and (chosen <= 0 or args.budget < chosen):
-        return args.budget
-    return chosen
+    limits = container.run_limits(options, task_type)
+    chosen = args.cross_budget if args.cross_budget is not None else limits.budget_usd
+    explicit = args.budget or 0.0
+    if explicit > 0 and (chosen <= 0 or explicit < chosen):
+        chosen = explicit
+    turns = limits.max_turns if provider is Provider.CLAUDE else 0
+    return replace(limits, budget_usd=max(0.0, chosen), max_turns=turns)
 
 
 def _provider(container: "Container", args: MandateArgs) -> "Provider":
@@ -528,7 +568,7 @@ def _provider(container: "Container", args: MandateArgs) -> "Provider":
 
 def _team_plan(
     container: "Container", args: MandateArgs, request: "MandateRequest", choice: "ShapeChoice"
-) -> "tuple[MandateOptions, RoutePlan, Provider, float, DocsChoice | None]":
+) -> "tuple[MandateOptions, RoutePlan, Provider, RunLimits, DocsChoice | None]":
     from cuanta.domain.errors import DomainFailure
     from cuanta.domain.messages import english, msg
 
@@ -554,8 +594,10 @@ def _team_plan(
         raise DomainFailure(
             english(msg("route.pins_rejected")), "; ".join(english(item) for item in issues)
         )
-    budget = team_budget(container, args, options, request.type, provider)
-    return options, plan, provider, budget, docs
+    if options.pure:
+        plan = container.pure_plan(plan, options.model)
+    limits = team_limits(container, args, options, request.type, provider)
+    return options, plan, provider, limits, docs
 
 
 def per_role_title(provider: "Provider") -> str:
@@ -581,29 +623,22 @@ def per_role_lines(container: "Container", plan: "RoutePlan", provider: "Provide
     return lines
 
 
-def team_turns(container: "Container", options: "MandateOptions", task_type: str) -> int:
-    from cuanta.application.mandate_flow import resolve_max_turns
-    from cuanta.domain.depth import parse_depth, profile
-
-    chosen = profile(parse_depth(options.depth), task_type)
-    return resolve_max_turns(options, chosen, container.config.max_turns)
-
-
 def preview_per_role(
     container: "Container", args: MandateArgs, request: "MandateRequest", choice: "ShapeChoice"
 ) -> "Document":
     from cuanta.application.forecast import forecast_failure
     from cuanta.cli.document import Document, Line
-    from cuanta.cli.fmt import usd
     from cuanta.domain.envelope import PIPELINE_SHAPE, SCOUT_SHAPE
     from cuanta.domain.errors import CuantaError
+    from cuanta.domain.limits import limits_message, limits_payload
     from cuanta.domain.messages import english, msg
     from cuanta.domain.progress import Status
-    from cuanta.domain.routing import Provider, Role
+    from cuanta.domain.routing import Role
 
-    options, plan, provider, budget, docs = _team_plan(container, args, request, choice)
+    options, plan, provider, limits, docs = _team_plan(container, args, request, choice)
+    budget = limits.budget_usd
     lines = [*per_role_lines(container, plan, provider), *shape_lines(choice, docs)]
-    lines.append(f"spend cap {usd(budget)}" if budget > 0 else "spend cap: none")
+    lines.append(english(limits_message(limits)))
     lines.append(estimate_line(container.run_estimate(plan, request.type, options.depth)))
     protection = container.change_plan(request)
     verify = protection.verify
@@ -611,7 +646,10 @@ def preview_per_role(
         lines.append(english(msg("cross.verify_commands", commands=", ".join(verify))))
     if args.sandbox:
         lines.append("isolated copy: not created in a dry run")
-    turns = team_turns(container, options, request.type) if provider is Provider.CLAUDE else 0
+    notes = [
+        english(message) for message in container.pack_notes(request, options.depth, protection)
+    ]
+    turns = limits.max_turns
     planned: PlannedForecast | None = None
     failure: Message | None = None
     try:
@@ -624,12 +662,14 @@ def preview_per_role(
             budget,
             protection,
             max_turns=turns,
+            request=request,
         )
     except (CuantaError, ValueError) as error:
         failure = forecast_failure(error)
     return Document(
         blocks=(
             *(Line(line, Status.INFO) for line in lines),
+            *(Line(line, Status.WARN) for line in notes),
             *forecast_blocks(planned, failure),
         ),
         payload={
@@ -638,7 +678,9 @@ def preview_per_role(
             "engine": provider.value,
             "per_role": True,
             "budget_usd": budget,
-            "team": lines,
+            "limits": limits_payload(limits),
+            "team": [*lines, *notes],
+            "pack_notes": notes,
             "roles": [
                 {
                     "role": route.role.value,
@@ -665,20 +707,23 @@ def run_cross_engine(
     choice: "ShapeChoice",
 ) -> "Document":
     from cuanta.cli.document import Document, Line
+    from cuanta.domain.limits import limits_message
     from cuanta.domain.messages import english
     from cuanta.domain.progress import Note, Status
     from cuanta.domain.routing import Provider
 
-    options, plan, provider, budget, docs = _team_plan(container, args, request, choice)
+    options, plan, provider, limits, docs = _team_plan(container, args, request, choice)
+    budget = limits.budget_usd
     if provider is Provider.CLAUDE and (args.cross_engine or not choice.launch):
         session.presenter.publish(Note(Status.WARN, "cross-engine pipeline (experimental)"))
     session.presenter.publish(Note(Status.INFO, per_role_title(provider)))
     for line in shape_lines(choice, None):
         session.presenter.publish(Note(Status.INFO, line))
-    publish_cross_team(session, container, request, plan, options.depth, budget, docs)
+    session.presenter.publish(Note(Status.INFO, english(limits_message(limits))))
+    publish_cross_team(session, container, request, plan, options.depth, limits, docs)
     guess = container.run_estimate(plan, request.type, options.depth)
     session.presenter.publish(Note(Status.INFO, estimate_line(guess)))
-    max_turns = team_turns(container, options, request.type)
+    max_turns = limits.max_turns
     isolated: SandboxResult | None = None
     if args.sandbox:
         isolated = container.run_sandboxed_cross(
@@ -691,6 +736,7 @@ def run_cross_engine(
             args.keep,
             options.depth,
             implementation=options,
+            wall_s=limits.wall_s,
         )
         if isolated.cross is None:
             raise RuntimeError("sandbox cross-engine run ended without a report")
@@ -702,6 +748,7 @@ def run_cross_engine(
             max_turns,
             depth=options.depth,
             implementation=options,
+            wall_s=limits.wall_s,
         )
         report = pipeline.run(request, plan, session.presenter)
     blocks = cross_blocks(report, budget, per_role_title(provider))
@@ -731,7 +778,7 @@ def publish_cross_team(
     request: "MandateRequest",
     plan: "RoutePlan",
     depth: str,
-    budget: float,
+    limits: "RunLimits",
     docs: "DocsChoice | None" = None,
 ) -> None:
     from cuanta.domain.messages import english, msg
@@ -745,6 +792,7 @@ def publish_cross_team(
 
     verify = container.change_plan(request).verify
     docs_off = docs is not None and not docs.on
+    budget = limits.budget_usd
     shares = container.role_budget(plan, request.type, depth, budget, bool(verify), docs_off).shares
     for card in team_cards(
         plan.routes,
@@ -752,6 +800,7 @@ def publish_cross_team(
         budget,
         container.pipeline_index_tools,
         container.build_blocked(),
+        limits,
     ):
         session.presenter.publish(Note(Status.INFO, english(card.title)))
         for guarantee in card.guarantees:
@@ -800,7 +849,7 @@ def cross_blocks(report: "CrossReport", budget: float, title: str) -> "list[Bloc
                 step.model,
                 step.run_id,
                 state if step.ok or step.salvaged else "failed",
-                usd(step.cost_usd, step.cost_source),
+                usd(step.cost_usd, step.cost_source, step.partial),
             )
         )
         attempt = 2 if step.repair else 1
@@ -830,7 +879,11 @@ def cross_blocks(report: "CrossReport", budget: float, title: str) -> "list[Bloc
             ),
             tuple(rows),
         ),
-        Line(f"spent {usd(report.spent_usd)} of {usd(budget)}"),
+        Line(
+            f"spent {usd(report.spent_usd, '', report.partial)} of {usd(budget)}"
+            if budget > 0
+            else f"spent {usd(report.spent_usd, '', report.partial)}"
+        ),
         Line(
             english(msg(f"completion.{report.state.value}")),
             Status.OK if report.ok else Status.WARN,
@@ -868,6 +921,7 @@ def cross_payload(
         "ok": report.ok,
         "completion": report.state.value,
         "spent_usd": report.spent_usd,
+        "partial": report.partial,
         "stopped": english(report.stopped) if report.stopped else None,
         "skipped": [
             {"role": item.role.value, "reason": english(item.reason)} for item in report.skipped
@@ -900,6 +954,7 @@ def cross_payload(
                 "ok": step.ok,
                 "cost_usd": step.cost_usd,
                 "cost_source": step.cost_source,
+                "partial": step.partial,
                 "budget_usd": step.budget_usd,
                 "native_cap_usd": step.native_cap_usd,
                 "overrun_usd": step.overrun_usd,
@@ -1000,21 +1055,37 @@ def scout_rows(summary: "ScoutSummary") -> tuple[tuple[str, str], ...]:
                     ("edits outside the set, not named", ", ".join(summary.outside_unnamed))
                 )
     if summary.docs:
-        rows.append(("docs", f"{summary.docs} ({summary.docs_reason.replace('_', ' ')})"))
+        rows.append(("docs", docs_row(summary)))
     return tuple(rows)
+
+
+def docs_row(summary: "ScoutSummary") -> str:
+    from cuanta.domain.messages import Message, english, keyed
+    from cuanta.domain.scout import FLAG_REASONS
+
+    if summary.docs_reason in FLAG_REASONS:
+        return f"{summary.docs} (--docs {summary.docs})"
+    reason = summary.docs_reason.replace("_", " ")
+    if not summary.docs_term:
+        return f"{summary.docs} ({reason})"
+    field = keyed("docs.field", summary.docs_field)
+    where = english(field) if isinstance(field, Message) else field
+    return f"{summary.docs} ({reason}: {summary.docs_term} in {where})"
 
 
 def team_lines(prepared: "Prepared") -> list[str]:
     import sys
 
     from cuanta.domain.guarantees import engine_guarantees
+    from cuanta.domain.limits import limits_message
     from cuanta.domain.messages import english, msg
 
     applied = prepared.applied
     lines = [
         f"{prepared.engine_name} · {english(row.message)}"
-        for row in engine_guarantees(prepared.engine_name)
+        for row in engine_guarantees(prepared.engine_name, limits=prepared.requested_limits)
     ]
+    lines.append(english(limits_message(prepared.limits)))
     if prepared.engine_name == "codex" and sys.platform == "win32":
         lines.append(english(msg("guarantee.codex_builds")))
     if applied is None or not applied.active:
@@ -1031,7 +1102,9 @@ def team_lines(prepared: "Prepared") -> list[str]:
     return lines
 
 
-def publish_team(session: Session, prepared: "Prepared") -> None:
+def publish_team(
+    session: Session, prepared: "Prepared", shape: "ShapeChoice | None" = None
+) -> None:
     from cuanta.domain.guarantees import cap_warning
     from cuanta.domain.messages import english
     from cuanta.domain.progress import Note, Status
@@ -1041,6 +1114,9 @@ def publish_team(session: Session, prepared: "Prepared") -> None:
     for line in team_lines(prepared):
         status = Status.WARN if warn and "is set" in line else Status.INFO
         session.presenter.publish(Note(status, line))
+    told = shape.message if shape is not None else None
+    if told is not None:
+        session.presenter.publish(Note(Status.INFO, english(told)))
     warning = cap_warning(prepared.engine_name, prepared.spec.max_budget_usd)
     if warning is not None:
         session.presenter.publish(Note(Status.WARN, english(warning)))
@@ -1188,38 +1264,40 @@ def guard_tripped(result: "SandboxResult | None") -> bool:
 def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> "Document":
     from cuanta.application.mandate import report_payload
     from cuanta.cli.document import Document, Hint, KeyValues, MarkdownText, MascotBlock, Panel
-    from cuanta.cli.fmt import compact, percent, usd
+    from cuanta.cli.fmt import compact, percent, turn_count, usd
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
     from cuanta.domain.governor_report import governor_payload, governor_summary
-    from cuanta.domain.guarantees import budget_stop_reason
     from cuanta.domain.messages import english
     from cuanta.domain.scout_report import parse_scout
+    from cuanta.domain.stop_reason import stop_message
     from cuanta.domain.voice import Mood
 
     run = report.run
-    stop = budget_stop_reason(run.end_reason)
-    budget_rows = (("stop reason", english(stop)),) if stop is not None else ()
+    governor = governor_summary(report.governor)
+    implementation = report.implementation.payload() if report.implementation is not None else None
+    stop = english(stop_message(run, implementation, governor))
     agents = ", ".join(
         f"{name} {compact(tokens)}" for name, tokens in report.tokens_by_agent.items()
     )
     index = "n/a" if report.utilization is None else percent(report.utilization)
     turn_rows: tuple[tuple[str, str], ...] = ()
-    if run.max_turns > 0 or run.end_reason == TURN_LIMIT_SUBTYPE:
-        count = f"{run.turns}/{run.max_turns}" if run.max_turns > 0 else str(run.turns)
-        cut = " · cut by turn limit" if run.end_reason == TURN_LIMIT_SUBTYPE else ""
+    cut_by_turns = run.end_reason == TURN_LIMIT_SUBTYPE
+    if run.max_turns > 0 or cut_by_turns or (run.partial and run.turns > 0):
+        count = turn_count(run.turns, run.max_turns, run.partial)
+        cut = " · cut by turn limit" if cut_by_turns else ""
         turn_rows = (("turns", f"{count}{cut}"),)
     trial = isolated.trial if isolated is not None else None
     changed = len(trial.changes) if trial is not None else len(report.changed_files)
     rows = (
         ("run", run.id),
         ("status", run.status),
+        ("stop reason", stop),
         ("scope hint", report.hint.option),
         ("files changed", str(changed)),
         ("tests", report.tests),
         ("tokens by agent", agents or "-"),
-        ("cost", usd(run.cost_usd, run.cost_source)),
+        ("cost", usd(run.cost_usd, run.cost_source, run.partial)),
         *turn_rows,
-        *budget_rows,
         ("utilization", f"{index} (heuristic v1)"),
         *audit_rows(report),
         *scout_rows(parse_scout(report.scout, docs_json(report.docs))),
@@ -1243,7 +1321,8 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
     payload = {
         **report_payload(report),
         "report_text": report.text,
-        "governor": governor_payload(governor_summary(report.governor)),
+        "stop_reason": stop,
+        "governor": governor_payload(governor),
     }
     if isolated is not None:
         payload["sandbox"] = sandbox_payload(isolated)
@@ -1257,6 +1336,8 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
 
 
 def implementation_rows(report: "MandateReport") -> tuple[tuple[str, str], ...]:
+    from cuanta.domain.implementation import settled_state
+
     implementation = report.implementation
     if implementation is None:
         return ()
@@ -1268,9 +1349,7 @@ def implementation_rows(report: "MandateReport") -> tuple[tuple[str, str], ...]:
             str(max(0, implementation.repair_limit - implementation.repairs)),
         )
     )
-    rows.extend((step.title, step.state) for step in implementation.steps)
-    if implementation.reason:
-        rows.append(("implementation stop", implementation.reason.replace("_", " ")))
+    rows.extend((step.title, settled_state(step.state)) for step in implementation.steps)
     if implementation.checks:
         last = implementation.checks[-1]
         rows.extend(("introduced error", error) for error in last.introduced)

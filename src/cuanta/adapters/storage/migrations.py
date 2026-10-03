@@ -326,6 +326,10 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX IF NOT EXISTS idx_forecasts_group ON forecasts(provider, task_type)
     """,
+    """
+    ALTER TABLE runs ADD COLUMN partial INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE runs ADD COLUMN max_wall_s REAL NOT NULL DEFAULT 0
+    """,
 )
 
 LATEST_VERSION = len(MIGRATIONS)

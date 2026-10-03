@@ -23,7 +23,7 @@ from cuanta.domain.mandate import MandateRequest, parse_shape, single_context
 from cuanta.domain.pipeline import STAGES, AgentCard, CardState, Pipeline
 from cuanta.domain.progress import Note, ProgressEvent, Status
 from cuanta.tui.cells import labeled
-from cuanta.tui.fmt import compact, glyph, money, status_style
+from cuanta.tui.fmt import compact, glyph, run_money, status_style
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.screens.result import ResultScreen
 from cuanta.tui.services import Services
@@ -222,6 +222,8 @@ class PipelineScreen(Screen[None]):
 
     def _show_failure(self, error: str, hint: str) -> None:
         self._done()
+        self.pipeline.close(False)
+        self._paint()
         message = self._t("pipeline.run_failed", error=error, hint=hint)
         self.query_one("#pipeline-summary", Static).update(Content.styled(message, "$error"))
         self.app.notify(message, severity="error")
@@ -232,6 +234,8 @@ class PipelineScreen(Screen[None]):
 
     def _show_report(self, report: MandateReport) -> None:
         self._done()
+        self.pipeline.close(report.ok)
+        self._paint()
         self.report = report
         t = self._t
         status = Status.OK if report.ok else Status.FAIL
@@ -239,7 +243,7 @@ class PipelineScreen(Screen[None]):
         files = "\n".join(report.changed_files[:12]) or t("pipeline.no_changes")
         rows = [
             (t("pipeline.tests_status"), report.tests),
-            (t("pipeline.cost"), money(report.run.cost_usd, t("spectrum.na"))),
+            (t("pipeline.cost"), run_money(report.run, t)),
             (t("pipeline.tools"), f"{report.tool_calls:,}"),
         ]
         parts = [

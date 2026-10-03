@@ -52,10 +52,12 @@ MANDATE_PARAMS = frozenset(
         "session",
         "depth",
         "max_turns",
+        "max_wall",
         "shape",
         "sandbox",
         "keep",
         "classic",
+        "docs",
     }
 )
 
@@ -172,6 +174,10 @@ def _integer(params: Mapping[str, object], name: str) -> int:
     raise _mismatch(name)
 
 
+def _optional_integer(params: Mapping[str, object], name: str) -> int | None:
+    return None if _value(params, name) is None else _integer(params, name)
+
+
 def _path(params: Mapping[str, object], name: str) -> Path | None:
     value = _value(params, name)
     if value is None or isinstance(value, Path):
@@ -211,7 +217,7 @@ def mandate_args(params: Mapping[str, object]) -> "MandateArgs":
         profile=_text(params, "profile"),
         variant=_text(params, "variant"),
         pure=_flag(params, "pure"),
-        budget=_number(params, "budget"),
+        budget=_optional_number(params, "budget"),
         hu=_text(params, "hu"),
         dry_run=_flag(params, "dry_run"),
         route=_text(params, "route"),
@@ -223,11 +229,13 @@ def mandate_args(params: Mapping[str, object]) -> "MandateArgs":
         simple=_flag(params, "simple"),
         session=_text(params, "session"),
         depth=_text(params, "depth"),
-        max_turns=_integer(params, "max_turns"),
+        max_turns=_optional_integer(params, "max_turns"),
+        max_wall=_optional_number(params, "max_wall"),
         shape=_text(params, "shape"),
         sandbox=_flag(params, "sandbox"),
         keep=_flag(params, "keep"),
         classic=_flag(params, "classic"),
+        docs=_text(params, "docs"),
     )
 
 
@@ -331,7 +339,7 @@ def _cap(parsed: "MandateArgs | CuantaError") -> float | None:
 
     if isinstance(parsed, CuantaError):
         return None
-    if parsed.budget > 0:
+    if parsed.budget is not None and parsed.budget > 0:
         return parsed.budget
     return parsed.cross_budget
 
@@ -400,6 +408,11 @@ def slot_payload(slot: "QueueSlot", parsed: "MandateArgs | CuantaError") -> dict
         payload["invalid"] = parsed.message
     else:
         payload["cap_usd"] = _cap(parsed)
+        payload["limits"] = {
+            "budget_usd": parsed.budget,
+            "max_turns": parsed.max_turns,
+            "wall_min": parsed.max_wall,
+        }
         payload["sandbox"] = parsed.sandbox
     return payload
 
@@ -495,7 +508,7 @@ def _launch(
             outcome = QueueOutcome(slot, QueueStatus.OK if ok else QueueStatus.FAILED, detail)
     if outcome.status is not QueueStatus.OK:
         session.presenter.publish(Note(Status.FAIL, f"{label} failed: {outcome.detail}"))
-    container = Container.for_project(session.project)
+    container = Container.for_project(session.project, verbose=session.options.verbose)
     try:
         line = warm_line(_window(container, slot.provider))
     finally:
@@ -516,7 +529,7 @@ def _run(session: Session, keep_going: bool) -> "Document":
     from cuanta.cli.document import Column, Document, Hint, Table
     from cuanta.domain.queue import QueueStatus, queue_order, warm_payload
 
-    container = Container.for_project(session.project)
+    container = Container.for_project(session.project, verbose=session.options.verbose)
     try:
         queue = container.mandate_queue()
         slots, parsed = resolve(queue.entries(), container.config.engine)
@@ -558,7 +571,7 @@ def _run(session: Session, keep_going: bool) -> "Document":
         for item in report.outcomes
         if item.status not in {QueueStatus.NOT_RUN, QueueStatus.GONE}
     ]
-    closing = Container.for_project(session.project)
+    closing = Container.for_project(session.project, verbose=session.options.verbose)
     try:
         final = _window(closing, (ran or report.outcomes)[-1].slot.provider)
     finally:

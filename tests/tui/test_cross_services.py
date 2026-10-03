@@ -18,10 +18,12 @@ from cuanta.domain.implementation import LARGE_EDIT_TOKENS
 from cuanta.domain.ledger import Run
 from cuanta.domain.mandate import MandateRequest, Shape
 from cuanta.domain.messages import english, msg
+from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.pricing import PriceTable
-from cuanta.domain.routing import Role, RoutingPolicy
+from cuanta.domain.routing import Role, RoleRoute, RoutingPolicy
 from cuanta.domain.scout import ShapeChoice
 from cuanta.tui.services import ContainerServices, cross_report
+from tests.real_run import phased_mandate
 
 if TYPE_CHECKING:
     from cuanta.bootstrap import Container
@@ -115,6 +117,7 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
         team_forecast=team_forecast,
         shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
         fast_ready=lambda name: True,
+        routing_pinned=lambda mode: False,
         docs_choice=lambda request, options: None,
         shape_plan=lambda plan, shape, docs: plan,
         close=lambda: None,
@@ -135,12 +138,13 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
 
 
 @pytest.mark.parametrize(
-    ("kind", "ready", "seen"),
+    ("kind", "ready", "pinned", "seen"),
     [
-        ("bug", True, ("fast", "claude-opus-5-5", "high")),
-        ("feature", True, ("fast", "claude-opus-5-5", "low")),
-        ("refactor", True, ("balanced", "", "")),
-        ("bug", False, ("balanced", "", "")),
+        ("bug", True, False, ("fast", "claude-opus-5-5", "high")),
+        ("feature", True, False, ("fast", "claude-opus-5-5", "low")),
+        ("refactor", True, False, ("balanced", "", "")),
+        ("bug", False, False, ("balanced", "", "")),
+        ("bug", True, True, ("balanced", "", "")),
     ],
 )
 def test_the_team_step_forecasts_the_auto_profile_with_the_default_of_its_kind(
@@ -148,6 +152,7 @@ def test_the_team_step_forecasts_the_auto_profile_with_the_default_of_its_kind(
     monkeypatch: pytest.MonkeyPatch,
     kind: str,
     ready: bool,
+    pinned: bool,
     seen: tuple[str, str, str],
 ) -> None:
     team = RoutePlan(RoutingPolicy(engines=("claude",)), None, None, (), (), "heuristic")
@@ -168,6 +173,7 @@ def test_the_team_step_forecasts_the_auto_profile_with_the_default_of_its_kind(
         team_forecast=team_forecast,
         shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
         fast_ready=lambda name: ready,
+        routing_pinned=lambda mode: pinned,
         docs_choice=lambda request, options: None,
         shape_plan=lambda plan, shape, docs: plan,
         close=lambda: None,
@@ -177,3 +183,114 @@ def test_the_team_step_forecasts_the_auto_profile_with_the_default_of_its_kind(
     request = MandateRequest(kind, "fix add", "wrong sum", constraints="same output", tests="sum")
     services.team_plan(request, MandateOptions())
     assert forecasts == [seen]
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+def test_the_app_setup_says_whether_config_role_pins_keep_auto_balanced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: bool
+) -> None:
+    modes: list[str] = []
+
+    def routing_pinned(mode: str = "") -> bool:
+        modes.append(mode)
+        return pinned
+
+    container = SimpleNamespace(
+        config=Config(engine="claude", implementation_profile="auto"),
+        engine=lambda name: None,
+        known_models=lambda: (),
+        has_forge_agents=lambda: True,
+        init_estimate=lambda: None,
+        routing_pinned=routing_pinned,
+        close=lambda: None,
+    )
+    services = ContainerServices(tmp_path)
+    monkeypatch.setattr(services, "_container", lambda: cast("Container", container))
+    setup = services.mandate_setup()
+    assert (setup.profile, setup.pinned) == ("auto", pinned)
+    assert modes == [""]
+
+
+def test_the_team_step_forecast_receives_the_whole_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    team = RoutePlan(RoutingPolicy(engines=("claude",)), None, None, (), (), "heuristic")
+    received: list[object] = []
+
+    def team_forecast(*args: object, **kwargs: object) -> PlannedForecast:
+        received.append(kwargs.get("request"))
+        raise ValueError("no forecast in this test")
+
+    container = SimpleNamespace(
+        config=Config(engine="claude"),
+        plan_route=lambda *args, **kwargs: (team, None),
+        team_estimate=lambda plan, task_type, depth, cap, shape="pipeline", repair=True, docs_off=False: (
+            estimate(plan, (), PriceTable({}), task_type, depth, cap, shape, None, repair, docs_off)
+        ),
+        change_plan=lambda request: ChangePlan(),
+        team_forecast=team_forecast,
+        shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
+        fast_ready=lambda name: True,
+        routing_pinned=lambda mode: False,
+        docs_choice=lambda request, options: None,
+        shape_plan=lambda plan, shape, docs: plan,
+        close=lambda: None,
+    )
+    services = ContainerServices(tmp_path)
+    monkeypatch.setattr(services, "_container", lambda: cast("Container", container))
+    request = MandateRequest(
+        "feature",
+        "Refactor del intérprete",
+        phased_mandate(),
+        tests="pytest tests/test_consult.py",
+        out_of_scope="frontend",
+    )
+    _, found = services.team_plan(request, MandateOptions(profile="balanced"))
+    assert received == [request]
+    assert found.forecast_error is not None
+
+
+@pytest.mark.parametrize(
+    ("engine", "options", "names"),
+    [
+        ("codex", MandateOptions(engine="codex"), ("readonly", "telemetry")),
+        (
+            "codex",
+            MandateOptions(engine="codex", budget_usd=2.0, max_turns=5, max_wall_min=30.0),
+            ("spend", "readonly", "telemetry"),
+        ),
+        (
+            "claude",
+            MandateOptions(
+                engine="claude", shape="scout", scout_mode="launch", budget_usd=2.0, max_turns=5
+            ),
+            ("spend", "turns", "readonly", "telemetry"),
+        ),
+    ],
+    ids=["codex_unlimited", "codex_capped", "claude_scout_launch"],
+)
+def test_per_role_cards_show_the_guarantees_of_the_limits_each_launch_applies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    engine: str,
+    options: MandateOptions,
+    names: tuple[str, ...],
+) -> None:
+    model = ModelEntry(engine, f"{engine}-model", f"{engine}-model", engine)
+    routes = tuple(
+        RoleRoute(role, Tier.STANDARD, Tier.STANDARD, model, msg("route.policy", tier="standard"))
+        for role in (Role.ANALYST, Role.SENIOR, Role.TESTER)
+    )
+    team = RoutePlan(RoutingPolicy(engines=(engine,)), None, None, (), routes, "heuristic")
+    found = estimate(team, (), PriceTable({}), "feature", "normal", options.budget_usd or 0.0)
+    container = SimpleNamespace(
+        config=Config(engine=engine),
+        pipeline_index_tools=lambda name: True,
+        build_blocked=frozenset,
+        close=lambda: None,
+    )
+    services = ContainerServices(tmp_path)
+    monkeypatch.setattr(services, "_container", lambda: cast("Container", container))
+    cards = services.team_cards(team, found, options, "feature")
+    assert len(cards) == len(routes)
+    assert {tuple(row.name for row in card.guarantees) for card in cards} == {names}

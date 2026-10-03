@@ -72,6 +72,7 @@ def _matching(
         for item in attempts(runs)
         if (item.run.depth or DEFAULT_DEPTH.value) == wanted
         and (not shape or _shape(item, shapes) == shape)
+        and not item.partial
         and item.cost is not None
         and isfinite(item.cost)
         and item.cost >= 0
@@ -159,6 +160,7 @@ def role_history(
             and (run.depth or DEFAULT_DEPTH.value) == (depth or DEFAULT_DEPTH.value)
             and (run.status == "ok" or run.end_reason == "error_max_budget_usd")
             and run.cost_usd is not None
+            and not run.partial
         ]
     return samples
 

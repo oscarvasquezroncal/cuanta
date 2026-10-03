@@ -232,6 +232,7 @@ def row_payload(row: "CostRow") -> dict[str, object]:
         "pending": row.pending,
         "spend_usd": spend.value,
         "spend_lower_bound": spend.lower_bound,
+        "partial_runs": spend.partial,
         "runs_without_cost": spend.missing,
         "runs_with_estimated_cost": spend.estimated,
         "median_cost_usd": row.median_cost,

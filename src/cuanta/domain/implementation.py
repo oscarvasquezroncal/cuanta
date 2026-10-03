@@ -8,7 +8,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from cuanta.domain.engine import COST_UNKNOWN_SUBTYPE, GOVERNOR_STOP_SUBTYPE, cut_by_turns
+from cuanta.domain.engine import (
+    BUDGET_LIMIT_SUBTYPE,
+    COST_UNKNOWN_SUBTYPE,
+    GOVERNOR_STOP_SUBTYPE,
+    WALL_LIMIT_SUBTYPE,
+    cut_by_turns,
+)
 from cuanta.domain.mandate import MandateType
 from cuanta.domain.role_handoff import VerifyResult, last_json_object
 from cuanta.domain.routing import Provider
@@ -97,10 +103,21 @@ class VerificationDelta:
         return bool(self.results) and not self.introduced
 
 
+STOPPED_STATE = "stopped"
+UNSETTLED_STATES = frozenset({"running", "repairing"})
+SESSION_CLOSED = "session_closed"
+USER_STOP = "stopped"
+ENGINE_STOPS = frozenset({WALL_LIMIT_SUBTYPE, BUDGET_LIMIT_SUBTYPE, GOVERNOR_STOP_SUBTYPE})
+
+
 @dataclass(frozen=True, slots=True)
 class ImplementationStep:
     title: str
     state: str = "pending"
+
+
+def settled_state(state: str) -> str:
+    return STOPPED_STATE if state in UNSETTLED_STATES else state
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +130,10 @@ class ImplementationReport:
     time_limit_s: float = 900.0
     elapsed_s: float = 0.0
     engine_subtype: str = ""
+    exit_code: int | None = None
+    cap_usd: float = 0.0
+    max_turns: int = 0
+    repair_elapsed_s: float = 0.0
 
     @property
     def passed(self) -> bool:
@@ -134,6 +155,10 @@ class ImplementationReport:
             "repair_rounds_remaining": max(0, self.repair_limit - self.repairs),
             "time_limit_s": self.time_limit_s,
             "elapsed_s": self.elapsed_s,
+            "repair_elapsed_s": self.repair_elapsed_s,
+            "exit_code": self.exit_code,
+            "cap_usd": self.cap_usd,
+            "max_turns": self.max_turns,
             "steps": [{"title": step.title, "state": step.state} for step in self.steps],
             "checks": [
                 {
@@ -218,6 +243,8 @@ def _unavailable_reason(result: VerifyResult) -> str:
 
 
 def engine_stop_reason(subtype: str, terminal_reason: str = "") -> str:
+    if subtype == WALL_LIMIT_SUBTYPE:
+        return "wall_limit"
     if "budget" in subtype or subtype == GOVERNOR_STOP_SUBTYPE:
         return "cost_limit"
     if cut_by_turns(subtype, terminal_reason):

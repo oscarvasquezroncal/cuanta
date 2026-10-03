@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -20,11 +22,14 @@ from cuanta.bootstrap import Container
 from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.config import Config
 from cuanta.domain.engine import EngineEvent, EngineRequest
+from cuanta.domain.mandate import request_text
 from cuanta.domain.messages import msg
 from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.progress import Note, Status
 from cuanta.domain.routing import ROLES, Provider, Role, RoleRoute, RoutingPolicy
+from cuanta.domain.spectrum import estimated_tokens
 from tests.fakes import FakeRunner
+from tests.real_run import PHASES_LINE, phased_mandate
 from tests.unit.test_cross_engine import REQUEST, Recorder, ScriptedEngine
 from tests.unit.test_forecast import COLD_CLOCK, PRICES, sizes, team
 
@@ -34,6 +39,7 @@ if TYPE_CHECKING:
     from cuanta.application.mandate_flow import Prepared
     from cuanta.application.route_apply import Applied
     from cuanta.domain.engine import EngineOutcome
+    from cuanta.domain.mandate import MandateRequest
     from cuanta.ports.progress import ProgressSink
 
 CODEX_MODELS = {Role.ANALYST: "gpt-6-sol", Role.SENIOR: "gpt-6-sol", Role.TESTER: "gpt-6-luna"}
@@ -81,6 +87,7 @@ class BrokenForecaster(Forecaster):
         max_turns: int = 0,
         implementation_profile: str = "balanced",
         variant: str = "",
+        request: MandateRequest | None = None,
     ) -> PlannedForecast:
         raise ValueError("forecast 01X has an unreadable plan")
 
@@ -150,6 +157,21 @@ def test_a_gpt_team_stores_its_forecast_under_the_root_run_before_the_first_laun
     assert item.actual_usd == pytest.approx(report.spent_usd)
     notes = [event.text for event in recorder.events if isinstance(event, Note)]
     assert any(text.startswith("Forecast $") for text in notes)
+
+
+def test_the_team_root_forecast_counts_the_request_and_names_its_phases(tmp_path: Path) -> None:
+    ledger = MemoryLedger()
+    recorder = Recorder()
+    phased = replace(REQUEST, why=phased_mandate())
+    report = cross(tmp_path, ledger, [], True).run(phased, codex_team(), recorder)
+    assert report.ok
+    [item] = ledger.forecasts()
+    features = json.loads(item.forecast.features)
+    assert features["request_tokens"] == estimated_tokens(len(request_text(phased).encode("utf-8")))
+    assert features["request_parts"] == 5
+    notes = [event.text for event in recorder.events if isinstance(event, Note)]
+    forecast = next(index for index, text in enumerate(notes) if text.startswith("Forecast $"))
+    assert notes[forecast + 1] == PHASES_LINE
 
 
 def test_a_failed_team_forecast_is_reported_and_the_team_still_launches(tmp_path: Path) -> None:
@@ -232,6 +254,7 @@ def prepared(ledger: MemoryLedger, run_id: str) -> Prepared:
             scout=False,
             docs=None,
             read_hooks=False,
+            pack_notes=(),
         ),
     )
 
@@ -303,6 +326,7 @@ def test_a_failed_native_forecast_is_reported_and_the_launch_goes_ahead() -> Non
             scout=False,
             docs=None,
             read_hooks=False,
+            pack_notes=(),
         ),
     )
     recorder = Recorder()

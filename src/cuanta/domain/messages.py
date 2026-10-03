@@ -29,6 +29,31 @@ def msg(key: str, **params: object) -> Message:
     )
 
 
+def message_payload(message: Message) -> dict[str, object]:
+    return {
+        "key": message.key,
+        "params": {
+            name: message_payload(value) if isinstance(value, Message) else value
+            for name, value in message.params
+        },
+    }
+
+
+def parse_message(value: object) -> Message | None:
+    if not isinstance(value, dict):
+        return None
+    key, params = value.get("key"), value.get("params", {})
+    if not isinstance(key, str) or not key or not isinstance(params, dict):
+        return None
+    found: list[tuple[str, str | Message]] = []
+    for name, item in params.items():
+        nested = parse_message(item)
+        if nested is None and not isinstance(item, str):
+            return None
+        found.append((str(name), nested if nested is not None else str(item)))
+    return Message(key, tuple(found))
+
+
 def placeholders(template: str) -> frozenset[str]:
     return frozenset(PLACEHOLDER.findall(template))
 
@@ -59,6 +84,49 @@ ENGLISH: dict[str, str] = {
         "Stopped because the engine did not report the step cost needed to enforce the budget."
     ),
     "engine.budget_stopped": "Stopped at the spend cap or recorded an over-cap result.",
+    "stop.finished": "the agent finished",
+    "stop.finished_on_request": (
+        "the agent finished after the governor asked it to wrap up at {spent} of {limit}"
+    ),
+    "stop.repair_time_limit": "stopped by the repair time limit of {seconds} s",
+    "stop.time_limit": "stopped by the time limit of {seconds} s",
+    "stop.wall_limit": "stopped by the time limit of {minutes} min",
+    "stop.turn_limit": "stopped at the turn limit of {turns} turns",
+    "stop.turn_limit_one": "stopped at the turn limit of 1 turn",
+    "stop.cost_limit": "stopped at the spend cap of {cap}",
+    "stop.cost_unknown": (
+        "stopped because the engine did not report the cost needed to enforce the {cap} cap"
+    ),
+    "stop.governor": "stopped by the governor to stay within the {cap} cap",
+    "stop.repair_limit": "stopped after {rounds} repair rounds with new errors left",
+    "stop.repair_limit_one": "stopped after 1 repair round with new errors left",
+    "stop.verification_failed": "stopped because verification found {count} new errors",
+    "stop.verification_failed_one": "stopped because verification found 1 new error",
+    "stop.unfinished": "stopped before cuanta could verify step {step} of {total}",
+    "stop.session_closed": "stopped because the session closed before the next turn",
+    "stop.invalid_step_plan": "stopped because the step plan could not be read",
+    "stop.planning_changes": "stopped because files changed before a step was authorized",
+    "stop.engine_failed": "stopped because the engine ended with {subtype}",
+    "stop.engine_exited": "stopped because the engine exited with code {code} before its result",
+    "stop.no_result": "stopped because the engine ended without a result",
+    "stop.user": "stopped by the user",
+    "stop.interrupted": "interrupted before the run finished",
+    "stop.running": "still running",
+    "stop.failed": "the run failed",
+    "stop.team_partial": "the team stopped before every role finished",
+    "stop.team_failed": "the team run failed",
+    "result.partial_cost": "{cost} (partial)",
+    "result.partial_estimated_cost": "{cost} (estimated, partial)",
+    "result.partial_turns": "{turns} (partial)",
+    "limits.none": "no limits",
+    "limits.active": "limits: {items}",
+    "limits.join": "{first} · {rest}",
+    "limits.spend": "spend cap {cap}",
+    "limits.turns": "{turns} turns",
+    "limits.turns_one": "1 turn",
+    "limits.wall": "{minutes} min",
+    "telemetry.unreadable": "{count} telemetry records could not be read; details in {path}",
+    "telemetry.unreadable_one": "1 telemetry record could not be read; details in {path}",
     "guarantee.row": "{name}: {status} ({detail})",
     "guarantee.spend": "Spend cap",
     "guarantee.turns": "Turn limit",
@@ -397,6 +465,7 @@ ENGLISH: dict[str, str] = {
     "route.risk": "risk {risk} of 2: tester raised to {tier}",
     "route.off": "routing off: engine default model",
     "route.single": "single model for this engine: {model}",
+    "route.pure": "pure: --pure runs every role on {model}",
     "audit.ok": "ran on the planned model",
     "audit.not_run": "not delegated to in this run",
     "audit.not_seen": (
@@ -460,6 +529,9 @@ ENGLISH: dict[str, str] = {
         "drop the pin or the --shape"
     ),
     "route.pins_rejected": "role pins cannot be honored",
+    "route.fast_pin_conflict": (
+        "fast implementation runs one model ({model}), and a role pin names another"
+    ),
     "provider.claude": "Claude team",
     "provider.codex": "GPT team",
     "team.role": "{role}: {engine} {model}, share ${share}",
@@ -626,6 +698,10 @@ ENGLISH: dict[str, str] = {
         "the next run cannot start because a previous cost is unknown "
         "and the remaining budget cannot be calculated"
     ),
+    "bench.cost_partial": (
+        "the next run cannot start because a previous run stopped early and its cost "
+        "is only a lower bound, so the remaining budget cannot be calculated"
+    ),
     "bench.run": "{order}/{total} {task} · {condition} · rep {rep}",
     "bench.accepted": "accepted",
     "bench.rejected": "not accepted",
@@ -648,6 +724,8 @@ ENGLISH: dict[str, str] = {
     "envelope.line": "Forecast {p50} (P90 {p90}), margin {margin}, {cache}",
     "envelope.line_uncapped": "Forecast {p50} (P90 {p90}), no cap, {cache}",
     "envelope.line_unknown": "Forecast n/a: a role has no price, {cache}",
+    "envelope.phases": "This mandate has {count} phases; the forecast covers one change",
+    "envelope.steps": "This mandate has {count} steps; the forecast covers one change",
     "envelope.cache_warm": "warm cache ({share})",
     "envelope.cache_cold": "cold cache",
     "envelope.cache_unknown": "cache unknown",
@@ -673,6 +751,11 @@ ENGLISH: dict[str, str] = {
     ),
     "scout.shape_pinned": (
         "Shape: scout and senior, because the scout is pinned; the scout runs {mode}"
+    ),
+    "scout.shape_pure": (
+        "Shape: pipeline without a scout: --pure runs every role on {model}, so a scout costs "
+        "as much as the senior; the senior works from cuanta's context pack (--shape scout "
+        "adds one anyway)"
     ),
     "scout.refused": "--shape scout applies to features, fixes and refactors",
     "scout.refused_simple": "--shape scout needs a team; simple mode runs one agent",
@@ -708,9 +791,50 @@ ENGLISH: dict[str, str] = {
     "docs.forced_on": "Docs: on (runs.docs = on)",
     "docs.forced_off": "Docs: off (runs.docs = off)",
     "docs.pinned": "Docs: on, the docs role is pinned",
+    "docs.agent": "Docs: on, the request names the docs agent",
+    "docs.path": "Docs: on, the request names a docs path",
+    "docs.requested_in": "Docs: on, the request asks for docs in {field} ({term})",
+    "docs.agent_in": "Docs: on, the request names the {term} agent in {field}",
+    "docs.path_in": "Docs: on, the request names the docs path {term} in {field}",
+    "docs.flag_on": "Docs: on (--docs on)",
+    "docs.flag_off": "Docs: off (--docs off)",
+    "docs.field.what": "the description",
+    "docs.field.why": "the evidence",
+    "docs.field.where": "the location",
+    "docs.field.tests": "the expected tests",
+    "docs.refused_classic": "--classic runs with docs on",
+    "docs.refused_pin": "--docs off and a docs pin disagree",
+    "docs.refused_simple": "simple mode runs without the docs role",
+    "docs.refused_investigation": "investigations run without the docs role",
+    "docs.refused_fast": "fast implementation runs one writer without the docs role",
     "docs.funds_repair": (
         "repair budget: ${cap} is held for one repair turn, funded from the docs share (docs is "
         "off)"
+    ),
+    "pack.anchors_missing": "File:line references not found among the indexed files: {anchors}",
+    "pack.anchors_ambiguous": (
+        "File:line references that match more than one indexed file: {anchors}"
+    ),
+    "pack.anchors_out_of_range": (
+        "File:line references past the last line of their file: {anchors}"
+    ),
+    "pack.anchors_stale": (
+        "Referenced files changed after indexing and were left out of the pack: {anchors}"
+    ),
+    "pack.anchors_partial": (
+        "Referenced ranges longer than the pack window, packed in part (range → packed lines): "
+        "{anchors}"
+    ),
+    "pack.anchors_omitted": (
+        "Referenced ranges left out by the {budget}-token pack budget: {anchors}"
+    ),
+    "pack.anchors_protected": (
+        "Referenced files the change plan protects (context only, not editable): {anchors}"
+    ),
+    "change_plan.read_only_phrase": ('Change plan: read-only, because the request says "{phrase}"'),
+    "change_plan.guard_released": (
+        "Change plan: {paths} stays editable: a phase says not to touch it, but the request "
+        "anchors or names it elsewhere; put it in Out of scope to protect it"
     ),
     "queue.warm_until": "warm prefix until {time}",
     "queue.cold_since": "prefix cold since {time}; the next mandate writes it again",
@@ -815,6 +939,10 @@ ENGLISH: dict[str, str] = {
         "{count} files ignored by .gitignore could not be read and are not in the copy: {paths}"
     ),
 }
+
+
+def counted(key: str, name: str, count: int) -> Message:
+    return msg(f"{key}_one") if count == 1 else msg(key, **{name: count})
 
 
 def keyed(prefix: str, value: str) -> Message | str:

@@ -64,8 +64,8 @@ def env(
     monkeypatch.setattr(runner, "which", which)
     monkeypatch.setattr(runner, "run", run)
 
-    def build(cls: type[Container], project: Path) -> Container:
-        container = original(project)
+    def build(cls: type[Container], project: Path, verbose: bool = False) -> Container:
+        container = original(project, verbose)
         container.runner = runner
         return container
 
@@ -390,7 +390,7 @@ def test_routing_off_sends_no_agents(tmp_path: Path, env: dict[str, str]) -> Non
     assert any("senior" in line for line in routed["team"])
 
 
-def test_depth_caps_the_spend_and_states_a_read_budget(
+def test_depth_states_a_read_budget_and_sets_no_limit_unless_asked(
     tmp_path: Path, env: dict[str, str], graph_available: bool
 ) -> None:
     root = copy_repo("bugfix", tmp_path)
@@ -416,9 +416,8 @@ def test_depth_caps_the_spend_and_states_a_read_budget(
     document = json.loads(dry.stdout)
     command = " ".join(document["command"])
     prompt = document["prompt"]
-    assert "--max-budget-usd" in command
-    assert "--max-turns 20" in command
-    assert "0.25" in command
+    assert "--max-budget-usd" not in command
+    assert "--max-turns" not in command
     assert "--append-system-prompt" in command
     assert "READ BUDGET (quick)" in command
     assert "READ BUDGET" not in prompt

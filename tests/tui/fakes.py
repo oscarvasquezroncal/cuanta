@@ -34,8 +34,9 @@ from cuanta.application.mandate_flow import (
     MandateOptions,
     MandatePreview,
     MandateSetup,
+    effective_limits,
+    mandate_limits,
     per_role_run,
-    resolve_budget,
 )
 from cuanta.application.map import MapFile, MapStatus
 from cuanta.application.models import CatalogView, ProbeOutcome
@@ -86,6 +87,7 @@ from cuanta.domain.forge_verify import Finding
 from cuanta.domain.handoff import Handoff, Workflow
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import Capsule, Decision, Run
+from cuanta.domain.limits import LimitSettings
 from cuanta.domain.loop import LoopGate, StopReason
 from cuanta.domain.mandate import MandateRequest, parse_shape, single_context
 from cuanta.domain.messages import Message, msg, option_message
@@ -578,6 +580,7 @@ class FakeServices:
         pass
 
     home_snapshot: HomeSnapshot = field(default_factory=snapshot)
+    limits: LimitSettings = field(default_factory=LimitSettings)
     project: Path = Path("/work/shop")
     calls: list[str] = field(default_factory=list)
     prefix: PrefixWindow = UNKNOWN_PREFIX
@@ -634,16 +637,18 @@ class FakeServices:
     stops: int = 0
     evidence_files: dict[str, str] = field(default_factory=dict)
     profile: str = "balanced"
+    role_pins: bool = False
 
     def mandate_setup(self) -> MandateSetup:
         return MandateSetup(
             self.engines,
             "claude",
             ("claude-haiku-4-5", "claude-sonnet-5", "gpt-5"),
-            0.0,
             self.forge_ready,
             1.59,
+            limits=self.limits,
             profile=self.profile,
+            pinned=self.role_pins,
         )
 
     def failure_evidence(self) -> tuple[str, int]:
@@ -677,6 +682,8 @@ class FakeServices:
             per_role,
         )
 
+    report_run: Run | None = None
+
     def run_mandate(
         self,
         request: MandateRequest,
@@ -694,7 +701,8 @@ class FakeServices:
             return mandate_report(ok=False)
         for event in self.events:
             observer(event)
-        return mandate_report()
+        report = mandate_report()
+        return report if self.report_run is None else replace(report, run=self.report_run)
 
     def stop_mandate(self) -> bool:
         self.stops += 1
@@ -1126,7 +1134,7 @@ class FakeServices:
         self.team_options.append(options)
         routes = self.routes(request, options)
         plan = RoutePlan(self.team_policy(options), None, None, (), routes, "heuristic")
-        cap = resolve_budget(options, request.type, 0.0)
+        cap = mandate_limits(options, request.type, self.limits).budget_usd
         found = estimate(plan, self.similar, load_prices(), request.type, options.depth, cap)
         return plan, replace(
             found,
@@ -1156,12 +1164,14 @@ class FakeServices:
     ) -> tuple[RoleCard, ...]:
         if per_role_run(options, task_type, "claude"):
             shares = {cost.role: cost.share for cost in estimate.roles if cost.share > 0}
+            limits = mandate_limits(options, task_type, self.limits)
             return team_cards(
                 plan.routes,
                 shares,
                 estimate.cap,
                 lambda engine: engine in {"claude", "codex"},
                 frozenset({"codex"}),
+                effective_limits(limits, options.engine or "claude"),
             )
         return team_cards(plan.routes, {}, 0.0, lambda engine: False)
 

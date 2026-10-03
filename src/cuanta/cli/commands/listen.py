@@ -48,7 +48,7 @@ def _listen(
     from cuanta.domain.errors import DomainFailure
     from cuanta.domain.progress import Note, Status
 
-    container = Container.for_project(session.project)
+    container = Container.for_project(session.project, verbose=session.options.verbose)
     control = container.listener()
     chosen = port or container.config.port
     if sum((background, status, stop)) > 1:

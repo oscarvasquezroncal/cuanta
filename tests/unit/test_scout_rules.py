@@ -141,6 +141,35 @@ def test_a_scout_pin_is_honored_and_routing_off_leaves_the_scout_without_a_model
     assert without_role(pinned, Role.ANALYST) is pinned
 
 
+def test_a_pure_plan_puts_the_scout_on_the_pure_model_and_a_premium_one_skips_it() -> None:
+    from cuanta.application.routing import pure_plan
+    from cuanta.domain.scout import pure_shape
+
+    plan = pure_plan(team_plan("claude"), "opus", CATALOG)
+    scout = scouted(plan).route(Role.SCOUT)
+    assert scout is not None and scout.model is not None
+    assert (scout.model.id, scout.tier, scout.reason.key) == ("opus", Tier.PREMIUM, "route.pure")
+    assert english(scout.reason) == "pure: --pure runs every role on opus"
+    assert pure_plan(scouted(team_plan("claude")), "opus", CATALOG).routes == scouted(plan).routes
+    assert pure_plan(plan, "opus", CATALOG) == plan
+    assert pure_plan(plan, "", CATALOG) == plan
+    skipped = pure_shape(plan.pure, 0.35, ScoutMode.NATIVE)
+    assert skipped is not None and skipped.shape is Shape.PIPELINE and not skipped.scout
+    assert skipped.message is not None
+    assert english(skipped.message) == (
+        "Shape: pipeline without a scout: --pure runs every role on opus, so a scout costs as "
+        "much as the senior; the senior works from cuanta's context pack (--shape scout adds "
+        "one anyway)"
+    )
+    assert skipped.payload()["pure"] == "opus"
+    assert choose_shape("feature", None, 0.1).payload()["pure"] is None
+    standard = pure_plan(team_plan("claude"), "sonnet", CATALOG)
+    assert pure_shape(standard.pure, 0.35, ScoutMode.NATIVE) is None
+    frontier = ModelEntry("claude", "fable", "Fable", "anthropic", tier=Tier.FRONTIER)
+    assert pure_shape(frontier, 0.35, ScoutMode.NATIVE) is not None
+    assert pure_shape(None, 0.35, ScoutMode.NATIVE) is None
+
+
 def test_the_builtin_scout_agent_is_read_only_and_added_once() -> None:
     definition = scout_definition()
     assert definition.name == SCOUT_AGENT

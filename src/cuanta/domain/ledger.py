@@ -35,6 +35,8 @@ class Run:
     estimate_samples: int = 0
     cap_usd: float | None = None
     outcome_reason: str = ""
+    partial: bool = False
+    max_wall_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

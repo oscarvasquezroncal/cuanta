@@ -6,22 +6,25 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.pilot import Pilot
-from textual.widgets import Button, Checkbox, Input, Select, Static, TextArea
+from textual.widgets import Button, Checkbox, Input, Label, Select, Static, TextArea
 
 from cuanta.application.assistant import sent_payload
 from cuanta.application.intake import Understanding
+from cuanta.application.mandate_flow import MandateOptions, mandate_limits
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixState, PrefixWindow
 from cuanta.domain.change_plan import ChangePlan
 from cuanta.domain.envelope import RoleInput, RoleModel, envelope
-from cuanta.domain.messages import msg
+from cuanta.domain.limits import LimitSettings, LimitsMode, RunLimits, limits_message
+from cuanta.domain.mandate import PartKind, RequestParts
+from cuanta.domain.messages import english, msg
 from cuanta.domain.routing import Provider, Role
 from cuanta.domain.team import ProviderAdvice
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.cache_text import clock_time
-from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.screens.pipeline import PipelineScreen
 from cuanta.tui.views.mandate import MandateView
-from cuanta.tui.widgets.wizard import IntentCard, MandateWizard
+from cuanta.tui.widgets.wizard import LIMIT_INPUTS, IntentCard, MandateWizard
+from tests.real_run import FASES_LINE, PHASES_LINE
 from tests.tui.fakes import TEAM_CATALOG, FakeServices, sample_forecast
 from tests.tui.test_app import drive, make_app, settle
 from tests.tui.test_t5_screens import render, wait_for
@@ -101,6 +104,23 @@ def test_team_shows_the_forecast_line_and_a_tight_verdict_with_its_first_suggest
             assert f"{forecast.envelope.suggestions[0].p90_usd:.2f}" in shown
 
     drive(make_app(services), scenario, size=(120, 50))
+
+
+@pytest.mark.parametrize(("language", "line"), [("en", PHASES_LINE), ("es", FASES_LINE)])
+def test_the_team_step_says_a_phased_forecast_covers_one_change(language: str, line: str) -> None:
+    base = sample_forecast()
+    phased = replace(base, inputs=replace(base.inputs, parts=RequestParts(PartKind.PHASE, 5)))
+    services = FakeServices(forecast=phased)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        estimate = wizard.query_one("#wiz-estimate", Static)
+        await wait_for(pilot, lambda: line in " ".join(render(estimate).split()))
+
+    drive(make_app(services, language=language), scenario, size=(120, 50))
 
 
 def test_an_unpriced_forecast_keeps_the_history_estimate_above_it() -> None:
@@ -252,7 +272,7 @@ def test_missing_chips_answer_per_type() -> None:
     drive(make_app(services), scenario, size=(120, 50))
 
 
-def test_depth_sets_the_cap_and_no_cap_needs_confirmation() -> None:
+def test_the_team_step_has_no_limits_until_the_limits_switch_is_on() -> None:
     services = FakeServices()
 
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
@@ -260,39 +280,51 @@ def test_depth_sets_the_cap_and_no_cap_needs_confirmation() -> None:
         await tell(wizard, pilot, STORY)
         wizard.query_one("#wiz-next", Button).press()
         await wait_for(pilot, lambda: current(wizard) == "team")
-        cap = wizard.query_one("#wiz-cap-note", Static)
-        assert "$0.60" in render(cap)
+        note = wizard.query_one("#wiz-limits-note", Static)
+        assert not wizard.query_one("#wiz-limits", Checkbox).value
+        assert "no limits" in render(note)
+        assert not wizard.query_one("#run-limits-fields").display
+        options = wizard.options()
+        assert (options.limits, options.budget_usd, options.max_turns, options.max_wall_min) == (
+            "off",
+            None,
+            None,
+            None,
+        )
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        await wait_for(pilot, lambda: wizard.query_one("#run-limits-fields").display)
+        budget = wizard.query_one("#wiz-limit-budget", Input)
+        turns = wizard.query_one("#wiz-limit-turns", Input)
+        assert "$0.60" in budget.placeholder and "40" in turns.placeholder
+        await wait_for(pilot, lambda: services.team_options[-1].budget_usd == 0.6)
         wizard.query_one("#depth-deep", Button).press()
-        await wait_for(pilot, lambda: "$1.50" in render(cap))
-        await wait_for(pilot, lambda: services.team_options[-1].depth == "deep")
-        wizard.query_one("#wiz-custom-cap", Button).press()
-        await pilot.pause()
-        assert wizard.query_one("#wiz-cap-field").display
-        wizard.query_one("#wiz-budget", Input).value = "abc"
+        await wait_for(pilot, lambda: "$1.50" in budget.placeholder)
+        assert "80" in turns.placeholder
+        assert (wizard.options().budget_usd, wizard.options().max_turns) == (1.5, 80)
+        budget.value = "500"
+        turns.value = "100000"
+        wizard.query_one("#wiz-limit-wall", Input).value = "30"
+        await wait_for(
+            pilot,
+            lambda: "limits: spend cap $500.00 · 100000 turns · 30 min" in render(note),
+        )
+        chosen = wizard.options()
+        assert (chosen.budget_usd, chosen.max_turns, chosen.max_wall_min) == (500.0, 100000, 30.0)
+        budget.value = "abc"
         wizard.query_one("#wiz-next", Button).press()
         error = wizard.query_one("#wiz-error", Static)
-        await wait_for(pilot, lambda: "number above 0" in render(error))
-        wizard.query_one("#wiz-budget", Input).value = "0.4"
-        await pilot.pause()
-        assert wizard.options().budget_usd == 0.4
-        wizard.query_one("#wiz-no-cap", Checkbox).value = True
-        await wait_for(
-            pilot, lambda: isinstance(app.screen, ConfirmScreen) and app.screen.query("#confirm-ok")
-        )
-        app.screen.query_one("#confirm-ok", Button).press()
-        await wait_for(pilot, lambda: wizard.no_cap)
-        assert "No spending cap" in render(cap)
+        await wait_for(pilot, lambda: "Limits must be numbers" in render(error))
+        budget.value = "500"
         wizard.query_one("#wiz-next", Button).press()
         await wait_for(pilot, lambda: launched(app) is not None)
         screen = launched(app)
         assert screen is not None
-        assert screen.options.no_cap
-        assert screen.options.depth == "deep"
+        assert screen.options.max_wall_min == 30.0 and screen.options.depth == "deep"
 
     drive(make_app(services), scenario, size=(120, 50))
 
 
-def test_team_step_shows_the_turn_limit_and_repaints_on_engine_change() -> None:
+def test_the_turn_field_follows_the_engine() -> None:
     services = FakeServices()
 
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
@@ -300,22 +332,110 @@ def test_team_step_shows_the_turn_limit_and_repaints_on_engine_change() -> None:
         await tell(wizard, pilot, STORY)
         wizard.query_one("#wiz-next", Button).press()
         await wait_for(pilot, lambda: current(wizard) == "team")
-        cap = wizard.query_one("#wiz-cap-note", Static)
-        assert "$0.60" in render(cap)
-        assert "Turn limit: 40" in render(cap)
-        wizard.query_one("#depth-deep", Button).press()
-        await wait_for(pilot, lambda: "Turn limit: 80" in render(cap))
+        note = wizard.query_one("#wiz-limits-note", Static)
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        await wait_for(pilot, lambda: "40 turns" in render(note))
+        assert wizard.query_one("#limit-turns-field").display
         wizard.query_one("#wiz-engine", Select).value = "opencode"
         await wait_for(pilot, lambda: wizard.engine == "opencode")
-        assert "Turn limit" not in render(cap)
-        wizard.query_one("#wiz-engine", Select).value = "claude"
-        await wait_for(pilot, lambda: "Turn limit: 80" in render(cap))
+        await wait_for(pilot, lambda: "turns" not in render(note))
+        assert not wizard.query_one("#limit-turns-field").display
         assert wizard.options().max_turns == 0
+        wizard.query_one("#wiz-engine", Select).value = "claude"
+        await wait_for(pilot, lambda: "40 turns" in render(note))
 
     drive(make_app(services), scenario, size=(120, 50))
 
 
-def test_declining_no_cap_keeps_the_cap() -> None:
+def test_project_limits_start_the_switch_on_and_the_switch_turns_them_off() -> None:
+    services = FakeServices(limits=LimitSettings(fixed=RunLimits(5.0)))
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        assert wizard.query_one("#wiz-limits", Checkbox).value
+        assert wizard.query_one("#wiz-limit-budget", Input).value == "5"
+        note = wizard.query_one("#wiz-limits-note", Static)
+        await wait_for(pilot, lambda: render(note) == "limits: spend cap $5.00")
+        chosen = wizard.options()
+        assert (chosen.budget_usd, chosen.max_turns, chosen.max_wall_min) == (5.0, 0, 0.0)
+        wizard.query_one("#wiz-limits", Checkbox).value = False
+        await wait_for(pilot, lambda: render(note) == "no limits")
+        options = wizard.options()
+        assert options.limits == "off" and options.budget_usd is None
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+@pytest.mark.parametrize(
+    ("settings", "fields", "note"),
+    [
+        (LimitSettings(fixed=RunLimits(5.0)), ["5", "0", "0"], "limits: spend cap $5.00"),
+        (LimitSettings(fixed=RunLimits(wall_min=60.0)), ["0", "0", "60"], "limits: 60 min"),
+        (
+            LimitSettings(LimitsMode.DEPTH, RunLimits(wall_min=60.0)),
+            ["", "", "60"],
+            "limits: spend cap $0.60 · 40 turns · 60 min",
+        ),
+        (
+            LimitSettings(fixed=RunLimits(1234.5678, 1_000_000)),
+            ["1234.5678", "1000000", "0"],
+            "limits: spend cap $1234.57 · 1000000 turns",
+        ),
+    ],
+    ids=["budget", "wall", "depth_mode", "large_values"],
+)
+def test_configured_limits_reach_the_app_exactly_as_the_cli_resolves_them(
+    settings: LimitSettings, fields: list[str], note: str
+) -> None:
+    services = FakeServices(limits=settings)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        assert wizard.query_one("#wiz-limits", Checkbox).value
+        assert [wizard.query_one(f"#{name}", Input).value for name in LIMIT_INPUTS] == fields
+        shown = wizard.query_one("#wiz-limits-note", Static)
+        await wait_for(pilot, lambda: render(shown) == note)
+        console = mandate_limits(MandateOptions(depth=wizard.depth), wizard.kind, settings)
+        assert english(limits_message(console)) == note
+        assert mandate_limits(wizard.options(), wizard.kind, settings) == console
+        assert not render(wizard.query_one("#wiz-error", Static)).strip()
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_a_hidden_turn_field_never_blocks_the_launch() -> None:
+    services = FakeServices(engines=(("claude", True), ("codex", True), ("opencode", True)))
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        await wait_for(pilot, lambda: wizard.query_one("#run-limits-fields").display)
+        wizard.query_one("#wiz-limit-turns", Input).value = "2.5"
+        note = wizard.query_one("#wiz-limits-note", Static)
+        await wait_for(pilot, lambda: "Limits must be numbers" in render(note))
+        wizard.query_one("#wiz-engine", Select).value = "codex"
+        await wait_for(pilot, lambda: wizard.engine == "codex")
+        await wait_for(pilot, lambda: render(note) == "limits: spend cap $0.60")
+        assert not wizard.query_one("#limit-turns-field").display
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: launched(app) is not None)
+        screen = launched(app)
+        assert screen is not None
+        assert (screen.options.budget_usd, screen.options.max_turns) == (0.6, 0)
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_a_bad_limit_never_traps_the_guided_steps_on_a_hidden_field() -> None:
     services = FakeServices()
 
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
@@ -323,15 +443,68 @@ def test_declining_no_cap_keeps_the_cap() -> None:
         await tell(wizard, pilot, STORY)
         wizard.query_one("#wiz-next", Button).press()
         await wait_for(pilot, lambda: current(wizard) == "team")
-        wizard.query_one("#wiz-no-cap", Checkbox).value = True
-        await wait_for(
-            pilot,
-            lambda: isinstance(app.screen, ConfirmScreen) and app.screen.query("#confirm-cancel"),
-        )
-        app.screen.query_one("#confirm-cancel", Button).press()
-        await wait_for(pilot, lambda: not isinstance(app.screen, ConfirmScreen))
-        assert not wizard.no_cap
-        assert not wizard.query_one("#wiz-no-cap", Checkbox).value
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        await wait_for(pilot, lambda: wizard.query_one("#run-limits-fields").display)
+        budget = wizard.query_one("#wiz-limit-budget", Input)
+        budget.value = "abc"
+        wizard.query_one("#wiz-back", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "confirm")
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        error = wizard.query_one("#wiz-error", Static)
+        await wait_for(pilot, lambda: "Limits must be numbers" in render(error))
+        await wait_for(pilot, lambda: app.focused is budget)
+        assert wizard.query_one("#step-team").display and budget.display
+        assert launched(app) is None
+        budget.value = "0.5"
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: launched(app) is not None)
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_the_limit_fields_wrap_inside_80_columns(language: str) -> None:
+    services = FakeServices()
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        row = wizard.query_one("#run-limits-fields")
+        await wait_for(pilot, lambda: row.display and row.region.width > 0)
+        row.scroll_visible(animate=False)
+        await settle(app, pilot)
+        await pilot.pause(0.1)
+        edge = row.region.right
+        for name in LIMIT_INPUTS:
+            field = wizard.query_one(f"#{name}", Input)
+            assert field.region.width > 0 and field.region.right <= edge, name
+            assert len(field.placeholder) <= field.content_region.width, name
+        for label in row.query(Label):
+            assert label.region.right <= edge, str(label.render())
+
+    drive(make_app(services, language=language), scenario, size=(80, 24))
+
+
+def test_typing_a_limit_refreshes_the_forecast_for_the_new_cap() -> None:
+    services = FakeServices()
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, STORY)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        await wait_for(pilot, lambda: wizard.estimate is not None and wizard.estimate.cap == 0.6)
+        estimate = wizard.query_one("#wiz-estimate", Static)
+        assert "It may go over" not in render(estimate)
+        wizard.query_one("#wiz-limit-budget", Input).value = "0.10"
+        await wait_for(pilot, lambda: wizard.estimate is not None and wizard.estimate.cap == 0.1)
+        await wait_for(pilot, lambda: "It may go over the $0.10 cap." in render(estimate))
+        assert services.team_options[-1].budget_usd == 0.1
 
     drive(make_app(services), scenario, size=(120, 50))
 
@@ -433,6 +606,94 @@ def test_team_engine_select_uses_installed_engines_and_launches_choice(
         assert ("senior", "gpt-5.6-sol") in screen.options.route.role_models
 
     drive(make_app(services, language), scenario, size=(120, 50))
+
+
+def _gpt_cards(wizard: MandateWizard) -> bool:
+    return (
+        wizard.engine == "codex"
+        and wizard.plan is not None
+        and bool(wizard.query("#override-senior"))
+        and "gpt-5.6-sol"
+        in [value for _, value in wizard.query_one("#override-senior", Select)._options]
+    )
+
+
+@pytest.mark.parametrize("layout", ["guided", "one_page"])
+def test_a_limit_change_keeps_the_models_picked_in_the_team_cards(layout: str) -> None:
+    services = FakeServices(
+        layout=layout,
+        engines=(("claude", True), ("codex", True), ("opencode", False)),
+    )
+    story = "Fix the cart total: AssertionError: expected 10 got 12. Don't touch payments."
+    pick = ("senior", "gpt-5.6-sol")
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        if layout == "guided":
+            await tell(wizard, pilot, story)
+            wizard.query_one("#wiz-next", Button).press()
+            await wait_for(pilot, lambda: current(wizard) == "team")
+        else:
+            wizard.query_one("#wiz-story", TextArea).text = story
+            wizard.query_one("#wiz-understand", Button).press()
+            await wait_for(pilot, lambda: wizard.kind == "bug")
+        wizard.query_one("#wiz-engine", Select).value = "codex"
+        await wait_for(pilot, lambda: _gpt_cards(wizard))
+        wizard.query_one("#override-senior", Select).value = "gpt-5.6-sol"
+        await pilot.pause()
+        assert wizard.options().route.role_models == (pick,)
+
+        revision = wizard._team_revision
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        await wait_for(pilot, lambda: wizard._team_revision > revision and _gpt_cards(wizard))
+        assert wizard.query_one("#override-senior", Select).value == "gpt-5.6-sol"
+        assert wizard.options().route.role_models == (pick,)
+
+        revision = wizard._team_revision
+        wizard.query_one("#wiz-limit-budget", Input).value = "3"
+        await wait_for(pilot, lambda: wizard._team_revision > revision and _gpt_cards(wizard))
+        await wait_for(pilot, lambda: services.team_options[-1].budget_usd == 3.0)
+        assert wizard.query_one("#override-senior", Select).value == "gpt-5.6-sol"
+        assert wizard.options().route.role_models == (pick,)
+        assert not services.team_options[-1].route.role_models
+
+        wizard.refresh_team()
+        assert wizard.plan is None
+        assert wizard.options().route.role_models == (pick,)
+        await wait_for(pilot, lambda: _gpt_cards(wizard))
+        wizard.query_one("#wiz-next" if layout == "guided" else "#wiz-launch", Button).press()
+        await wait_for(pilot, lambda: launched(app) is not None)
+        screen = launched(app)
+        assert screen is not None
+        assert screen.options.route.role_models == (pick,)
+        assert screen.options.budget_usd == 3.0
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_a_model_picked_for_one_engine_never_follows_the_team_to_another() -> None:
+    services = FakeServices(engines=(("claude", True), ("codex", True), ("opencode", False)))
+    story = "Fix the cart total: AssertionError: expected 10 got 12. Don't touch payments."
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, story)
+        wizard.query_one("#wiz-next", Button).press()
+        await wait_for(pilot, lambda: current(wizard) == "team")
+        wizard.query_one("#wiz-engine", Select).value = "codex"
+        await wait_for(pilot, lambda: _gpt_cards(wizard))
+        wizard.query_one("#override-senior", Select).value = "gpt-5.6-sol"
+        await pilot.pause()
+        wizard.query_one("#wiz-engine", Select).value = "claude"
+        await wait_for(pilot, lambda: wizard.engine == "claude")
+        assert wizard.options().route.role_models == ()
+        await wait_for(
+            pilot, lambda: wizard.plan is not None and bool(wizard.query("#override-senior"))
+        )
+        assert wizard.query_one("#override-senior", Select).value == ""
+        assert wizard.options().route.role_models == ()
+
+    drive(make_app(services), scenario, size=(120, 50))
 
 
 @pytest.mark.parametrize("layout", ["guided", "one_page"])
@@ -655,6 +916,62 @@ def test_the_provider_step_speaks_spanish() -> None:
         assert choices(wizard, "senior")["gpt-9-private"] == "gpt-9-private (sin precio)"
 
     drive(make_app(services, language="es"), scenario, size=(120, 50))
+
+
+def test_per_role_cards_list_only_the_limits_that_apply() -> None:
+    services = FakeServices(engines=(("claude", True), ("codex", True)), catalog=TEAM_CATALOG)
+    unlimited = "Enforced: Read-only. Checked after the run: Telemetry. Not available: none."
+    capped = (
+        "Enforced: Read-only. Checked after the run: Spend cap, Telemetry. Not available: none."
+    )
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await reach_team(wizard, pilot)
+        wizard.choose_provider("codex")
+        cards = wizard.query_one("#team-cards")
+        await wait_for(pilot, lambda: "Codex, gpt-6-sol, premium tier" in render_all(cards))
+        assert render_all(cards).count(unlimited) == 4
+        assert "Spend cap" not in render_all(cards) and "Turn limit" not in render_all(cards)
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        await wait_for(pilot, lambda: render_all(cards).count(capped) == 4)
+        assert "Turn limit" not in render_all(cards)
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+def test_a_fast_detour_keeps_the_models_picked_for_the_balanced_team() -> None:
+    services = FakeServices(engines=(("claude", True), ("codex", True)), catalog=TEAM_CATALOG)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await reach_team(wizard, pilot)
+        await wait_for(
+            pilot,
+            lambda: (
+                wizard.plan is not None
+                and bool(wizard.query("#override-senior"))
+                and "haiku" in choices(wizard, "senior")
+            ),
+        )
+        wizard.query_one("#override-senior", Select).value = "haiku"
+        await pilot.pause()
+        assert wizard.options().route.role_models == (("senior", "haiku"),)
+        wizard.choose_implementation("fast")
+        assert wizard.plan is None
+        assert wizard.options().route.role_models == ()
+        await wait_for(pilot, lambda: wizard.plan is not None and not wizard.query(".team-card"))
+        assert wizard.options().route.role_models == ()
+        wizard.choose_implementation("balanced")
+        assert wizard.plan is None
+        assert wizard.options().route.role_models == (("senior", "haiku"),)
+        await wait_for(
+            pilot, lambda: wizard.plan is not None and bool(wizard.query("#override-senior"))
+        )
+        assert wizard.query_one("#override-senior", Select).value == "haiku"
+        assert wizard.options().route.role_models == (("senior", "haiku"),)
+
+    drive(make_app(services), scenario, size=(120, 50))
 
 
 def render_all(widget: object) -> str:

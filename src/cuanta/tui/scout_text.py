@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from textual.content import Content
 
-from cuanta.domain.scout_report import ScoutSummary
+from cuanta.domain.scout_report import ScoutSummary, summary_docs
 from cuanta.tui.i18n import Catalog
 
 SHOWN_PATHS = 5
@@ -85,10 +85,15 @@ def _senior_lines(t: Catalog, summary: ScoutSummary) -> list[Content]:
 
 
 def _docs_line(t: Catalog, summary: ScoutSummary) -> list[Content]:
-    if summary.docs not in {"on", "off"} or summary.docs_reason not in REASONS:
+    choice = summary_docs(summary)
+    if choice is None:
         return []
-    reason = t(f"scout_panel.reason_{summary.docs_reason}")
-    return [Content.styled(t(f"scout_panel.docs_{summary.docs}", reason=reason), "$text-muted")]
+    if summary.docs_reason in REASONS and not choice.term:
+        reason = t(f"scout_panel.reason_{summary.docs_reason}")
+        text = t(f"scout_panel.docs_{summary.docs}", reason=reason)
+    else:
+        text = t.message(choice.message)
+    return [Content.styled(text, "$text-muted")]
 
 
 def scout_content(t: Catalog, summary: ScoutSummary) -> Content:

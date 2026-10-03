@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from cuanta.application.estimate import estimate, similar_costs
-from cuanta.application.mandate_flow import MandateOptions, resolve_budget, resolve_max_turns
+from cuanta.application.estimate import calibrated_bounds, estimate, similar_costs
+from cuanta.application.mandate_flow import MandateOptions, launch_turns, mandate_limits
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.depth import (
     Depth,
@@ -17,6 +17,7 @@ from cuanta.domain.depth import (
     turn_limit,
 )
 from cuanta.domain.ledger import Run
+from cuanta.domain.limits import LimitSettings, LimitsMode, RunLimits
 from cuanta.domain.messages import english
 from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.pricing import Price, PriceTable
@@ -65,14 +66,16 @@ def test_depth_sets_turn_limits_with_headroom() -> None:
     assert turn_limit(None) == 0
 
 
-def test_resolve_max_turns_prefers_option_then_setting_then_depth() -> None:
-    chosen = profile(Depth.NORMAL, "investigation")
-    assert resolve_max_turns(MandateOptions(max_turns=5), chosen, 30) == 5
-    assert resolve_max_turns(MandateOptions(), chosen, 30) == 30
-    assert resolve_max_turns(MandateOptions(no_cap=True), chosen, 0) == 40
-    assert resolve_max_turns(MandateOptions(), None, 0) == 40
-    assert resolve_max_turns(MandateOptions(), None, 30) == 30
-    assert resolve_max_turns(MandateOptions(max_turns=5), None, 30) == 5
+def test_turns_prefer_the_option_then_the_setting_and_never_come_from_depth_alone() -> None:
+    fixed = LimitSettings(fixed=RunLimits(max_turns=30))
+    depth = LimitSettings(LimitsMode.DEPTH)
+    assert mandate_limits(MandateOptions(max_turns=5), "investigation", fixed).max_turns == 5
+    assert mandate_limits(MandateOptions(), "investigation", fixed).max_turns == 30
+    assert mandate_limits(MandateOptions(), "investigation", LimitSettings()).max_turns == 0
+    assert mandate_limits(MandateOptions(), "investigation", depth).max_turns == 40
+    assert mandate_limits(MandateOptions(max_turns=0), "investigation", depth).max_turns == 0
+    assert launch_turns(RunLimits(max_turns=12), "claude") == 12
+    assert launch_turns(RunLimits(max_turns=12), "codex") == 0
 
 
 @pytest.mark.parametrize(
@@ -113,11 +116,20 @@ def test_plan_estimate_cannot_assume_an_unknown_cache_rate_is_free(price: Price)
     assert plan_cost([SONNET, price], chosen) is None
 
 
-def test_resolve_budget_prefers_no_cap_then_custom_then_depth() -> None:
-    assert resolve_budget(MandateOptions(no_cap=True, budget_usd=2.0), "bug", 5.0) == 0.0
-    assert resolve_budget(MandateOptions(budget_usd=0.4, depth="deep"), "bug", 5.0) == 0.4
-    assert resolve_budget(MandateOptions(depth="normal"), "investigation", 5.0) == 0.60
-    assert resolve_budget(MandateOptions(), "bug", 5.0) == 5.0
+def test_budget_prefers_the_option_then_the_setting_then_the_depth_mode() -> None:
+    fixed = LimitSettings(fixed=RunLimits(5.0))
+    depth = LimitSettings(LimitsMode.DEPTH)
+    off = MandateOptions(limits="off", budget_usd=None)
+    assert mandate_limits(off, "bug", fixed).budget_usd == 0.0
+    assert (
+        mandate_limits(MandateOptions(budget_usd=0.4, depth="deep"), "bug", fixed).budget_usd == 0.4
+    )
+    assert mandate_limits(MandateOptions(depth="normal"), "investigation", depth).budget_usd == 0.6
+    assert (
+        mandate_limits(MandateOptions(depth="normal"), "investigation", LimitSettings()).budget_usd
+        == 0.0
+    )
+    assert mandate_limits(MandateOptions(), "bug", fixed).budget_usd == 5.0
 
 
 def test_only_the_roles_that_run_are_planned() -> None:
@@ -150,6 +162,35 @@ def test_similar_runs_match_type_and_depth() -> None:
     )
     assert similar_costs(runs, "investigation", "normal") == [0.5, 0.9]
     assert similar_costs(runs, "investigation", "deep") == [2.0]
+
+
+def test_similar_runs_and_plan_calibration_skip_partial_costs() -> None:
+    finished = Run("a", "mandate", cost_usd=4.0, task_type="feature", depth="normal", status="ok")
+    cut = Run(
+        "b",
+        "mandate",
+        cost_usd=0.5,
+        task_type="feature",
+        depth="normal",
+        status="failed",
+        partial=True,
+    )
+    assert similar_costs((finished, cut), "feature", "normal") == [4.0]
+    assert similar_costs((cut,), "feature", "normal") == []
+    planned = Run(
+        "p",
+        "mandate",
+        cost_usd=0.1,
+        task_type="feature",
+        depth="normal",
+        status="ok",
+        estimate_source="plan",
+        estimate_low=1.0,
+        estimate_high=1.0,
+        partial=True,
+    )
+    bounds = calibrated_bounds(cost_range([]), 2.0, (planned,), "normal", "single", {"p": "single"})
+    assert (bounds.source, bounds.low, bounds.high) == ("plan", 2.0, 2.0)
 
 
 def test_estimate_gives_a_cost_range_per_role() -> None:

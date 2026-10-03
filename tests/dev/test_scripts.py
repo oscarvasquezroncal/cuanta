@@ -311,6 +311,50 @@ def test_a_codex_team_trial_counts_every_role_and_stops_on_an_unknown_role_cost(
         assert summary["trials"][0]["cost_source"] == ["estimated"]
 
 
+@pytest.mark.parametrize("where", ["native", "team", "step"])
+def test_a_partial_trial_cost_stops_before_another_trial_and_keeps_its_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    report = results.Report("partial", tmp_path)
+    monkeypatch.setattr(trial, "Report", lambda *a: report)
+    original = report.run
+    launched: list[str] = []
+    steps = [
+        {"role": "analyst", "run_id": "run-a", "cost_usd": 0.1, "partial": False},
+        {"role": "senior", "run_id": "run-s", "cost_usd": 0.02, "partial": where == "step"},
+    ]
+
+    def fake(name: str, command: list[str], **kwargs: Any) -> results.Step:
+        value: dict[str, Any]
+        if name.endswith("mandate"):
+            launched.append(name)
+            value = (
+                {"run_id": "run-one"}
+                if where == "native"
+                else {"spent_usd": 0.12, "partial": where == "team", "steps": steps}
+            )
+        elif name.endswith("show"):
+            value = {"actual_usd": 0.2, "cost_source": "reported", "partial": where == "native"}
+        else:
+            value = {"totals": {"fresh_input": 10}}
+        return original(name, [sys.executable, "-c", f"print({json.dumps(value)!r})"])
+
+    monkeypatch.setattr(report, "run", fake)
+    matrix = definition(tmp_path)
+    first = matrix.trials[0] if where == "native" else replace(matrix.trials[0], engine="codex")
+    matrix = replace(matrix, trials=(first, replace(first, name="two")))
+    assert trial.run(matrix, False, None, True) == 1
+    assert launched == ["one-mandate"]
+    summary = json.loads((report.directory / "summary.json").read_text())
+    assert summary["unknown_spend_trials"] == ["one"] and summary["known_spend_usd"] == 0
+    assert "Partial cost" in summary["error"]
+    journal = json.loads((tmp_path / ".cuanta" / "trial-budget.json").read_text())
+    attempts = journal["groups"]["default"]["attempts"]
+    assert [(item["trial"], item["state"], item["cost_usd"]) for item in attempts] == [
+        ("one", "reserved", None)
+    ]
+
+
 def test_native_trial_refuses_a_role_from_another_engine(tmp_path: Path) -> None:
     matrix = definition(tmp_path)
     chosen = replace(matrix.trials[0], role_models=("senior=codex:gpt-6-sol",))

@@ -370,7 +370,7 @@ def ended_by_cap(proof: ProofRecord | None, capped: bool) -> bool:
 def launched_cost(run: RunMetrics) -> float | None:
     if run.proof is not None and run.proof.end_reason == NOT_LAUNCHED:
         return 0.0
-    return run.cost_usd
+    return run.budget_cost
 
 
 def request_costs(anatomy: AnatomyReport) -> tuple[float, ...] | None:

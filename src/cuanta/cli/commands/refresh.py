@@ -18,7 +18,7 @@ def _refresh(session: Session) -> "Document":
     from cuanta.domain.progress import Status
     from cuanta.domain.voice import Mood
 
-    container = Container.for_project(session.project)
+    container = Container.for_project(session.project, verbose=session.options.verbose)
     try:
         report = container.refresh_project(session.presenter).run()
     finally:

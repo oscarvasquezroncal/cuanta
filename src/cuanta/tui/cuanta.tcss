@@ -1085,11 +1085,11 @@ Button.chip.depth-chip.-current, Button.chip.layout-chip.-current, Button.chip.p
     max-height: 12;
 }
 
-#wiz-detected, #wiz-depth-note, #wiz-cap-note, #wiz-tell-help {
+#wiz-detected, #wiz-depth-note, #wiz-limits-note, #wiz-tell-help {
     height: auto;
 }
 
-#wiz-cap-field, #cap-row, #summary-actions, #sandbox-row, #wiz-sandbox-note {
+#run-limits-fields, #run-limits-row, #summary-actions, #sandbox-row, #wiz-sandbox-note {
     height: auto;
 }
 
@@ -1097,19 +1097,23 @@ Button.chip.depth-chip.-current, Button.chip.layout-chip.-current, Button.chip.p
     width: auto;
 }
 
-#cap-row Button, #cap-row Checkbox, #summary-actions Button {
+#run-limits-row Checkbox, #summary-actions Button {
     width: auto;
     margin-right: 1;
 }
 
-#wiz-cap-field Label {
-    width: auto;
-    margin-right: 1;
-    padding-top: 1;
+#run-limits-fields {
+    grid-gutter: 0 1;
 }
 
-#wiz-budget {
-    width: 18;
+#run-limits-fields .limit-field {
+    width: 1fr;
+    max-width: 40;
+    height: auto;
+}
+
+#run-limits-fields Input {
+    width: 1fr;
 }
 
 #missing-rows {

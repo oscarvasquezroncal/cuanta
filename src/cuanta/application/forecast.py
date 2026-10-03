@@ -37,12 +37,13 @@ from cuanta.domain.envelope import (
     envelope_payload,
     forecast_messages,
     forecast_record,
+    parts_message,
     repair_possible,
 )
 from cuanta.domain.errors import CuantaError, EnvironmentFailure
 from cuanta.domain.instinct import Answer, Ask, Choice, Primitive, Score
 from cuanta.domain.ledger import Forecast, Run
-from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.mandate import MandateRequest, numbered_parts, request_text
 from cuanta.domain.messages import Message, english, keyed, msg
 from cuanta.domain.models import TIER_ORDER, ModelEntry, Tier, parse_tier, tier_rank
 from cuanta.domain.overhead import first_request_split, prompt_length
@@ -126,7 +127,9 @@ class PlannedForecast:
 
     @property
     def messages(self) -> tuple[Message, ...]:
-        return (*forecast_messages(self.envelope, self.prefix), self.time.message)
+        parts = parts_message(self.inputs.parts)
+        found = () if parts is None else (parts,)
+        return (*forecast_messages(self.envelope, self.prefix), *found, self.time.message)
 
     @property
     def warning(self) -> bool:
@@ -448,8 +451,10 @@ class Forecaster:
         max_turns: int = 0,
         implementation_profile: str = "balanced",
         variant: str = "",
+        request: MandateRequest | None = None,
     ) -> PlannedForecast:
         engine = provider.value
+        text = request_text(request) if request is not None else ""
         runs = self._ledger.runs()
         past = self._ledger.forecasts(engine)
         entries = tuple(self._catalog())
@@ -458,6 +463,7 @@ class Forecaster:
         shapes = self._shapes(runs) if self._shapes is not None else {}
         scan = scan_prefixes(self._ledger, runs, engine, shapes)
         warm = model_warmth(scan.starts, clock.ttl_s, clock.now)
+        economy = None if plan.pure is not None else economy_model(entries, engine, self._prices)
         roles = envelope_roles(
             plan,
             provider,
@@ -477,7 +483,7 @@ class Forecaster:
             edit_tokens=sizes.edit,
             read_tokens=sizes.read,
             calibration=spread_ratios(past, engine, task_type),
-            economy=economy_model(entries, engine, self._prices),
+            economy=economy,
             native=native,
             cache_ttl_s=clock.ttl_s,
             max_turns=max_turns,
@@ -485,6 +491,8 @@ class Forecaster:
             repairable=repair_possible(
                 shape, native, change_plan.verify if change_plan is not None else ()
             ),
+            request_tokens=estimated_tokens(len(text.encode("utf-8"))),
+            parts=numbered_parts(text),
         )
         result = envelope(inputs)
         context = ((RISK_KEY, plan.risk),) if plan.risk is not None else ()
@@ -728,6 +736,11 @@ def envelope_json(planned: PlannedForecast) -> dict[str, object]:
     payload["cache"] = planned.prefix.value
     payload["source"] = planned.source
     payload["time"] = asdict(planned.time)
+    payload["request_tokens"] = planned.inputs.request_tokens
+    payload["parts"] = {
+        "kind": planned.inputs.parts.kind.value,
+        "count": planned.inputs.parts.count,
+    }
     payload["lines"] = [english(message) for message in (*planned.notes, *planned.messages)]
     return payload
 

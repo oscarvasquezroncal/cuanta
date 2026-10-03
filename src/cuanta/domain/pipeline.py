@@ -147,10 +147,13 @@ class Pipeline:
             card.tokens += tokens
 
     def _finish(self, event: RunResult) -> None:
-        self.finished = True
-        self.ok = event.ok
         self.cost_usd = event.cost_usd
+        self.close(event.ok)
+        self._log(f"run finished: {event.subtype or ('success' if event.ok else 'error')}")
+
+    def close(self, ok: bool) -> None:
+        self.finished = True
+        self.ok = ok
         for card in self.cards:
             if card.state is CardState.ACTIVE:
-                card.state = CardState.DONE if event.ok else CardState.FAILED
-        self._log(f"run finished: {event.subtype or ('success' if event.ok else 'error')}")
+                card.state = CardState.DONE if ok else CardState.FAILED

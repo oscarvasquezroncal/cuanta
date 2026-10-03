@@ -6,11 +6,12 @@ from pathlib import Path
 import pytest
 
 from cuanta.adapters.engines.codex import CodexEngine
-from cuanta.application.mandate_flow import MandateOptions, resolve_budget
+from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
+from cuanta.application.mandate_flow import MandateOptions, mandate_limits
 from cuanta.application.routing import RoutePlan
 from cuanta.bootstrap import Container
-from cuanta.cli.commands.mandate import TEAM_BUDGET_USD
-from cuanta.domain.depth import DEFAULT_DEPTH, profile
+from cuanta.domain.depth import DEFAULT_DEPTH
+from cuanta.domain.limits import LimitSettings
 from cuanta.domain.role_budgets import RepairBudget
 from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner, FakeStream
@@ -70,9 +71,64 @@ def test_codex_preview_shows_enforcement_and_explicit_sandbox(
     command = data["command"]
     assert command[command.index("--sandbox") + 1] == "read-only"
     assert "--skip-git-repo-check" not in command
-    assert any("Spend cap: checked after the run" in line for line in data["team"])
-    assert any("Turn limit: not available" in line for line in data["team"])
+    assert "no limits" in data["team"]
+    assert not any("Spend cap" in line or "Turn limit" in line for line in data["team"])
+    limited = invoke(
+        [
+            *mandate_args(tmp_path, "codex"),
+            "--dry-run",
+            "--json",
+            "--max-budget-usd",
+            "0.1",
+            "--max-turns",
+            "5",
+        ]
+    )
+    assert limited.exit_code == 0, limited.stdout
+    data = json.loads(limited.stdout)
+    team = data["team"]
+    assert any("Spend cap: checked after the run" in line for line in team)
+    assert any("Turn limit: not available" in line for line in team)
+    assert "limits: spend cap $0.10" in team
+    assert not any("5 turns" in line for line in team)
+    assert data["limits"] == {"budget_usd": 0.1, "max_turns": None, "wall_min": None}
     assert not fake_runner.stdins
+
+
+def test_a_claude_preview_keeps_the_turn_limit_it_applies(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    flags = ("--dry-run", "--json", "--max-budget-usd", "0.1", "--max-turns", "5")
+    result = invoke([*mandate_args(tmp_path, "claude"), *flags])
+    assert result.exit_code == 0, result.stdout
+    data = json.loads(result.stdout)
+    assert any("Turn limit: enforced" in line for line in data["team"])
+    assert "limits: spend cap $0.10 · 5 turns" in data["team"]
+    assert data["limits"] == {"budget_usd": 0.1, "max_turns": 5, "wall_min": None}
+    command = data["command"]
+    assert command[command.index("--max-turns") + 1] == "5"
+    assert not fake_runner.stdins
+
+
+def test_the_wall_limit_reaches_the_preview_and_the_launched_run(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    preview = invoke([*mandate_args(tmp_path, "claude"), "--dry-run", "--json", "--max-wall", "30"])
+    assert preview.exit_code == 0, preview.stdout
+    data = json.loads(preview.stdout)
+    assert data["limits"] == {"budget_usd": None, "max_turns": None, "wall_min": 30.0}
+    assert "limits: 30 min" in data["team"]
+    fake_runner.streams["claude -p"] = FakeStream(
+        ['{"type":"result","subtype":"success","total_cost_usd":0.001,"is_error":false}']
+    )
+    launched = invoke([*mandate_args(tmp_path, "claude"), "--json", "--max-wall", "30"])
+    assert launched.exit_code == 0, launched.stdout
+    ledger = SqliteLedger(tmp_path / ".cuanta" / "ledger.db")
+    try:
+        runs = [run for run in ledger.runs() if run.kind == "mandate"]
+    finally:
+        ledger.close()
+    assert [(run.max_wall_s, run.max_turns, run.cap_usd) for run in runs] == [(1800.0, 0, 0.0)]
 
 
 def test_codex_launch_warns_before_the_result_and_labels_estimated_cost(
@@ -101,9 +157,9 @@ def test_codex_launch_warns_before_the_result_and_labels_estimated_cost(
 @pytest.mark.parametrize(
     ("flags", "configured", "expected"),
     [
-        ((), 0, 40),
-        (("--depth", "quick"), 0, 20),
-        (("--depth", "deep"), 0, 80),
+        ((), 0, None),
+        (("--depth", "quick"), 0, None),
+        (("--depth", "deep"), 0, None),
         (("--depth", "quick"), 13, 13),
         (("--depth", "deep", "--max-turns", "1"), 13, 1),
     ],
@@ -113,7 +169,7 @@ def test_cross_cli_passes_resolved_turn_limit_to_every_claude_role(
     fake_runner: FakeRunner,
     flags: tuple[str, ...],
     configured: int,
-    expected: int,
+    expected: int | None,
 ) -> None:
     fake_runner.streams["claude -p"] = FakeStream(
         ['{"type":"result","subtype":"success","total_cost_usd":0.001,"is_error":false}']
@@ -141,9 +197,14 @@ def test_cross_cli_passes_resolved_turn_limit_to_every_claude_role(
     assert result.exit_code == 0, result.stdout
     launches = [call for call in fake_runner.calls if call[:2] == ("claude", "-p")]
     assert len(launches) >= 3
-    assert all(call[call.index("--max-turns") + 1] == str(expected) for call in launches)
+    if expected is None:
+        assert all("--max-turns" not in call for call in launches)
+        assert "Turn limit: enforced" not in result.stdout
+        assert "no limits" in result.stdout
+    else:
+        assert all(call[call.index("--max-turns") + 1] == str(expected) for call in launches)
+        assert "Turn limit: enforced" in result.stdout
     assert "Read-only: checked after the run" in result.stdout
-    assert "Turn limit: enforced" in result.stdout
     assert "complete" in result.stdout
     assert "analyst: claude" in result.stdout
 
@@ -332,12 +393,12 @@ def test_unknown_role_pins_are_rejected_before_any_launch(
     ("flags", "cap"),
     [
         (("--max-budget-usd", "0.3"), 0.3),
-        (("--depth", "quick"), 0.75),
+        (("--depth", "quick"), 0.0),
         (("--depth", "quick", "--max-budget-usd", "0.3"), 0.3),
-        ((), 2.0),
+        ((), 0.0),
         (("--cross-budget-usd", "2", "--max-budget-usd", "0.3"), 0.3),
         (("--cross-budget-usd", "0.5", "--depth", "deep"), 0.5),
-        (("--cross-engine", "--depth", "deep"), 5.0),
+        (("--cross-engine", "--depth", "deep"), 0.0),
     ],
 )
 def test_a_gpt_team_is_capped_by_the_mandate_spend_cap(
@@ -352,28 +413,34 @@ def test_a_gpt_team_is_capped_by_the_mandate_spend_cap(
     assert not fake_runner.stdins
 
 
-def test_a_default_gpt_team_gets_the_normal_depth_cap_the_app_gives_it(
+def test_a_default_gpt_team_runs_without_a_cap_unless_a_limit_is_set(
     tmp_path: Path, fake_runner: FakeRunner
 ) -> None:
     codex_ready(fake_runner)
     args = cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--dry-run", "--json")
-    normal = profile(DEFAULT_DEPTH, "bug").cost_cap_usd
-    app = resolve_budget(MandateOptions(depth=DEFAULT_DEPTH.value), "bug", 0.0)
+    app = mandate_limits(MandateOptions(depth=DEFAULT_DEPTH.value), "bug", LimitSettings())
     result = invoke(args)
     assert result.exit_code == 0, result.stdout
-    assert json.loads(result.stdout)["budget_usd"] == pytest.approx(normal) == app
-    assert normal > TEAM_BUDGET_USD
+    data = json.loads(result.stdout)
+    assert data["budget_usd"] == 0.0 == app.budget_usd
+    assert data["limits"] == {"budget_usd": None, "max_turns": None, "wall_min": None}
+    assert "no limits" in data["team"]
     setting = invoke(args, env={"CUANTA_BUDGET_USD": "0.4"})
     assert setting.exit_code == 0, setting.stdout
     assert json.loads(setting.stdout)["budget_usd"] == pytest.approx(0.4)
+    (tmp_path / ".cuanta").mkdir(exist_ok=True)
+    (tmp_path / ".cuanta" / "config.toml").write_text('[runs]\nlimits = "depth"\n', "utf-8")
+    depth = invoke(args)
+    assert depth.exit_code == 0, depth.stdout
+    assert json.loads(depth.stdout)["budget_usd"] == pytest.approx(2.0)
     assert not fake_runner.stdins
 
 
 @pytest.mark.parametrize(
     ("flags", "cap"),
-    [((), 1.0), (("--depth", "deep"), 1.0), (("--max-budget-usd", "0.3"), 0.3)],
+    [((), 0.0), (("--depth", "deep"), 0.0), (("--max-budget-usd", "0.3"), 0.3)],
 )
-def test_a_claude_team_as_separate_launches_keeps_its_default_cap(
+def test_a_claude_team_as_separate_launches_has_no_cap_unless_one_is_set(
     tmp_path: Path, fake_runner: FakeRunner, flags: tuple[str, ...], cap: float
 ) -> None:
     args = cross_args(tmp_path, "--cross-engine", "--route", "fixed", "--dry-run", "--json")

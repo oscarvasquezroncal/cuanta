@@ -4,10 +4,17 @@ from collections.abc import Mapping
 
 from textual.content import Content
 
+from cuanta.domain.implementation import settled_state
 from cuanta.tui.i18n import Catalog
 
+STATES = frozenset(
+    {"green", "red", "pending", "running", "failed", "blocked", "repairing", "stopped"}
+)
 
-def implementation_content(t: Catalog, value: Mapping[str, object]) -> Content:
+
+def implementation_content(
+    t: Catalog, value: Mapping[str, object], finished: bool = True
+) -> Content:
     state = t("result.implementation_green" if value.get("passed") else "result.implementation_red")
     rows = [
         t(
@@ -24,33 +31,14 @@ def implementation_content(t: Catalog, value: Mapping[str, object]) -> Content:
             if not isinstance(step, dict):
                 continue
             state_key = str(step.get("state", "pending"))
+            if finished:
+                state_key = settled_state(state_key)
             translated = (
-                t(f"result.implementation_{state_key}")
-                if state_key
-                in {"green", "red", "pending", "running", "failed", "blocked", "repairing"}
-                else state_key
+                t(f"result.implementation_{state_key}") if state_key in STATES else state_key
             )
             rows.append(
                 t("result.implementation_step", title=step.get("title", ""), state=translated)
             )
-    if reason := value.get("reason"):
-        reason_key = str(reason)
-        known = {
-            "time_limit",
-            "turn_limit",
-            "cost_unknown",
-            "cost_limit",
-            "session_closed",
-            "engine_failed",
-            "invalid_step_plan",
-            "planning_changes",
-            "repair_limit",
-            "verification_failed",
-        }
-        translated_reason = (
-            t(f"result.implementation_reason_{reason_key}") if reason_key in known else reason
-        )
-        rows.append(t("result.implementation_stop", reason=translated_reason))
     checks = value.get("checks")
     if isinstance(checks, list) and checks and isinstance(checks[-1], dict):
         for field in ("introduced", "preexisting"):

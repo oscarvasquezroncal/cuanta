@@ -9,6 +9,7 @@ from cuanta.application.forecast import PlannedForecast
 from cuanta.bootstrap import Container
 from tests.cli.test_engine_guarantees import codex_ready, cross_args, forge, mandate_args
 from tests.fakes import FakeRunner
+from tests.real_run import PHASES_LINE, phased_mandate
 from tests.support import invoke
 
 ENVELOPE_KEYS = {
@@ -24,7 +25,25 @@ ENVELOPE_KEYS = {
     "source",
     "lines",
     "time",
+    "request_tokens",
+    "parts",
 }
+REAL_RUN_FLAGS = (
+    "--profile",
+    "balanced",
+    "--pure",
+    "--model",
+    "claude-opus-5-5",
+    "--variant",
+    "ultracode",
+    "--depth",
+    "deep",
+    "--max-turns",
+    "100000",
+    "--max-budget-usd",
+    "500",
+)
+CODEX_FLAGS = ("--engine", "codex", "--depth", "deep", "--max-budget-usd", "500")
 
 
 def test_the_claude_dry_run_shows_the_forecast_line_and_an_envelope_object(
@@ -61,7 +80,10 @@ def test_the_gpt_team_preview_forecasts_the_per_role_pipeline(
 ) -> None:
     codex_ready(fake_runner)
     args = cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--dry-run", "--json")
-    result = invoke(args)
+    uncapped = json.loads(invoke(args).stdout)["envelope"]
+    assert uncapped["cap_usd"] is None and uncapped["margin_usd"] is None
+    assert "no cap" in uncapped["lines"][0]
+    result = invoke([*args, "--max-budget-usd", "2"])
     assert result.exit_code == 0, result.stdout
     data = json.loads(result.stdout)
     envelope = data["envelope"]
@@ -120,3 +142,68 @@ def test_a_failed_team_preview_forecast_is_a_warning_and_the_preview_still_shows
     assert "Forecast unavailable" in text.stdout
     assert "the code index is being written" in " ".join(text.stdout.split())
     assert not fake_runner.stdins
+
+
+def phased_args(root: Path, flags: tuple[str, ...]) -> list[str]:
+    path = root / "mandato.md"
+    path.write_text(phased_mandate(), encoding="utf-8")
+    return [
+        "mandate",
+        "--type",
+        "feature",
+        *flags,
+        "--what",
+        "Refactor del intérprete",
+        "--evidence",
+        str(path),
+        "--tests",
+        "pytest tests/test_consult.py",
+        "--out-of-scope",
+        "frontend",
+        "--route",
+        "fixed",
+        "--dry-run",
+        "--project",
+        str(root),
+    ]
+
+
+@pytest.mark.parametrize("engine", ["claude", "codex"])
+def test_a_phased_mandate_in_the_evidence_file_says_the_forecast_covers_one_change(
+    tmp_path: Path, fake_runner: FakeRunner, engine: str
+) -> None:
+    if engine == "claude":
+        forge(tmp_path)
+    else:
+        codex_ready(fake_runner)
+    args = phased_args(tmp_path, REAL_RUN_FLAGS if engine == "claude" else CODEX_FLAGS)
+    result = invoke([*args, "--json"])
+    assert result.exit_code == 0, result.stdout
+    data = json.loads(result.stdout)
+    envelope = data["envelope"]
+    assert set(envelope) >= ENVELOPE_KEYS
+    assert envelope["provider"] == engine
+    assert envelope["lines"][0].startswith("Forecast $")
+    assert "margin $" in envelope["lines"][0]
+    assert envelope["lines"][1] == PHASES_LINE
+    assert envelope["lines"][-1].startswith("Time forecast: P50 n/a")
+    assert envelope["parts"] == {"kind": "phase", "count": 5}
+    assert envelope["request_tokens"] >= len(phased_mandate().encode("utf-8")) // 4
+    text = invoke(args)
+    assert text.exit_code == 0, text.stdout
+    assert PHASES_LINE in " ".join(text.stdout.split())
+    assert not fake_runner.stdins
+
+
+def test_a_mandate_without_phases_keeps_the_card_of_today(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    forge(tmp_path)
+    result = invoke(cross_args(tmp_path, "--route", "fixed", "--dry-run", "--json"))
+    assert result.exit_code == 0, result.stdout
+    envelope = json.loads(result.stdout)["envelope"]
+    assert envelope["parts"] == {"kind": "phase", "count": 0}
+    assert envelope["request_tokens"] > 0
+    assert len(envelope["lines"]) == 2
+    assert envelope["lines"][1].startswith("Time forecast: P50 n/a")
+    assert "the forecast covers one change" not in result.stdout

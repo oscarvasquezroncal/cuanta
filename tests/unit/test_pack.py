@@ -215,3 +215,21 @@ def test_pack_items_decisions_and_result_are_immutable() -> None:
     ):
         with pytest.raises(FrozenInstanceError):
             setattr(subject, attribute, value)
+
+
+def test_priority_items_are_selected_before_denser_items() -> None:
+    policy = _item("policy", "safe", Layer.L0)
+    dense = _item("dense", "x" * 20, value=50.0)
+    anchored = PackItem("anchored", Layer.L1, "y" * 60, 1.0, "anchored request range", priority=1)
+    pack = compile_pack((policy, dense, anchored), 24)
+    decisions = {decision.key: decision for decision in pack.decisions}
+    assert {item.key for item in pack.items} == {"policy", "anchored"}
+    assert decisions["anchored"].reason == "selected by value/token; anchored request range"
+    assert decisions["dense"].reason == "omitted by budget; evidence for dense"
+    _bounded(pack)
+
+
+@pytest.mark.parametrize("priority", [-1, True, 1.5])
+def test_invalid_item_priorities_are_rejected(priority: object) -> None:
+    with pytest.raises(ValueError, match="priorities must be nonnegative integers"):
+        PackItem("card", Layer.L1, "text", 1.0, "", priority=cast("int", priority))

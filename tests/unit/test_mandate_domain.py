@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
 
 from cuanta.domain.instinct import heuristic_scope, heuristic_triage, scope_hint_line
 from cuanta.domain.mandate import (
+    MIN_PARTS,
     REPORT_LANGUAGE,
     REQUEST_MARKER,
     MandateRequest,
+    PartKind,
+    RequestParts,
     Shape,
     TemplateError,
     analyst_system_prompt,
@@ -16,13 +20,19 @@ from cuanta.domain.mandate import (
     evidence_from_failure,
     extract_block,
     fill_request,
+    first_part_offset,
+    in_parts,
     investigation_builtin_tools,
     investigation_denied,
     investigation_tools,
     missing_fields,
+    numbered_parts,
     parse_shape,
+    part_spans,
+    request_text,
     with_defaults,
 )
+from tests.real_run import phased_mandate
 
 TEMPLATE = (
     Path(__file__).parents[2]
@@ -194,3 +204,186 @@ def test_the_analyst_prompt_falls_back_and_overrides_json_contracts() -> None:
     body = analyst_system_prompt("Return ONLY JSON.", "READ BUDGET (quick): 8 files.")
     assert body.split("\n\n")[0] == "Return ONLY JSON."
     assert body.endswith("READ BUDGET (quick): 8 files.")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("**FASE 1:** a\n**FASE 2:** b", RequestParts(PartKind.PHASE, 2)),
+        ("- Phase 1: plan\n- Phase 2: build\n- Phase 3: ship", RequestParts(PartKind.PHASE, 3)),
+        ("1. Fase I\n2. Fase II\n3. Fase III", RequestParts(PartKind.PHASE, 3)),
+        ("> ## Etapa 1\n> ## Etapa 2\r\n> ## Etapa 2", RequestParts(PartKind.PHASE, 2)),
+        ("* _Milestone 1:_ plan\n* _Stage 2:_ ship", RequestParts(PartKind.PHASE, 2)),
+        (
+            "Paso 1: crear\nPaso 2: probar\nPaso 3: documentar\nPaso 4: entregar",
+            RequestParts(PartKind.STEP, 4),
+        ),
+        ("## Fase 1\nStep 1\nStep 2\nSteps 3", RequestParts(PartKind.STEP, 3)),
+        ("## 1. Contexto\n## 2. Objetivo\n1) uno\n2) dos", RequestParts()),
+        ("## Fase 1 — única\nla Fase 2 vendrá", RequestParts(PartKind.PHASE, 1)),
+        ("Phase in the new client\nStepwise 2 changes\nhito 3", RequestParts(PartKind.PHASE, 1)),
+        ("", RequestParts()),
+    ],
+)
+def test_labelled_phases_and_steps_are_counted_once_each(text: str, expected: RequestParts) -> None:
+    assert numbered_parts(text) == expected
+
+
+@pytest.mark.parametrize(
+    "blanks",
+    [" " * 100_000, "## " + "\t" * 100_000, "- " + " " * 100_000, "> " * 50_000],
+    ids=["indent", "heading", "bullet", "quote"],
+)
+def test_a_long_run_of_blanks_is_read_in_one_pass(blanks: str) -> None:
+    text = f"{blanks}x\n## Fase 1\n## Fase 2"
+    assert numbered_parts(text) == RequestParts(PartKind.PHASE, 2)
+    assert first_part_offset(f"{blanks}x") is None
+    assert part_spans(text) == ((len(f"{blanks}x\n"), len(text)),)
+    assert part_spans(f"{blanks}x") == ()
+
+
+def test_the_real_run_mandate_counts_five_phases_from_its_first_heading() -> None:
+    text = phased_mandate()
+    assert len(text.encode("utf-8")) > 11_000
+    assert numbered_parts(text) == RequestParts(PartKind.PHASE, 5)
+    assert numbered_parts(text).count >= MIN_PARTS
+    offset = first_part_offset(text)
+    assert offset is not None
+    assert text[offset:].startswith("## Fase 1 — Auditoría")
+    assert first_part_offset("intro\n**Paso 1:** crear") == len("intro\n")
+    assert first_part_offset("## 1. Contexto\nla Fase 2 vendrá") is None
+
+
+def _phase_text(text: str) -> list[str]:
+    return [text[start:end] for start, end in part_spans(text)]
+
+
+SECTIONED = (
+    "Intro.\n"
+    "## Fase 1 — Auditoría\n"
+    "Leer.\n"
+    "### Reglas de la fase\n"
+    "No toques a.py.\n"
+    "## Notas\n"
+    "Global uno.\n"
+    "## Fase 2 — Corrección\n"
+    "Corregir.\n"
+    "### Paso 2.1 — Detalle\n"
+    "Más.\n"
+    "## Reglas generales\n"
+    "Global dos.\n"
+)
+
+
+def test_a_phase_ends_at_the_next_heading_of_its_level_or_above() -> None:
+    assert _phase_text(SECTIONED) == [
+        "## Fase 1 — Auditoría\nLeer.\n### Reglas de la fase\nNo toques a.py.\n",
+        "## Fase 2 — Corrección\nCorregir.\n### Paso 2.1 — Detalle\nMás.\n",
+    ]
+    spans = part_spans(SECTIONED)
+    assert not in_parts(0, spans)
+    assert in_parts(SECTIONED.index("No toques"), spans)
+    assert not in_parts(SECTIONED.index("Global uno"), spans)
+    assert in_parts(SECTIONED.index("Más."), spans)
+    assert not in_parts(SECTIONED.index("Global dos"), spans)
+    assert not in_parts(len(SECTIONED), spans)
+
+
+@pytest.mark.parametrize(
+    ("text", "phases"),
+    [
+        (
+            "**Fase 1:** a\n**Fase 2:** b\n**Reglas**\nNo toques x.\n",
+            ["**Fase 1:** a\n**Fase 2:** b\n"],
+        ),
+        (
+            "- Phase 1: plan\n- Phase 2: build\n- Do not touch y.\n## Rules\nDo not modify z.\n",
+            ["- Phase 1: plan\n- Phase 2: build\n- Do not touch y.\n"],
+        ),
+        (
+            "# Plan\n### Fase 1\na\n### Fase 2\nb\n## Reglas\nc\n",
+            ["### Fase 1\na\n### Fase 2\nb\n"],
+        ),
+        (
+            "## Fase 1\na\n#### Nota\nb\n## Fase 2\nc",
+            ["## Fase 1\na\n#### Nota\nb\n## Fase 2\nc"],
+        ),
+        (
+            "## Fase 1\r\na\r\n## Fase 2\r\nb\r\n## Reglas\r\nc\r\n",
+            ["## Fase 1\r\na\r\n## Fase 2\r\nb\r\n"],
+        ),
+        (
+            "> ## Etapa 1\n> a\n> ## Etapa 2\n> b\n> ## Notas\n> c",
+            ["> ## Etapa 1\n> a\n> ## Etapa 2\n> b\n"],
+        ),
+        (
+            "## Fase 1\n```python\n# antes\n## Fase 9\n```\nNo toques x.\n## Fase 2\nb\n",
+            ["## Fase 1\n```python\n# antes\n## Fase 9\n```\nNo toques x.\n## Fase 2\nb\n"],
+        ),
+        (
+            "## Fase 1\n```inline``` code\n## Fase 2\nb\n## Reglas\nc\n",
+            ["## Fase 1\n```inline``` code\n## Fase 2\nb\n"],
+        ),
+        ("## Contexto\nSin fases.\n", []),
+        ("", []),
+    ],
+    ids=[
+        "bold",
+        "list",
+        "deeper",
+        "nested",
+        "crlf",
+        "quoted",
+        "fenced",
+        "inline_fence",
+        "none",
+        "empty",
+    ],
+)
+def test_each_labelled_part_spans_its_body_and_nothing_after_its_section(
+    text: str, phases: list[str]
+) -> None:
+    assert _phase_text(text) == phases
+
+
+def test_the_real_run_phases_end_where_its_closing_sections_begin() -> None:
+    text = phased_mandate()
+    spans = part_spans(text)
+    assert len(spans) == 1
+    start, end = spans[0]
+    assert text[start:].startswith("## Fase 1 — Auditoría")
+    assert text[end:].startswith("## Cómo trabajar")
+    assert text[:end].rstrip().endswith("promesas sobre versiones futuras.")
+
+
+SPAN_BYTES = 200_000
+SPAN_BUDGET_S = 0.5
+
+
+@pytest.mark.perf
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "## Fase 1\nNo toques a.py.\n## Notas\nb\n",
+        "### Paso 2\n#### Nota\n",
+        "- " + " " * 997 + "x\n",
+        "**Fase 3:** " + "*" * 500 + "\n",
+        "**" + "a" * 2000 + "\n",
+        "```\n# x\n",
+    ],
+    ids=["sections", "nested", "bullet", "stars", "open-bold", "fences"],
+)
+def test_phase_spans_of_a_200_kb_request_stay_within_budget(unit: str) -> None:
+    text = (unit * (SPAN_BYTES // len(unit) + 1))[:SPAN_BYTES]
+    started = time.perf_counter()
+    spans = part_spans(text)
+    assert time.perf_counter() - started < SPAN_BUDGET_S
+    assert all(start < end for start, end in spans)
+
+
+def test_the_request_text_joins_every_field_in_order_and_skips_empty_ones() -> None:
+    full = MandateRequest("feature", "w", "evidence", "src/a.py", "c", "t", "o")
+    assert request_text(full) == "feature\nw\nevidence\nsrc/a.py\nc\nt\no"
+    sparse = MandateRequest("bug", "  fix add  ", "", where=" ", out_of_scope="tests\n")
+    assert request_text(sparse) == "bug\nfix add\ntests"
+    assert request_text(MandateRequest()) == ""

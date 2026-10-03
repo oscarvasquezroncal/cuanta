@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
+from types import TracebackType
 
 from cuanta.application.implementer import ImplementationSession
 from cuanta.application.run_reports import RunReports
@@ -11,11 +13,14 @@ from cuanta.application.timing import PhaseRecorder
 from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules, strict_tools
 from cuanta.domain.claude_variants import pure_environment
 from cuanta.domain.engine import (
+    CANCELLED_SUBTYPE,
     GOVERNOR_STOP_SUBTYPE,
     TURN_LIMIT_SUBTYPE,
+    WALL_LIMIT_SUBTYPE,
     EngineEvent,
     EngineOutcome,
     EngineRequest,
+    ModelUsage,
     RunResult,
     cut_by_turns,
 )
@@ -28,9 +33,10 @@ from cuanta.domain.messages import msg
 from cuanta.domain.overhead import spawn_event
 from cuanta.domain.plugins import FULL, LEAN
 from cuanta.domain.pricing import CostEstimate, PriceTable, estimate, estimate_cost
-from cuanta.domain.telemetry import claude_env, run_env
+from cuanta.domain.received import Received, ended_early, received_cost
+from cuanta.domain.telemetry import UNREADABLE_KIND, claude_env, run_env
 from cuanta.ports.engine import Engine, Resumable, RunStop, TurnInput
-from cuanta.ports.ledger import Ledger
+from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.listener import ListenerControl, ListenerStatus
 from cuanta.ports.system import Clock
 
@@ -79,6 +85,8 @@ class LaunchSpec:
     pure: bool = False
     verify_commands: tuple[str, ...] = ()
     implementation_steps: bool = False
+    max_wall_s: float = 0.0
+    wall_limit_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +94,32 @@ class Launch:
     run: Run
     outcome: EngineOutcome
     implementation: ImplementationReport | None = None
+    unreadable: int = 0
+
+
+class WallTimer:
+    def __init__(self, seconds: float, expire: Callable[[], None]) -> None:
+        self._timer: threading.Timer | None = None
+        if seconds > 0:
+            self._timer = threading.Timer(min(seconds, threading.TIMEOUT_MAX), expire)
+            self._timer.daemon = True
+
+    def __enter__(self) -> WallTimer:
+        if self._timer is not None:
+            self._timer.start()
+        return self
+
+    def __exit__(
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        trace: TracebackType | None,
+    ) -> None:
+        self.disarm()
+
+    def disarm(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
 
 
 class EngineLauncher:
@@ -126,6 +160,7 @@ class EngineLauncher:
         self._listener = listener
         self._prices = prices
         self._halt_estimate: Callable[[], float | None] | None = None
+        self._sent = 0
 
     def _cost(self, outcome: EngineOutcome | None, usage: list[LedgerEvent]) -> CostEstimate:
         reported = _reported(outcome)
@@ -168,7 +203,10 @@ class EngineLauncher:
 
     def send_turn(self, text: str) -> bool:
         engine = self._engine
-        return isinstance(engine, TurnInput) and engine.send_turn(text)
+        sent = isinstance(engine, TurnInput) and engine.send_turn(text)
+        if sent:
+            self._sent += 1
+        return sent
 
     def resumable(self) -> bool:
         engine = self._engine
@@ -181,6 +219,12 @@ class EngineLauncher:
         self._halt_estimate = estimate
         engine.halt(GOVERNOR_STOP_SUBTYPE)
         return True
+
+    def _received(
+        self, run_id: str, outcome: EngineOutcome | None, rows: list[LedgerEvent]
+    ) -> CostEstimate:
+        recorded = self._ledger.events(EventQuery(run_id=run_id))
+        return received_cost(_reported(outcome), recorded, rows, self._prices)
 
     def _halted_cost(self, outcome: EngineOutcome | None, cost: CostEstimate) -> CostEstimate:
         guess = self._halt_estimate
@@ -347,6 +391,7 @@ class EngineLauncher:
             estimate_source=guess.source if guess else "",
             estimate_samples=guess.samples if guess else 0,
             cap_usd=spec.pipeline_budget_usd or spec.max_budget_usd,
+            max_wall_s=max(0.0, spec.wall_limit_s or spec.max_wall_s),
         )
         self._ledger.add_run(run)
         self._save_metadata(run_id, spec)
@@ -355,12 +400,20 @@ class EngineLauncher:
         outcome: EngineOutcome | None = None
         spawned: LedgerEvent | None = None
         implementation: ImplementationSession | None = None
+        received = Received()
+        wall = WallTimer(spec.max_wall_s, self._expire)
+        self._sent = 0
 
         def stream_event(event: EngineEvent) -> None:
-            if isinstance(event, RunResult) and implementation is not None:
-                implementation.on_result(event, self.send_turn)
+            received.add(event)
             if not isinstance(event, RunResult):
                 on_event(event)
+                return
+            submitted = self._sent
+            if implementation is not None:
+                implementation.on_result(event, self.send_turn)
+            if self._sent == submitted:
+                wall.disarm()
 
         try:
             with self._telemetry() as status:
@@ -370,64 +423,73 @@ class EngineLauncher:
                 if implementation is not None:
                     request = replace(request, stream_input=True, continue_results=True)
                 spawned = spawn_event(run_id, run.trace_id, self._clock.now_ms())
-                outcome = self._run_engine(request, stream_event, implementation, run_id, spec.role)
+                outcome = self._run_engine(
+                    request, stream_event, implementation, run_id, spec.role, wall
+                )
         finally:
             if spawned is not None:
                 self._ledger.add_events([spawned])
-            usage = _usage_events(run, outcome, self._engine.name) if outcome else []
-            cost = self._halted_cost(outcome, self._cost(outcome, usage))
-            if (
-                outcome is not None
-                and outcome.result is not None
-                and spec.max_budget_usd > 0
-                and cost.value is not None
-                and cost.value > spec.max_budget_usd
-                and outcome.ok
-            ):
-                outcome = replace(
-                    outcome,
-                    result=replace(
-                        outcome.result,
-                        ok=False,
-                        subtype="error_max_budget_usd",
-                        terminal_reason="budget_exhausted",
-                    ),
-                )
-            status_text = "interrupted" if outcome is None else ("ok" if outcome.ok else "failed")
-            result = outcome.result if outcome is not None else None
-            end_reason = "" if result is None else result.subtype
-            if result is not None and cut_by_turns(result.subtype, result.terminal_reason):
-                end_reason = TURN_LIMIT_SUBTYPE
-            finished = replace(
-                run,
-                ended_at=self._clock.now_iso(),
-                status=status_text,
-                model=_main_model(outcome) or run.model,
-                turns=result.num_turns if result is not None else 0,
-                end_reason=end_reason,
-            )
-            usage = (
-                [
-                    *_usage_events(finished, outcome, self._engine.name),
-                    *_denial_events(finished, outcome, self._engine.name),
-                ]
-                if outcome
-                else []
-            )
-            finished = replace(finished, cost_usd=cost.value, cost_source=cost.kind)
-            self._ledger.update_run(finished)
-            if usage:
-                self._ledger.add_events(usage)
-            text = outcome.result.text if outcome and outcome.result else ""
+            final, finished = self._close(run, spec, outcome, received)
+            result = final.result if final is not None else None
+            text = result.text if result is not None else ""
             if text and self._reports is not None:
                 self._reports.save_report(run_id, text)
             if result is not None:
                 on_event(result)
         return Launch(
             run=finished,
-            outcome=outcome,
+            outcome=final or outcome,
             implementation=implementation.report if implementation is not None else None,
+            unreadable=self._unreadable(run_id),
         )
+
+    def _unreadable(self, run_id: str) -> int:
+        return len(self._ledger.events(EventQuery(run_id=run_id, kind=UNREADABLE_KIND)))
+
+    def _close(
+        self, run: Run, spec: LaunchSpec, outcome: EngineOutcome | None, received: Received
+    ) -> tuple[EngineOutcome | None, Run]:
+        early = ended_early(outcome)
+        result = outcome.result if outcome is not None else None
+        models = (
+            received.usage
+            if early and received.requests
+            else (result.models if result is not None else ())
+        )
+        session = result.session_id if result is not None and result.session_id else ""
+        session = session or received.session_id
+        rows = _usage_rows(run, models, session, self._engine.name)
+        cost = self._received(run.id, outcome, rows) if early else self._cost(outcome, rows)
+        cost = self._halted_cost(outcome, cost)
+        outcome = _over_cap(outcome, spec, cost)
+        result = outcome.result if outcome is not None else None
+        turns = result.num_turns if result is not None else 0
+        finished = replace(
+            run,
+            ended_at=self._clock.now_iso(),
+            status="interrupted" if outcome is None else ("ok" if outcome.ok else "failed"),
+            model=_main_model(outcome) or (received.main_model if early else "") or run.model,
+            turns=max(turns, received.turns) if early else turns,
+            end_reason=_end_reason(outcome),
+            cost_usd=cost.value,
+            cost_source=cost.kind,
+            partial=early,
+        )
+        stored = [
+            *_usage_rows(finished, models, session, self._engine.name),
+            *(_denial_events(finished, outcome, self._engine.name) if outcome else []),
+        ]
+        self._ledger.update_run(finished)
+        if stored:
+            self._ledger.add_events(stored)
+        return outcome, finished
+
+    def _expire(self) -> None:
+        engine = self._engine
+        if isinstance(engine, RunStop):
+            engine.halt(WALL_LIMIT_SUBTYPE)
+        else:
+            engine.cancel()
 
     def _run_engine(
         self,
@@ -436,13 +498,9 @@ class EngineLauncher:
         implementation: ImplementationSession | None,
         run_id: str,
         role: str,
+        wall: WallTimer,
     ) -> EngineOutcome:
-        active = (
-            implementation.running(self._engine.cancel)
-            if implementation is not None
-            else nullcontext()
-        )
-        with active:
+        with wall:
             outcome = self._engine.run(request, on_event)
         if implementation is not None:
             outcome = implementation.settle(outcome)
@@ -466,14 +524,46 @@ def _main_model(outcome: EngineOutcome | None) -> str:
     return max(outcome.result.models, key=lambda usage: usage.total).model
 
 
-def _usage_events(run: Run, outcome: EngineOutcome, engine: str) -> list[LedgerEvent]:
-    if outcome.result is None:
-        return []
+def _over_cap(
+    outcome: EngineOutcome | None, spec: LaunchSpec, cost: CostEstimate
+) -> EngineOutcome | None:
+    if (
+        outcome is None
+        or outcome.result is None
+        or spec.max_budget_usd <= 0
+        or cost.value is None
+        or cost.value <= spec.max_budget_usd
+        or not outcome.ok
+    ):
+        return outcome
+    return replace(
+        outcome,
+        result=replace(
+            outcome.result,
+            ok=False,
+            subtype="error_max_budget_usd",
+            terminal_reason="budget_exhausted",
+        ),
+    )
+
+
+def _end_reason(outcome: EngineOutcome | None) -> str:
+    if outcome is not None and outcome.cancelled and not outcome.ok:
+        return CANCELLED_SUBTYPE
+    result = outcome.result if outcome is not None else None
+    if result is not None and cut_by_turns(result.subtype, result.terminal_reason):
+        return TURN_LIMIT_SUBTYPE
+    return result.subtype if result is not None else ""
+
+
+def _usage_rows(
+    run: Run, models: tuple[ModelUsage, ...], session: str, engine: str
+) -> list[LedgerEvent]:
     return [
         LedgerEvent(
             run_id=run.id,
             source=f"{engine}_stream",
-            session_id=outcome.result.session_id,
+            session_id=session,
             trace_id=run.trace_id,
             kind="result_usage",
             model=usage.model,
@@ -485,7 +575,7 @@ def _usage_events(run: Run, outcome: EngineOutcome, engine: str) -> list[LedgerE
             cost_usd=usage.cost_usd,
             ts=run.ended_at,
         )
-        for usage in outcome.result.models
+        for usage in models
     ]
 
 

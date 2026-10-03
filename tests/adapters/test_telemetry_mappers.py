@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
+
+import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from cuanta.adapters.telemetry.claude_code_mapper import map_log
-from cuanta.adapters.telemetry.otlp_json import LogRecord
+from cuanta.adapters.telemetry.mapping import as_int, raw_json
+from cuanta.adapters.telemetry.otlp_json import LogRecord, nano_to_iso
 from cuanta.adapters.telemetry.otlp_receiver import map_payload
 from cuanta.domain.redaction import redact_for_remote, redact_for_storage
 from cuanta.domain.shells import Shell, env_hint, shell_from_name, snippet
@@ -192,3 +198,196 @@ def test_claude_explicit_agent_signals_are_not_marked_as_defaults() -> None:
     ]:
         event = map_log(LogRecord("claude_code.api_request", attrs, {}, "", "", None))
         assert "attributed" not in json.loads(event.raw)
+
+
+FRAGMENTS = (
+    "token=",
+    "api_key=",
+    "secret: ",
+    '"',
+    "\\",
+    "\n",
+    "é",
+    "@",
+    "ops@example.invalid",
+    "abcdef123456",
+    " ",
+    ",",
+    "{",
+    "}",
+)
+
+
+def _attributes(raw: str) -> dict[str, Any]:
+    stored = json.loads(raw)
+    return {item["key"]: item["value"] for item in stored["attributes"]}
+
+
+def test_values_redaction_touches_keep_raw_json_valid() -> None:
+    events = map_payload("/v1/logs", _load("claude_redaction.json"))
+    assert [event.kind for event in events] == ["api_request", "tool_result"]
+    api, tool = events
+    assert api.input_tokens == 8
+    stored = json.loads(tool.raw)
+    values = _attributes(tool.raw)
+    command = "export ANTHROPIC_API_KEY=[redacted]"
+    assert json.loads(values["tool_input"]["stringValue"])["command"] == command
+    assert stored["cuanta.parameters"]["command"] == command
+    assert values["error"]["stringValue"] == "exit 1\n[email]"
+    assert "abc123def456" not in tool.raw
+    assert "ops@example.invalid" not in tool.raw
+
+
+def _strict(text: str) -> Any:
+    def reject(token: str) -> Any:
+        raise ValueError(f"not strict JSON: {token}")
+
+    return json.loads(text, parse_constant=reject)
+
+
+def _any_value(value: str | float) -> dict[str, Any]:
+    return {"stringValue": value} if isinstance(value, str) else {"doubleValue": value}
+
+
+@given(
+    st.dictionaries(
+        st.sampled_from(["tool_input", "error", "token", "note", "ratio"]),
+        st.one_of(st.lists(st.sampled_from(FRAGMENTS), max_size=12).map("".join), st.floats()),
+        max_size=4,
+    )
+)
+def test_raw_json_is_valid_json_for_any_value_redaction_touches(
+    values: dict[str, str | float],
+) -> None:
+    record = {
+        "attributes": [{"key": key, "value": _any_value(value)} for key, value in values.items()]
+    }
+    stored = raw_json(record, False)
+    assert isinstance(_strict(stored), dict)
+    assert "ops@example.invalid" not in stored
+
+
+def _metric(value: object) -> dict[str, Any]:
+    point = {"asDouble": value, "attributes": []}
+    metric = {"name": "claude_code.cost.usage", "sum": {"dataPoints": [point]}}
+    return {"resourceMetrics": [{"resource": {}, "scopeMetrics": [{"metrics": [metric]}]}]}
+
+
+def test_non_finite_numbers_are_stored_as_strict_json_strings() -> None:
+    for sent, kept in (("NaN", "NaN"), ("Infinity", "Infinity"), ("-Infinity", "-Infinity")):
+        (event,) = map_payload("/v1/metrics", _metric(sent))
+        assert _strict(event.raw)["value"] == kept
+    body = (
+        '{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":'
+        '"claude_code.api_request"},"attributes":[{"key":"ratio","value":'
+        '{"doubleValue":NaN}},{"key":"cuanta.run_id","value":{"stringValue":"R"}}]}]}]}]}'
+    )
+    (event,) = map_payload("/v1/logs", json.loads(body))
+    assert _attributes(event.raw)["ratio"] == {"doubleValue": "NaN"}
+    _strict(event.raw)
+
+
+def test_numbers_outside_the_ledger_range_read_as_zero() -> None:
+    assert as_int(2**63 - 1) == 2**63 - 1
+    assert as_int(-(2**63)) == -(2**63)
+    assert as_int("12") == 12
+    assert as_int(7.9) == 7
+    for absurd in (
+        2**63,
+        -(2**63) - 1,
+        "99999999999999999999",
+        1e30,
+        "1e30",
+        float("inf"),
+        float("-inf"),
+        float("nan"),
+        "inf",
+        "nan",
+    ):
+        assert as_int(absurd) == 0
+
+
+def test_an_absurd_count_keeps_the_record_and_its_raw_value() -> None:
+    attrs = [
+        {"key": "event.name", "value": {"stringValue": "api_request"}},
+        {"key": "input_tokens", "value": {"intValue": "99999999999999999999"}},
+        {"key": "duration_ms", "value": {"doubleValue": 1e30}},
+    ]
+    record = {"body": {"stringValue": "claude_code.api_request"}, "attributes": attrs}
+    payload = {"resourceLogs": [{"scopeLogs": [{"logRecords": [record]}]}]}
+    (event,) = map_payload("/v1/logs", payload)
+    assert (event.kind, event.input_tokens, event.duration_ms) == ("api_request", 0, 0)
+    assert _attributes(event.raw)["input_tokens"] == {"intValue": "99999999999999999999"}
+    span = {
+        "name": "turn",
+        "traceId": "t",
+        "startTimeUnixNano": "1",
+        "endTimeUnixNano": str(10**40),
+    }
+    traces = {"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}
+    (spanned,) = map_payload("/v1/traces", traces)
+    assert spanned.duration_ms == 0
+
+
+RUN_ATTRIBUTE = '{"key":"cuanta.run_id","value":{"stringValue":"R"}}'
+OVERFLOWING_LOGS = (
+    '{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"logRecords":['
+    '{"body":{"stringValue":"claude_code.api_request"},"attributes":['
+    '{"key":"event.name","value":{"stringValue":"api_request"}},' + RUN_ATTRIBUTE + ","
+    '{"key":"input_tokens","value":{"intValue":"8"}}]},'
+    '{"body":{"stringValue":"claude_code.api_request"},"traceId":"T2","attributes":['
+    '{"key":"event.name","value":{"stringValue":"api_request"}},' + RUN_ATTRIBUTE + ","
+    '{"key":"input_tokens","value":{"intValue":1e999}}]}]}]}]}'
+)
+OVERFLOWING_SPANS = (
+    '{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"spans":['
+    '{"name":"ok","traceId":"T1","startTimeUnixNano":"1","endTimeUnixNano":"2000001"},'
+    '{"name":"bad","traceId":"T2","startTimeUnixNano":"1","endTimeUnixNano":1e999,'
+    '"attributes":[' + RUN_ATTRIBUTE + "]}]}]}]}"
+)
+OVERFLOWING_METRICS = (
+    '{"resourceMetrics":[{"resource":{"attributes":[' + RUN_ATTRIBUTE + ']},"scopeMetrics":'
+    '[{"metrics":[{"name":"claude_code.cost.usage","sum":{"dataPoints":['
+    '{"asDouble":0.5,"attributes":[]},{"asInt":1' + "0" * 400 + ',"attributes":[]}]}}]}]}]}'
+)
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "good", "name", "trace"),
+    [
+        ("/v1/logs", OVERFLOWING_LOGS, "api_request", "claude_code.api_request", "T2"),
+        ("/v1/traces", OVERFLOWING_SPANS, "span:ok", "bad", "T2"),
+        (
+            "/v1/metrics",
+            OVERFLOWING_METRICS,
+            "metric:claude_code.cost.usage",
+            "claude_code.cost.usage",
+            "",
+        ),
+    ],
+    ids=["log_int", "span_end", "metric_int"],
+)
+def test_a_record_whose_numbers_overflow_becomes_a_counted_marker_beside_the_good_ones(
+    path: str, body: str, good: str, name: str, trace: str
+) -> None:
+    failures: list[tuple[str, str]] = []
+    events = map_payload(
+        path, json.loads(body), failed=lambda item, error: failures.append((item, repr(error)))
+    )
+    assert [event.kind for event in events] == [good, "telemetry_unreadable"]
+    marker = events[1]
+    assert (marker.run_id, marker.trace_id) == ("R", trace)
+    assert json.loads(marker.raw) == {"event": name, "error": "OverflowError"}
+    assert [item for item, _ in failures] == [name]
+    assert "OverflowError" in failures[0][1]
+
+
+def test_absurd_timestamps_do_not_break_the_batch() -> None:
+    payload: Any = _load("claude_redaction.json")
+    payload["resourceLogs"][0]["scopeLogs"][0]["logRecords"][1]["timeUnixNano"] = str(10**40)
+    events = map_payload("/v1/logs", payload)
+    assert [event.kind for event in events] == ["api_request", "tool_result"]
+    assert events[0].ts == "2026-09-23T04:15:45.528Z"
+    assert events[1].ts == ""
+    for absurd in ("99999999999999999999999", 10**40, 10**400, float("inf"), float("nan")):
+        assert nano_to_iso(absurd) == ""

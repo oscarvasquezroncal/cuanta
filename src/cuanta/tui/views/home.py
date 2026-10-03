@@ -231,8 +231,10 @@ def costs_card(t: Catalog, report: CostReport | None) -> Content:
             (t("costs.accepted_of", accepted=total.accepted, runs=total.runs), "$text-muted"),
         )
     )
-    if spend.lower_bound:
+    if spend.missing:
         lines.append(Content.styled(t("costs.lower_bound", count=spend.missing), "$text-muted"))
+    if spend.partial:
+        lines.append(Content.styled(t("costs.partial_runs", count=spend.partial), "$text-muted"))
     if total.estimated:
         lines.append(Content.styled(t("costs.estimated_note"), "$text-muted"))
     return Content("\n").join(lines)

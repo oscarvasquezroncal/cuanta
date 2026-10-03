@@ -119,10 +119,15 @@ class RunMetrics:
     anatomy: AnatomyReport = field(default_factory=AnatomyReport)
     read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
     proof: ProofRecord | None = None
+    partial: bool = False
 
     @property
     def arm(self) -> str:
         return self.proof.arm if self.proof is not None else ""
+
+    @property
+    def budget_cost(self) -> float | None:
+        return None if self.partial else self.cost_usd
 
     @property
     def total_tokens(self) -> int:

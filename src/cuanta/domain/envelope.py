@@ -12,7 +12,7 @@ from cuanta.domain.costs import median, sum_costs
 from cuanta.domain.depth import TOKENS_PER_READ, Depth, DepthProfile, profile
 from cuanta.domain.evidence_pack import PACK_TOKENS
 from cuanta.domain.ledger import Forecast
-from cuanta.domain.mandate import Shape
+from cuanta.domain.mandate import MIN_PARTS, PartKind, RequestParts, Shape
 from cuanta.domain.messages import Message, keyed, msg
 from cuanta.domain.pricing import PER_MILLION, Price, base_model, dollars
 from cuanta.domain.real_costs import FIX_TYPE, type_key
@@ -152,6 +152,8 @@ class EnvelopeInputs:
     max_turns: int = 0
     model_warmth: Mapping[str, float] = field(default_factory=dict)
     repairable: bool = False
+    request_tokens: int = 0
+    parts: RequestParts = field(default_factory=RequestParts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +265,7 @@ class _Work:
     dispatches: int = 0
     subagent: bool = False
     requests: int = 0
+    request: int = 0
 
 
 def is_fix(task_type: str) -> bool:
@@ -380,6 +383,7 @@ def _single_works(inputs: EnvelopeInputs) -> tuple[_Work, ...]:
             1,
             model_warmth(inputs, source.model.model),
             requests=CLAUDE_SINGLE_REQUESTS,
+            request=inputs.request_tokens,
         ),
     )
 
@@ -476,6 +480,7 @@ def _chain_works(inputs: EnvelopeInputs, chain: Sequence[RoleInput], scout: bool
                 model_warmth(inputs, source.model.model),
                 subagent=subagent,
                 requests=claude_requests(source.role, subagent, explores),
+                request=0 if subagent else inputs.request_tokens,
             )
         )
     return works
@@ -498,6 +503,7 @@ def _main_work(inputs: EnvelopeInputs, chain: Sequence[_Work]) -> _Work | None:
         main=True,
         dispatches=len(chain),
         requests=CLAUDE_MAIN_REQUESTS,
+        request=inputs.request_tokens,
     )
 
 
@@ -525,6 +531,7 @@ def _repair(inputs: EnvelopeInputs, works: Sequence[_Work]) -> _Work | None:
         repair=True,
         subagent=writer.subagent,
         requests=writer.requests,
+        request=writer.request,
     )
 
 
@@ -559,7 +566,7 @@ def _requests(work: _Work, turns: int, provider: Provider) -> int:
 
 def _buckets(work: _Work, fixed: FixedPrefix, requests: int, provider: Provider) -> Buckets:
     return Buckets(
-        start=fixed.tokens + work.pack,
+        start=fixed.tokens + work.pack + work.request,
         exploration=sum(work.files),
         writing=requests * output_per_request(provider) + work.written,
         verification=work.verify_rounds * VERIFY_TOKENS,
@@ -800,6 +807,8 @@ def envelope_features(inputs: EnvelopeInputs, result: Envelope) -> dict[str, flo
         "repair": sum(1 for item in result.roles if item.repair),
         "native": 1 if inputs.native else 0,
         "cache_ttl_s": inputs.cache_ttl_s,
+        "request_tokens": inputs.request_tokens,
+        "request_parts": inputs.parts.count,
     }
     if result.margin_usd is not None:
         features["margin_usd"] = result.margin_usd
@@ -889,6 +898,18 @@ def forecast_messages(result: Envelope, prefix: PrefixState) -> tuple[Message, .
     if not result.suggestions:
         return (line, warning)
     return (line, warning, msg("envelope.try", suggestion=result.suggestions[0].message))
+
+
+PART_MESSAGES: Mapping[PartKind, str] = {
+    PartKind.PHASE: "envelope.phases",
+    PartKind.STEP: "envelope.steps",
+}
+
+
+def parts_message(parts: RequestParts) -> Message | None:
+    if parts.count < MIN_PARTS:
+        return None
+    return msg(PART_MESSAGES[parts.kind], count=parts.count)
 
 
 def envelope_payload(result: Envelope) -> dict[str, object]:

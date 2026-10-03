@@ -16,8 +16,8 @@ from tests.support import invoke
 def real_processes(monkeypatch: pytest.MonkeyPatch, fake_runner: FakeRunner) -> None:
     original = Container.for_project
 
-    def build(cls: type[Container], project: Path) -> Container:
-        container = original(project)
+    def build(cls: type[Container], project: Path, verbose: bool = False) -> Container:
+        container = original(project, verbose)
         container.runner = SubprocessRunner()
         return container
 

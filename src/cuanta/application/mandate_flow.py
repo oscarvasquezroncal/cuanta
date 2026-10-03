@@ -18,21 +18,19 @@ from cuanta.application.scout import SessionWatch, session_scout, watched
 from cuanta.application.steering import GovernorSetup, observed, session_steering
 from cuanta.application.timing import PhaseRecorder
 from cuanta.domain.agents import role_of
+from cuanta.domain.anchors import anchor_notes
 from cuanta.domain.capsules import capsule_id
-from cuanta.domain.change_plan import ChangePlan, apply_overrides
+from cuanta.domain.change_plan import ChangePlan, apply_overrides, plan_notes
 from cuanta.domain.claude_variants import (
     DELEGATION_TOOLS,
     resolve_variant,
     session_denied_tools,
 )
 from cuanta.domain.depth import (
-    DEFAULT_DEPTH,
-    MAX_TURNS,
     DepthProfile,
     parse_depth,
     profile,
     read_budget_line,
-    turn_limit,
 )
 from cuanta.domain.detection import GraphMode, Stack
 from cuanta.domain.engine import EngineEvent
@@ -47,6 +45,13 @@ from cuanta.domain.implementation import (
     implementation_prompt,
     large_feature,
     resolve_profile,
+)
+from cuanta.domain.limits import (
+    NO_LIMITS,
+    LimitRequest,
+    LimitSettings,
+    RunLimits,
+    resolve_limits,
 )
 from cuanta.domain.mandate import (
     INVESTIGATION,
@@ -74,6 +79,8 @@ from cuanta.domain.scout import (
     ScoutMode,
     docs_choice,
     docs_off_line,
+    docs_refusal,
+    docs_setting,
     has_pin,
     parse_forced_shape,
     scout_refusal,
@@ -95,17 +102,18 @@ PACKAGE_MANIFEST = "package.json"
 class MandateOptions:
     engine: str = ""
     model: str = ""
-    budget_usd: float = 0.0
+    budget_usd: float | None = None
     hu: str = ""
     parent: str = ""
     route: RouteOptions = field(default_factory=RouteOptions)
     simple: bool = False
     session: str = ""
     depth: str = ""
-    no_cap: bool = False
     shape: str = ""
     intake_scope: str = ""
-    max_turns: int = 0
+    max_turns: int | None = None
+    max_wall_min: float | None = None
+    limits: str = ""
     temporary_copy: bool = False
     sandbox: bool = False
     keep_copy: bool = False
@@ -115,6 +123,7 @@ class MandateOptions:
     profile: str = ""
     variant: str = ""
     pure: bool = False
+    docs: str = ""
 
 
 def scout_launch(options: MandateOptions, task_type: str) -> bool:
@@ -126,13 +135,17 @@ def scout_launch(options: MandateOptions, task_type: str) -> bool:
     )
 
 
-def team_requested(options: MandateOptions, cross_engine: bool = False) -> bool:
+def team_requested(
+    options: MandateOptions, cross_engine: bool = False, pinned: bool = False
+) -> bool:
     return (
         cross_engine
+        or pinned
         or options.simple
         or bool(options.route.role_models)
         or bool(options.route.preset)
         or parse_forced_shape(options.shape) is not None
+        or options.docs == DocsMode.ON.value
     )
 
 
@@ -143,10 +156,15 @@ def resolved_profile(
     task_type: str,
     cross_engine: bool = False,
     ready: Callable[[str], bool] = lambda _: True,
+    pinned: bool = False,
 ) -> ImplementationProfile:
     engine = options.engine or default_engine
     found = resolve_profile(
-        options.profile, default_profile, engine, task_type, team_requested(options, cross_engine)
+        options.profile,
+        default_profile,
+        engine,
+        task_type,
+        team_requested(options, cross_engine, pinned),
     )
     automatic = (options.profile or default_profile or AUTO_PROFILE) == AUTO_PROFILE
     if found is ImplementationProfile.FAST and automatic and not ready(engine):
@@ -236,32 +254,21 @@ def stepped_prepared(prepared: Prepared, large: bool) -> Prepared:
     )
 
 
-def resolve_budget(options: MandateOptions, task_type: str, default: float) -> float:
-    if options.no_cap:
-        return 0.0
-    if options.budget_usd > 0:
-        return options.budget_usd
-    if options.depth:
-        return profile(parse_depth(options.depth), task_type).cost_cap_usd
-    return default
+def limit_request(options: MandateOptions) -> LimitRequest:
+    return LimitRequest(options.limits, options.budget_usd, options.max_turns, options.max_wall_min)
 
 
-def resolve_max_turns(options: MandateOptions, chosen: DepthProfile | None, default: int) -> int:
-    return (
-        turn_limit(chosen, options.max_turns if options.max_turns > 0 else default)
-        or MAX_TURNS[DEFAULT_DEPTH]
-    )
+def mandate_limits(options: MandateOptions, task_type: str, settings: LimitSettings) -> RunLimits:
+    chosen = profile(parse_depth(options.depth), task_type)
+    return resolve_limits(limit_request(options), settings, chosen)
 
 
-def launch_turns(options: MandateOptions, task_type: str, engine: str, default: int) -> int:
-    if engine != "claude":
-        return 0
-    chosen = (
-        profile(parse_depth(options.depth), task_type)
-        if options.depth or task_type == INVESTIGATION
-        else None
-    )
-    return resolve_max_turns(options, chosen, default)
+def launch_turns(limits: RunLimits, engine: str) -> int:
+    return limits.max_turns if parse_provider(engine) is Provider.CLAUDE else 0
+
+
+def effective_limits(limits: RunLimits, engine: str) -> RunLimits:
+    return replace(limits, max_turns=launch_turns(limits, engine))
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +284,16 @@ class Prepared:
     docs: DocsChoice | None = None
     read_hooks: bool = False
     preparation_seconds: float | None = None
+    limits: RunLimits = NO_LIMITS
+    pack_notes: tuple[Message, ...] = ()
+    requested_limits: RunLimits = NO_LIMITS
+
+
+def pack_notes(
+    request: MandateRequest, protection: ChangePlan | None, pack: ContextPack | None
+) -> tuple[Message, ...]:
+    found = anchor_notes(pack.anchors, pack.budget) if pack is not None else ()
+    return (*plan_notes(request, protection), *found)
 
 
 def display_command(parts: tuple[str, ...], prompt: str) -> str:
@@ -358,6 +375,7 @@ class MandateFlow:
         default_variant: str = "",
         implementation_tools: tuple[str, ...] = (),
         fast_ready: Callable[[str], bool] | None = None,
+        limits: LimitSettings | None = None,
     ) -> None:
         self._fast_ready = fast_ready or self._engine_steerable
         self._implementation_tools = implementation_tools
@@ -392,8 +410,11 @@ class MandateFlow:
         self._summarize = summarize
         self._cwd = cwd
         self._default_engine = default_engine
-        self._default_budget = default_budget
-        self._default_max_turns = default_max_turns
+        self._limits = (
+            limits
+            if limits is not None
+            else LimitSettings(fixed=RunLimits(max(0.0, default_budget), max(0, default_max_turns)))
+        )
         self._active: Engine | None = None
 
     @property
@@ -417,6 +438,7 @@ class MandateFlow:
                 self._default_engine,
                 request.type,
                 ready=self._fast_ready,
+                pinned=self._routing is not None and self._routing.pinned(options.route.mode),
             ).value,
             variant=options.variant or self._default_variant,
         )
@@ -441,6 +463,15 @@ class MandateFlow:
         )
         if refusal is not None:
             raise DomainFailure(english(refusal[0]), refusal[1])
+        refused = docs_refusal(
+            options.docs,
+            request.type,
+            simple=options.simple,
+            fast=fast,
+            pinned=has_pin(options.route.role_models, Role.DOCS),
+        )
+        if refused is not None:
+            raise DomainFailure(english(refused[0]), refused[1])
         if self._refresh_index is not None:
             with self._timing.measure("index_refresh"):
                 self._refresh_index()
@@ -495,8 +526,7 @@ class MandateFlow:
             if self._routing is not None and not options.simple
             else None
         )
-        if single:
-            applied = single_applied(applied, options)
+        applied = self._launch_models(applied, options, single, fast)
         if claude and applied is not None and protection is not None and self._routing is not None:
             applied = self._routing.protect(applied, protection, options.session)
         pack = (
@@ -506,7 +536,8 @@ class MandateFlow:
         )
         applied = self._enrich(applied, request, options.depth, protection)
         depth = self._depth(options.depth, request.type)
-        cap = resolve_budget(options, request.type, self._default_budget)
+        requested = mandate_limits(options, request.type, self._limits)
+        limits = effective_limits(requested, engine_name)
         guess = self._estimate(options, applied, request.type, preview)
         budget_line = read_budget_line(depth, graph_available) if depth is not None else ""
         system = (
@@ -529,8 +560,9 @@ class MandateFlow:
             effort=depth.effort if depth is not None and claude else "",
             append_system_prompt=system,
             unset_env=applied.unset if applied is not None else (),
-            max_budget_usd=cap,
-            max_turns=(resolve_max_turns(options, depth, self._default_max_turns) if claude else 0),
+            max_budget_usd=limits.budget_usd,
+            max_turns=limits.max_turns,
+            max_wall_s=limits.wall_s,
             tools=(
                 self._implementation_tools
                 if fast and self._implementation_tools
@@ -619,12 +651,26 @@ class MandateFlow:
                 base,
                 protection,
                 Shape.SCOUT.value if wanted and has_scout(applied) else base.shape,
+                request=request,
             ),
             scout=wanted and has_scout(applied),
             docs=docs,
             read_hooks=self._hooked(launcher, spec),
+            limits=limits,
+            pack_notes=pack_notes(request, protection, pack),
+            requested_limits=requested,
         )
         return stepped_prepared(prepared, large)
+
+    def _launch_models(
+        self, applied: Applied | None, options: MandateOptions, single: bool, fast: bool
+    ) -> Applied | None:
+        if single:
+            applied = single_applied(applied, options)
+        if not (options.pure or fast) or applied is None or self._routing is None:
+            return applied
+        model = options.model or applied.orchestrator or applied.single
+        return self._routing.pure(applied, model, fast and not options.pure)
 
     def _tools(
         self, options: MandateOptions, investigation: bool, claude: bool, graph: bool
@@ -662,9 +708,9 @@ class MandateFlow:
         if not native or options.simple:
             return route, False, None
         trial = options.sandbox or self._sandbox is not None
-        docs = docs_choice(
-            self._docs_mode, request, trial, has_pin(options.route.role_models, Role.DOCS)
-        )
+        mode, flag = docs_setting(options.docs, self._docs_mode)
+        pinned = has_pin(options.route.role_models, Role.DOCS)
+        docs = docs_choice(mode, request, trial, pinned, flag)
         scout = parse_shape(options.shape) is Shape.SCOUT
         return replace(route, scout=scout, docs=docs.on), scout, docs
 
@@ -687,6 +733,7 @@ class MandateFlow:
         spec: LaunchSpec,
         protection: ChangePlan | None,
         shape: str = "",
+        request: MandateRequest | None = None,
     ) -> tuple[PlannedForecast | None, Message | None]:
         provider = parse_provider(engine_name)
         if self._forecaster is None or applied is None or provider is None or options.simple:
@@ -706,6 +753,7 @@ class MandateFlow:
                 max_turns=spec.max_turns,
                 implementation_profile=spec.profile,
                 variant=spec.variant or spec.effort,
+                request=request,
             )
         except (CuantaError, ValueError) as error:
             return None, forecast_failure(error)
@@ -729,7 +777,7 @@ class MandateFlow:
             role: self._packed_prompt(
                 self._context_pack(request, depth, role.value, protection), ""
             )
-            for role in (Role.SENIOR, Role.TESTER)
+            for role in (Role.SCOUT, Role.SENIOR, Role.TESTER)
             if role in applied.agents.roles.values()
         }
         return self._routing.enrich(applied, contexts)
@@ -813,6 +861,8 @@ class MandateFlow:
             )
             if prepared.docs is not None and prepared.docs.reason is not DocsReason.FORCED_ON:
                 progress.publish(note(Status.INFO, prepared.docs.message))
+            for message in prepared.pack_notes:
+                progress.publish(note(Status.WARN, message))
             watch = SessionWatch() if prepared.scout else None
             sink = watched(observer, watch) if watch is not None else observer
             report = self._service.run(
@@ -840,7 +890,8 @@ class MandateFlow:
             self._routing.record(report.run.id, prepared.composed.request.type, applied)
         report = self.verdict(report, progress) if verdict else report
         if self._routing is not None and applied is not None:
-            self._routing.close(report.run.id, report.tests, report.run.cost_usd)
+            cost = None if report.run.partial else report.run.cost_usd
+            self._routing.close(report.run.id, report.tests, cost)
             rows = self._routing.audit(report.run.id, applied, report.handoffs)
             report = replace(report, audit=rows)
         self._service.close_decisions(report.run.id, report.tests if report.ok else "failed")
@@ -917,12 +968,12 @@ class MandateSetup:
     engines: tuple[tuple[str, bool], ...]
     default_engine: str
     models: tuple[str, ...]
-    budget_usd: float
     forge_ready: bool = True
     init_estimate: float | None = None
-    max_turns: int = 0
+    limits: LimitSettings = field(default_factory=LimitSettings)
     profile: str = AUTO_PROFILE
     variant: str = ""
+    pinned: bool = False
 
 
 @dataclass(frozen=True, slots=True)

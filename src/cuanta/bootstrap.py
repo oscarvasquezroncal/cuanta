@@ -132,6 +132,7 @@ if TYPE_CHECKING:
     from cuanta.domain.governor_report import BlockedCalls
     from cuanta.domain.instinct import Choice
     from cuanta.domain.ledger import LedgerEvent, Run
+    from cuanta.domain.limits import LimitSettings, RunLimits
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.overhead import SessionOverhead
@@ -171,6 +172,7 @@ class Container:
     state_root: Path | None = None
     extra_env: tuple[tuple[str, str], ...] = ()
     run_mode: str = ""
+    verbose: bool = False
     _shared: Ledger | None = field(default=None, repr=False)
     _opened: list[Ledger] = field(default_factory=list, repr=False)
     decision_scope: DecisionScope = field(default_factory=_new_scope, repr=False)
@@ -178,12 +180,13 @@ class Container:
     _fast_ready: dict[str, bool] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def for_project(cls, project: Path) -> Container:
+    def for_project(cls, project: Path, verbose: bool = False) -> Container:
         state = os.environ.get(STATE_ROOT_ENV, "").strip()
         return cls(
             project=project,
             config=load_config(project),
             state_root=Path(state) if state else None,
+            verbose=verbose,
         )
 
     def new_run_id(self) -> str:
@@ -373,6 +376,15 @@ class Container:
             return IndexContextPack(reader, self._pack_cache).compile(request, depth, role, plan)
         finally:
             reader.close()
+
+    def pack_notes(
+        self, request: MandateRequest, depth: str, plan: ChangePlan
+    ) -> tuple[Message, ...]:
+        from cuanta.application.mandate_flow import pack_notes
+
+        enabled = self.config.index_enabled and self.config.pack_enabled
+        pack = self.context_pack(request, depth, "", plan) if enabled else None
+        return pack_notes(request, plan, pack)
 
     def index_reranker(self) -> DecisionMaker | None:
         from cuanta.application.instinct import consent_ok
@@ -1139,15 +1151,17 @@ class Container:
     def docs_choice(self, request: MandateRequest, options: MandateOptions) -> DocsChoice | None:
         from cuanta.domain.mandate import INVESTIGATION
         from cuanta.domain.routing import Role
-        from cuanta.domain.scout import docs_choice, has_pin, parse_docs_mode
+        from cuanta.domain.scout import docs_choice, docs_setting, has_pin, parse_docs_mode
 
         if options.simple or request.type == INVESTIGATION:
             return None
+        mode, flag = docs_setting(options.docs, parse_docs_mode(self.config.docs_mode))
         return docs_choice(
-            parse_docs_mode(self.config.docs_mode),
+            mode,
             request,
             options.sandbox,
             has_pin(options.route.role_models, Role.DOCS),
+            flag,
         )
 
     def shape_plan(self, plan: RoutePlan, shape: ShapeChoice, docs: DocsChoice | None) -> RoutePlan:
@@ -1157,16 +1171,19 @@ class Container:
         found = self.route_advisor(self.shared_ledger()).scout_plan(plan) if shape.scout else plan
         return without_role(found, Role.DOCS) if docs is not None and not docs.on else found
 
+    def pure_plan(self, plan: RoutePlan, model: str) -> RoutePlan:
+        return self.route_advisor(self.shared_ledger()).pure(plan, model)
+
     def team_shape(
         self, request: MandateRequest, options: MandateOptions, cross_engine: bool = False
     ) -> ShapeChoice:
-        from cuanta.application.mandate_flow import launch_turns, resolve_budget
-        from cuanta.application.routing import with_overrides
+        from cuanta.application.mandate_flow import launch_turns
+        from cuanta.application.routing import route_model, with_overrides
         from cuanta.domain.change_plan import apply_overrides
         from cuanta.domain.errors import CuantaError, DomainFailure
         from cuanta.domain.mandate import INVESTIGATION, Shape
         from cuanta.domain.messages import english
-        from cuanta.domain.routing import RouteMode, parse_provider
+        from cuanta.domain.routing import Role, RouteMode, parse_provider
         from cuanta.domain.scout import (
             ScoutMode,
             ShapeChoice,
@@ -1176,6 +1193,7 @@ class Container:
             parse_forced_shape,
             parse_scout_mode,
             pinned_shape,
+            pure_shape,
             scout_refusal,
         )
         from cuanta.domain.team import runs_per_role
@@ -1213,6 +1231,14 @@ class Container:
         )
         docs = self.docs_choice(request, options)
         plan = self.shape_plan(plan, ShapeChoice(Shape.PIPELINE), docs)
+        if options.pure:
+            plan = self.pure_plan(
+                plan, options.model or ("" if per_role else route_model(plan, Role.ORCHESTRATOR))
+            )
+            skipped = pure_shape(plan.pure, threshold, mode)
+            if skipped is not None:
+                return skipped
+        limits = self.run_limits(options, request.type)
         try:
             forecast = self.team_forecast(
                 request.type,
@@ -1220,19 +1246,27 @@ class Container:
                 provider,
                 options.depth,
                 Shape.PIPELINE.value,
-                resolve_budget(options, request.type, self.config.budget_usd),
+                limits.budget_usd,
                 apply_overrides(self.change_plan(request), options.plan_overrides),
                 native=not per_role,
                 model="" if per_role else options.model,
-                max_turns=0
-                if per_role
-                else launch_turns(options, request.type, engine, self.config.max_turns),
+                max_turns=0 if per_role else launch_turns(limits, engine),
             )
         except (CuantaError, ValueError):
             return choose_shape(request.type, None, None, threshold, mode)
         buckets = forecast.envelope.buckets
         share = exploration_share(buckets.exploration, buckets.total)
         return choose_shape(request.type, None, share, threshold, mode)
+
+    def limit_settings(self) -> LimitSettings:
+        from cuanta.domain.limits import limit_settings
+
+        return limit_settings(self.config)
+
+    def run_limits(self, options: MandateOptions, task_type: str) -> RunLimits:
+        from cuanta.application.mandate_flow import mandate_limits
+
+        return mandate_limits(options, task_type, self.limit_settings())
 
     def shaped_options(
         self, request: MandateRequest, options: MandateOptions, cross_engine: bool = False
@@ -1249,6 +1283,7 @@ class Container:
             request.type,
             cross_engine,
             self.fast_ready,
+            self.routing_pinned(options.route.mode),
         )
         options = replace(options, profile=profile.value)
         if profile is ImplementationProfile.FAST:
@@ -1443,6 +1478,7 @@ class Container:
         max_turns: int = 0,
         implementation_profile: str = "balanced",
         variant: str = "",
+        request: MandateRequest | None = None,
     ) -> PlannedForecast:
         return self.forecaster(self.shared_ledger()).plan(
             task_type,
@@ -1457,6 +1493,7 @@ class Container:
             max_turns,
             implementation_profile,
             variant,
+            request=request,
         )
 
     def role_budget(
@@ -1532,17 +1569,22 @@ class Container:
         checkpoint: Callable[[], Message | None] | None = None,
         depth: str = "",
         implementation: MandateOptions | None = None,
+        wall_s: float = 0.0,
     ) -> CrossEnginePipeline:
         from cuanta.application.cross_engine import CrossEnginePipeline
         from cuanta.application.run_reports import RunReports
         from cuanta.application.timing import PhaseRecorder
         from cuanta.domain.implementation import AUTO_PROFILE, ImplementationProfile
         from cuanta.domain.run_mode import classic_meta
-        from cuanta.domain.scout import parse_docs_mode
+        from cuanta.domain.scout import docs_setting, parse_docs_mode
 
         profile = (
             implementation.profile if implementation is not None else ""
         ) or self.config.implementation_profile
+        docs_mode, docs_flag = docs_setting(
+            implementation.docs if implementation is not None else "",
+            parse_docs_mode(self.config.docs_mode),
+        )
 
         reports = RunReports(self.state_workspace())
         mode = classic_meta(self.run_mode)
@@ -1562,7 +1604,9 @@ class Container:
             capsules=self.capsule_store(),
             cwd=str(self.project),
             budget_usd=budget_usd,
-            max_turns=max_turns if max_turns > 0 else self.config.max_turns,
+            max_turns=max_turns,
+            wall_s=wall_s,
+            monotonic=self.clock.monotonic,
             sandbox=sandbox,
             checkpoint=checkpoint,
             estimator=self.run_estimate,
@@ -1590,7 +1634,8 @@ class Container:
             governor=self.governor_setup(ledger) if self.config.governor else None,
             read_discipline=self.pipeline_read_discipline,
             read_max_lines=self.config.read_max_lines,
-            docs_mode=parse_docs_mode(self.config.docs_mode),
+            docs_mode=docs_mode,
+            docs_flag=docs_flag,
             timing=PhaseRecorder(self.clock, ledger),
             implementation_profile=ImplementationProfile.BALANCED.value
             if profile == AUTO_PROFILE
@@ -1651,6 +1696,7 @@ class Container:
                 run.engine != "claude"
                 or run.end_reason != "error_max_budget_usd"
                 or run.cost_usd is None
+                or run.partial
             ):
                 continue
             native = (reports.meta(run.id) or {}).get("native_cap_usd")
@@ -1780,7 +1826,7 @@ class Container:
         costs = [
             run.cost_usd
             for run in self.shared_ledger().runs(kind="init")
-            if run.cost_usd is not None and run.cost_usd > 0
+            if run.cost_usd is not None and run.cost_usd > 0 and not run.partial
         ]
         return percentile(costs, 0.5)
 
@@ -1962,6 +2008,7 @@ class Container:
                 proof=sub._bench_proof(
                     planned, arm, run, plan, root, events, spectrum.anatomy, overhead, report
                 ),
+                partial=run.partial,
             )
         finally:
             sub.close()
@@ -1984,6 +2031,7 @@ class Container:
         from cuanta.domain.bench import Condition
         from cuanta.domain.errors import DomainFailure
         from cuanta.domain.implementation import ImplementationProfile
+        from cuanta.domain.limits import LimitsMode
 
         flow = self.mandate_flow(ledger)
         mode = "auto" if condition is Condition.ROUTED else "off"
@@ -1992,6 +2040,7 @@ class Container:
             profile=ImplementationProfile.BALANCED.value,
             model=model,
             budget_usd=cap,
+            limits=LimitsMode.DEPTH.value,
             route=RouteOptions(mode=mode),
             session=session,
             temporary_copy=True,
@@ -2094,6 +2143,7 @@ class Container:
             default_engine=self.config.engine,
             default_budget=self.config.budget_usd,
             default_max_turns=self.config.max_turns,
+            limits=self.limit_settings(),
             final_suite=lambda run_id: self.final_suite(ledger, run_id),
             routing=self.mandate_routing(ledger),
             has_agents=self.has_forge_agents,
@@ -2251,6 +2301,7 @@ class Container:
         depth: str = "",
         on_start: Callable[[CrossEnginePipeline], None] | None = None,
         implementation: MandateOptions | None = None,
+        wall_s: float = 0.0,
     ) -> SandboxResult:
         from cuanta.application.cross_engine import cross_metrics
 
@@ -2259,7 +2310,7 @@ class Container:
         ) -> CrossEnginePipeline:
             sub = self.sandbox_container(copy.root, launch.env)
             pipeline = sub.cross_engine(
-                ledger, budget_usd, max_turns, launch, checkpoint, depth, implementation
+                ledger, budget_usd, max_turns, launch, checkpoint, depth, implementation, wall_s
             )
             if on_start is not None:
                 on_start(pipeline)
@@ -2269,6 +2320,7 @@ class Container:
             return {
                 "ok": report.ok,
                 "spent_usd": report.spent_usd,
+                "partial": report.partial,
                 **cross_metrics(report),
                 "steps": [
                     {
@@ -2279,6 +2331,7 @@ class Container:
                         "ok": step.ok,
                         "cost_usd": step.cost_usd,
                         "cost_source": step.cost_source,
+                        "partial": step.partial,
                         "handoff_chars": len(step.handoff),
                         **self.run_metrics(ledger, step.run_id),
                     }
@@ -2376,6 +2429,7 @@ class Container:
             self.ledger,
             keep_prompts=self.config.store_prompts,
             linger_s=linger_s,
+            verbose=self.verbose,
         )
 
     def shell(self) -> Shell:
@@ -2567,6 +2621,11 @@ class Container:
             workspace=self.state_workspace(),
             now_iso=self.clock.now_iso,
         )
+
+    def routing_pinned(self, mode: str = "") -> bool:
+        from cuanta.application.routing import policy_pinned
+
+        return policy_pinned(self.routing_policy(), mode)
 
     def routing_policy(self) -> RoutingPolicy:
         from cuanta.adapters.models.tiers import load_tier_table

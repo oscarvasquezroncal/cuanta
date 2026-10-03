@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from cuanta.adapters.engines.claude_code import ClaudeCodeEngine
+from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.application.cross_engine import request_block
 from cuanta.application.mandate_flow import MandateFlow, MandateOptions, preview_of
-from cuanta.application.route_apply import RouteOptions
+from cuanta.application.route_apply import MandateRouting, RouteOptions
 from cuanta.application.routing import RoutePlan
+from cuanta.cli.commands.mandate import team_lines
+from cuanta.domain.audit import AuditStatus
 from cuanta.domain.detection import Stack
+from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import msg
 from cuanta.domain.models import ModelEntry, Tier
 from cuanta.domain.routing import ROLES, Role, RoleRoute, RoutingPolicy
 from cuanta.tui.services import role_preview
 from tests.fakes import FakeRunner
+from tests.real_run import REAL_MODEL
 from tests.unit.test_engine_profiles import flow, launcher
 from tests.unit.test_route_apply import AGENT, routing
 
@@ -28,7 +34,7 @@ GPT_TEAM = {
 }
 
 
-def claude_team(root: Path) -> MandateFlow:
+def claude_team(root: Path, subject: MandateRouting | None = None) -> MandateFlow:
     folder = root / ".claude" / "agents"
     folder.mkdir(parents=True)
     for name in ("architecture-analyst", "python-senior", "tester", "docs-updater"):
@@ -43,7 +49,7 @@ def claude_team(root: Path) -> MandateFlow:
         str(root),
         "claude",
         0.0,
-        routing=routing(root, {}),
+        routing=subject if subject is not None else routing(root, {}),
     )
 
 
@@ -97,3 +103,51 @@ def test_the_gpt_team_preview_lists_one_model_per_launched_role() -> None:
         (Role.SENIOR, "gpt-6-sol"),
         (Role.TESTER, "gpt-6-sol"),
     ]
+
+
+def test_a_pure_team_plans_its_model_for_every_role_and_audits_clean(tmp_path: Path) -> None:
+    ledger = MemoryLedger()
+    subject = routing(tmp_path, {}, ledger)
+    service = claude_team(tmp_path, subject)
+    options = MandateOptions(
+        profile="balanced",
+        model=REAL_MODEL,
+        variant="ultracode",
+        pure=True,
+        shape="scout",
+        route=RouteOptions(mode="fixed", preset="best"),
+    )
+    prepared = service.prepare(FEATURE, 0, options, preview=True)
+    applied = prepared.applied
+    assert applied is not None
+    routed = [route for route in applied.plan.routes if route.model is not None]
+    assert Role.SCOUT in {route.role for route in routed}
+    assert {route.model.resolved for route in routed if route.model is not None} == {REAL_MODEL}
+    assert {route.reason.key for route in routed} == {"route.pure"}
+    agents = json.loads(Path(prepared.spec.agents_file).read_text(encoding="utf-8"))
+    assert "scout" in agents
+    assert {spec["model"] for spec in agents.values()} == {REAL_MODEL}
+    assert prepared.spec.pure and prepared.spec.model == REAL_MODEL
+    assert prepared.spec.unset_env == ()
+    lines = team_lines(prepared)
+    assert f"team · scout → opus (premium) · pure: --pure runs every role on {REAL_MODEL}" in lines
+    assert not any("because your policy uses" in line for line in lines)
+    ledger.add_events(
+        [
+            LedgerEvent(
+                run_id="R",
+                agent="scout",
+                kind="api_request",
+                model=REAL_MODEL,
+                ts="2026-10-02T16:12:00Z",
+            ),
+            LedgerEvent(
+                run_id="R", kind="api_request", model=REAL_MODEL, ts="2026-10-02T16:12:01Z"
+            ),
+        ]
+    )
+    rows = {row.agent: row for row in subject.audit("R", applied, ("scout",))}
+    assert rows["scout"].status is AuditStatus.MATCH and rows["main"].ok
+    assert not [row for row in rows.values() if row.status is AuditStatus.MISMATCH]
+    subject.record("R", "feature", applied)
+    assert ledger.routing_decisions() == ()

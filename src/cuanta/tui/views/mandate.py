@@ -156,13 +156,13 @@ class MandateView(Vertical):
             self.setup = setup
             self.wizard.configure(
                 setup.default_engine,
-                setup.budget_usd,
                 setup.engines,
                 setup.forge_ready,
                 setup.init_estimate,
-                max_turns=setup.max_turns,
+                limits=setup.limits,
                 implementation_profile=setup.profile,
                 implementation_variant=setup.variant,
+                role_pins=setup.pinned,
             )
             if not any(ready for _, ready in setup.engines):
                 self.app.notify(self._t("mandate.no_engine"), severity="warning")

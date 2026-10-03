@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from dev.trial import command, request_headroom
 from dev.trial_budget import TrialBudget
 
+from cuanta.domain.depth import MAX_TURNS, parse_depth
 from dev import spec as trial_spec
 from tests.dev.test_scripts import definition, write_spec
 
@@ -56,6 +57,10 @@ def test_trial_preserves_profile_variant_and_leaves_native_request_headroom(tmp_
     assert arguments[arguments.index("--variant") + 1] == "low"
     assert "--pure" in arguments
     assert float(arguments[arguments.index("--max-budget-usd") + 1]) < trial.cap
+    assert arguments[arguments.index("--max-turns") + 1] == str(MAX_TURNS[parse_depth(trial.depth)])
+    assert "--max-turns" not in command(
+        spec, replace(trial, engine="codex", profile="", pure=False, variant="", model="")
+    )
     assert request_headroom(trial) == 0.1
     assert request_headroom(replace(trial, headroom_usd=0.2)) == 0.2
     assert request_headroom(replace(trial, engine="codex")) == 0.0

@@ -371,6 +371,14 @@ def policy_reason(role: Role, tier: Tier) -> Message:
     )
 
 
+def pure_reason(entry: ModelEntry) -> Message:
+    return msg("route.pure", model=entry.resolved or entry.id)
+
+
+def pure_route(route: RoleRoute, entry: ModelEntry) -> RoleRoute:
+    return replace(route, tier=entry.tier, model=entry, reason=pure_reason(entry))
+
+
 def default_requests(
     policy: RoutingPolicy, roles: Sequence[Role] = ROLES
 ) -> tuple[RoleRequest, ...]:

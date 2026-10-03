@@ -56,6 +56,12 @@ def _event_row(event: LedgerEvent) -> tuple[Any, ...]:
     return tuple(values)
 
 
+def _run(row: sqlite3.Row) -> Run:
+    values = {name: row[name] for name in RUN_COLUMNS}
+    values["partial"] = bool(values["partial"])
+    return Run(**values)
+
+
 def _event(row: sqlite3.Row) -> LedgerEvent:
     data = {name: row[name] for name in EVENT_COLUMNS}
     success = data["success"]
@@ -200,7 +206,7 @@ class SqliteLedger:
 
     def get_run(self, run_id: str) -> Run | None:
         rows = self._query("SELECT * FROM runs WHERE id = ?", (run_id,))
-        return Run(**{name: rows[0][name] for name in RUN_COLUMNS}) if rows else None
+        return _run(rows[0]) if rows else None
 
     def runs(
         self, kind: str = "", hu_ref: str = "", limit: int = 0, since: str = ""
@@ -218,13 +224,13 @@ class SqliteLedger:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         suffix = f" LIMIT {int(limit)}" if limit else ""
         rows = self._query(f"SELECT * FROM runs {where} ORDER BY id DESC{suffix}", parameters)
-        return tuple(Run(**{name: row[name] for name in RUN_COLUMNS}) for row in rows)
+        return tuple(_run(row) for row in rows)
 
     def run_by_trace(self, trace_id: str) -> Run | None:
         if not trace_id:
             return None
         rows = self._query("SELECT * FROM runs WHERE trace_id = ? LIMIT 1", (trace_id,))
-        return Run(**{name: rows[0][name] for name in RUN_COLUMNS}) if rows else None
+        return _run(rows[0]) if rows else None
 
     def add_events(self, events: Sequence[LedgerEvent]) -> int:
         if not events:
@@ -246,6 +252,7 @@ class SqliteLedger:
             ("run_id", query.run_id),
             ("session_id", query.session_id),
             ("trace_id", query.trace_id),
+            ("kind", query.kind),
         ):
             if value:
                 clauses.append(f"{column} = ?")
@@ -487,9 +494,7 @@ class SqliteLedger:
             f"OR parent_id IN (SELECT run_id FROM forecasts {where})",
             parameters * 2,
         )
-        return forecast_actuals(
-            chosen, [Run(**{name: row[name] for name in RUN_COLUMNS}) for row in runs]
-        )
+        return forecast_actuals(chosen, [_run(row) for row in runs])
 
     def forecast(self, run_id: str) -> Forecast | None:
         rows = self._query("SELECT * FROM forecasts WHERE run_id = ?", (run_id,))
