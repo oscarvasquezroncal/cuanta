@@ -18,6 +18,10 @@ from tests.tui.test_t5_screens import render, wait_for
 from tests.tui.test_wizard import STORY, current, launched, open_wizard, tell
 
 
+def confirming(app: CuantaApp) -> bool:
+    return isinstance(app.screen, ConfirmScreen) and bool(app.screen.query("#confirm-ok"))
+
+
 def _services(**changes: object) -> FakeServices:
     services = FakeServices(
         results={SANDBOX_RUN: sandbox_result()}, handoffs={SANDBOX_RUN: sandbox_handoff()}
@@ -75,7 +79,7 @@ def test_result_shows_the_trial_and_applies_after_confirmation() -> None:
         assert "Suggested branch: feat/add-sitemap-and-robots-routes-0run" in handoff
         assert not screen.query_one("#result-trial-notes").display
         screen.query_one("#result-apply", Button).press()
-        await wait_for(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await wait_for(pilot, lambda: confirming(app))
         details = render(app.screen.query_one("#confirm-details", Static))
         assert "added  src/app/sitemap.ts" in details
         assert "3 files will be written" in render(app.screen.query_one("#confirm-body", Static))
@@ -97,7 +101,7 @@ def test_cancelling_the_summary_writes_nothing() -> None:
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
         screen = await _open(app, pilot)
         screen.query_one("#result-apply", Button).press()
-        await wait_for(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await wait_for(pilot, lambda: confirming(app))
         app.screen.query_one("#confirm-cancel", Button).press()
         await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
         await settle(app, pilot)

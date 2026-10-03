@@ -34,6 +34,10 @@ async def _open(app: CuantaApp, pilot: Pilot[None], run_id: str = RUN) -> Result
     return screen
 
 
+def confirming(app: CuantaApp) -> bool:
+    return isinstance(app.screen, ConfirmScreen) and bool(app.screen.query("#confirm-ok"))
+
+
 def test_a_pending_run_shows_its_estimate_and_can_be_accepted() -> None:
     services = FakeServices(results={RUN: sample_result()})
 
@@ -45,7 +49,7 @@ def test_a_pending_run_shows_its_estimate_and_can_be_accepted() -> None:
         assert "Waiting for your verdict" in decision
         assert screen.query_one("#result-reject").display
         screen.query_one("#result-accept", Button).press()
-        await wait_for(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await wait_for(pilot, lambda: confirming(app))
         app.screen.query_one("#confirm-ok", Button).press()
         await wait_for(pilot, lambda: services.decisions == [(RUN, "accepted")])
         await wait_for(pilot, lambda: not screen.query_one("#result-accept").display)
@@ -61,7 +65,7 @@ def test_cancelling_a_rejection_records_nothing() -> None:
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
         screen = await _open(app, pilot)
         screen.query_one("#result-reject", Button).press()
-        await wait_for(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await wait_for(pilot, lambda: confirming(app))
         assert "still counts as an attempt" in render(app.screen.query_one("#confirm-body", Static))
         app.screen.query_one("#confirm-cancel", Button).press()
         await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
@@ -77,7 +81,7 @@ def test_a_refused_decision_is_reported_and_keeps_the_buttons() -> None:
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
         screen = await _open(app, pilot)
         screen.query_one("#result-reject", Button).press()
-        await wait_for(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await wait_for(pilot, lambda: confirming(app))
         app.screen.query_one("#confirm-ok", Button).press()
         await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
         await settle(app, pilot)
@@ -177,7 +181,7 @@ def test_the_verdict_line_needs_a_button_and_decisions_refresh_home() -> None:
         before = services.calls.count("home")
         screen = await _open(app, pilot)
         screen.query_one("#result-accept", Button).press()
-        await wait_for(pilot, lambda: isinstance(app.screen, ConfirmScreen))
+        await wait_for(pilot, lambda: confirming(app))
         app.screen.query_one("#confirm-ok", Button).press()
         await wait_for(pilot, lambda: services.calls.count("home") > before)
 
