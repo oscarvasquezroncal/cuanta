@@ -189,7 +189,8 @@ in `recovery_note`; missing historical request text cannot be claimed as an exac
 The trial script previews commands and caps with `--dry-run`, selects one trial with `--only`,
 and skips acceptance commands and checks with `--skip-accept`. Live execution requires enough
 of the total cap to reserve the next trial's cap. It launches only sandbox mandates, stops
-on unknown costs or an exceeded cap, and labels reported and token-priced estimated costs.
+on unknown or partial (lower-bound) costs or an exceeded cap, and labels reported and token-priced
+estimated costs. A partial cost leaves its reservation reserved until it is reconciled.
 
 Implementation trials also preserve `profile`, `variant` and `pure`. `headroom_usd` reserves part
 of the trial cap for an in-flight request; the native launch cap is reduced by that amount and

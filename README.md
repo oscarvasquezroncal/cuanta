@@ -60,7 +60,7 @@ These are single runs on one production Next.js landing page (Windows 11, Claude
 |---|---|
 | **Spectrum** | A token map of every run: per agent, model, tool and file. Session overhead, start-up timing, cache share, planned vs. actual models, and leaks (amplification, repeated reads, raw test output, compactions). |
 | **Mandates** | Tell it what you need in your own words. cuanta extracts the questions, errors and scope, classifies the task, and launches the right shape: a single read-only context for investigations, or a Forge pipeline (analyst → senior → tester → docs) for fixes and features. |
-| **Depth and routing** | Quick, Normal or Deep sets the effort, model tiers and spend cap, with enforcement shown for the chosen engine, plus a turn limit for Claude Code mandates. Each role gets a tier (economy → premium). cuanta maps tiers to the models you actually have, then audits what really ran. |
+| **Depth and routing** | Quick, Normal or Deep sets the effort, the model tiers and the read budget. Runs have no spend cap, turn limit or time limit unless you set one (`--max-budget-usd`, `--max-turns`, `--max-wall`, `[limits]`, or the app's Limits switch). Each role gets a tier (economy → premium). cuanta maps tiers to the models you actually have, then audits what really ran. |
 | **Lean sessions** | Claude Code runs launched by cuanta start without your plugins, hooks and MCP servers, from byte-identical settings files, so the prompt prefix can be cached. |
 | **Gateway** | `cuanta test` runs your suite once, clusters failures by signature and stores full logs as capsules. Agents get one line per failure and page into details only when they need to. |
 | **Results and ledger** | Launched runs store reports and file snapshots under `.cuanta/runs/`; costs and telemetry live in the local SQLite ledger. Results show diffs, and ledger data exports to CSV or JSON. |
@@ -209,7 +209,7 @@ flowchart LR
 <details>
 <summary><b>Depth and model routing</b></summary>
 
-| Depth | Effort | Spend cap for investigations |
+| Depth | Effort | Spend cap for investigations with `[runs] limits = "depth"` |
 |---|---|---|
 | Quick | low | $0.25 |
 | Normal | medium | $0.60 |
@@ -227,7 +227,7 @@ flowchart LR
 - **cuanta only picks models your engines report as available.** Model tiers constrain routing. Spend enforcement depends on the engine; the Team step warns about limits before launch.
 - **Frontier models are opt-in.**
 - **After each run, the audit** compares the planned model with the one the telemetry saw.
-- **Claude turn limits** follow the selected depth. `cuanta mandate --max-turns` or `CUANTA_MAX_TURNS` overrides the depth limit; `--no-cap` removes only the spend cap.
+- **Limits are opt-in.** Without `--max-budget-usd`, `--max-turns`, `--max-wall` or a `[limits]` value, a run has no spend cap, no turn limit and no time limit; `[runs] limits = "depth"` restores the depth caps and turn limits for every run. See [docs/FLAGS.md](docs/FLAGS.md).
 
 </details>
 
@@ -289,7 +289,7 @@ Use `--help` on any command. Global `--plain` and `--json` control CLI output; `
 | `cuanta find <terms>` / `card <path>` / `impact <path>` / `facts [<path>] [--stale]` | Search with ranking reasons, bounded file cards, connected files and current facts or records awaiting revalidation; local by default |
 | `cuanta index --summaries` | Preview a Claude economy summary batch and its estimate; explicit `--yes` permits the shown capped spend; unchanged hashes reuse the cache |
 | `cuanta plan --for <request>` | Compile Edit, Read only, Protected and Verify sets locally; show confidence and exact writer deny rules without a model call |
-| `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--max-turns` for Claude, `--dry-run`, `--sandbox` to work in an isolated copy (`--keep` keeps the copy) |
+| `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--docs auto\|on\|off`, optional limits (`--max-budget-usd`, `--max-turns` for Claude, `--max-wall` in minutes), `--dry-run`, `--sandbox` to work in an isolated copy (`--keep` keeps the copy) |
 | `cuanta queue add \| list \| run \| clear` | Queue mandates (`add` takes the options of `cuanta mandate`) and run them back to back on a warm prefix, the same engine and model together; `run` asks first unless `--yes` and stops at the first failure unless `--keep-going`; shows "warm prefix until HH:MM" |
 | `cuanta route --dry-run` | Show the routing plan for a request |
 | `cuanta runs list \| show \| open` | Stored runs and their reports, with the estimate shown at launch, the cap, the estimate error and the outcome |
@@ -334,8 +334,8 @@ port = 4318
 
 | Variable | Purpose |
 |---|---|
-| `CUANTA_BUDGET_USD` | Default spend cap for launched runs |
-| `CUANTA_MAX_TURNS` | Claude mandate turn limit override; zero uses the depth limit |
+| `CUANTA_BUDGET_USD` | Fixed spend cap for every run (none when unset) |
+| `CUANTA_MAX_TURNS` | Fixed Claude turn limit for every run (none when unset or zero) |
 | `CUANTA_ENGINE` | Default engine |
 | `CUANTA_INSTINCT` | Instinct backend: heuristic, jev or llm |
 | `CUANTA_LANG` | App language |
@@ -360,7 +360,7 @@ The full list lives in [`docs/FLAGS.md`](docs/FLAGS.md).
 
 ## Privacy and safety
 
-- **Local first.** The ledger, reports and capsules live in `.cuanta/` inside your project, which is git-ignored. The telemetry listener only binds to `127.0.0.1`.
+- **Local first.** The ledger, reports and capsules live in `.cuanta/` inside your project, which is git-ignored. The telemetry listener only binds to `127.0.0.1`; the errors it cannot handle are written, redacted, to `.cuanta/logs/listener.log` (rotated once at 1 MiB); a background listener's own console output goes to `.cuanta/logs/listener.out.log`, rewritten at each start.
 - **Authentication and local config.** Engine runs use the official CLIs' sign-in. For Jev, cuanta reads `TYPESAFE_API_KEY` from the environment and sends it as a bearer token. It also reads Claude settings `env` values for routing; telemetry setup backs up existing engine config locally, so protect those backups as you would the originals.
 - **Consent before config changes.** Wiring telemetry edits an engine's config only after you agree, and keeps a backup. `cuanta telemetry off` restores it.
 - **Local records and engine storage.** cuanta stores reports, snapshots and usage locally. OpenCode's temporary prompt attachment is removed after a run. The official engine CLIs can retain their own sessions, prompts and operational state under their settings; cuanta's ledger policy does not disable that storage or their configured plugins and MCP servers.

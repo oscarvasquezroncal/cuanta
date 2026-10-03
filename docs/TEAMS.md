@@ -67,8 +67,8 @@ a separate tester; the writer handles requested tests. Small read sets go straig
 context pack. The pack includes project lint and TypeScript rules, and the prompt asks for several
 anchored reads together. Read-discipline hooks are off for fast runs, avoiding their measured
 per-tool overhead. Fast runs have no live governor (it steers team pipelines); they stop at the
-native budget cap and the turn rail, and the repair loop's round, time and cost limits. Balanced
-retains its existing behavior.
+limits you set (spend cap, turn limit, wall time) and at the repair loop's round, repair-time and
+cost limits. Balanced retains its existing behavior.
 
 Choose a single model with `--model` and a variant with `--variant`. The installed Claude Code
 2.1.283 catalog contains Opus 5.5 and Sonnet 5, each with low, medium, high, xhigh and max effort.
@@ -90,8 +90,11 @@ cannot prove server-side behavior or override managed policy. CC-27 records thos
 After the writer finishes, cuanta runs the project's typecheck and lint checks in parallel and
 builds when project policy or the request requires it. It compares failures against checks of the
 untouched project state, reuses the matching baseline, and sends only new errors back into the
-same session with their file and line references. Repairs stop at the configured round, elapsed
-time and cost limits. Results show remaining new errors separately from pre-existing failures.
+same session with their file and line references. Repairs stop at the configured round count, at
+the repair time (counted only while repair rounds run, from the first repair turn; a round in
+progress always finishes) and at a spend cap when one is set. Results show remaining new errors
+separately from pre-existing failures. A step cut off by a stop or an engine exit reads `stopped`,
+and the result states the stop in one line with its number.
 Large features use ordered steps; a step must verify green before the next starts, and the result
 lists each step's state. `runs.repair_rounds` and `runs.repair_timeout_s` control the repair rails.
 The optional `runs.tools` list narrows the built-in tools for fast runs, for example to `Write`
@@ -187,11 +190,15 @@ can also spawn a subagent on its own: in the recorded mixed-teams fix trial the 
 child spent about $0.84 that the ledger never saw. cuanta therefore launches and resumes every Codex
 role with `--config features.multi_agent=false` and `--config features.multi_agent_v2=false`.
 
-The app caps a GPT team with the Team step's cap. From the command line, a GPT team's whole run is
-capped by `--max-budget-usd`, else the `--depth` cap, else the `budget.usd` setting, else the normal
-depth's cap, the same cap the app gives it; `--cross-budget-usd` sets the cap explicitly. A Claude team run with `--cross-engine` keeps its $1.00
-default unless `--cross-budget-usd` is given. `--max-budget-usd` is always an upper bound on a team
-run. The dry run shows the cap.
+A team of separate launches has no spend cap unless a limit is set: the Team step's Límites/Limits
+switch in the app, `--cross-budget-usd` or `--max-budget-usd` on the command line, `[limits]
+budget_usd`, or `[runs] limits = "depth"` (see [FLAGS.md](FLAGS.md)). `--max-budget-usd` is always an
+upper bound on a team run. A `--max-wall` time limit is shared by every role of the team, its
+repairs, resumes and rotations; a launch due after the deadline is not started, a repair or a Codex
+finish resume cut by the wall runs no further verification, and the team ends partial with the
+time-limit line. The dry run shows the limits line, and the role cards (console and
+app) hide the spend and turn guarantee rows that do not apply. Partial role costs and the total are
+labelled `(partial)`, and `cuanta runs show` of the team gives the team's stop.
 
 Stop, in the app's pipeline screen, ends a team run: the running role's process is stopped and no
 later role starts. A stop while cuanta runs its checks between roles ends the running check's process
@@ -349,7 +356,14 @@ exploration, writing, verification, handoff), each role's forecast and stop rule
 - **P50 and P90.** The P50 adds each role's forecast. The P90 is the P50 times the 90th percentile of
   actual/P50 once five runs of the same provider and type have a known cost; before that it is 1.6
   times the P50.
-- **Margin and verdict.** The margin is the cap minus the P90. A forecast is infeasible when the
+- **The request itself.** The request's own text (every field, the evidence included, about four
+  bytes per token) joins the start of each launch that receives it: one session, the native main
+  session, and every role of separate launches; native subagents only get a dispatch. A request with
+  two or more numbered phases or steps (`## Fase 1 —`, `**Phase 2:**`, `Paso 3:`) adds the line
+  "This mandate has 5 phases; the forecast covers one change". The line never changes the price.
+  `--json` adds `request_tokens` and `parts` to the envelope.
+- **Margin and verdict.** The margin is the cap minus the P90. Without a spend cap the line says
+  "no cap" and has no margin. A forecast is infeasible when the
   P50 is over the cap, tight when the P90 is over the cap or within 15% of it, and comfortable
   otherwise. Tight and infeasible forecasts show the cheapest change first: a shallower depth, a
   cheaper model for the costliest role, a narrower WHERE, or the scout shape.
@@ -400,11 +414,18 @@ premium tokens on the change, not on exploring.
   investigations, with `--simple`, on opencode and with `--route off`, where no scout could run.
   The dry run and the Team step say which shape runs and why, and `--json` adds a `shape` object
   (`pinned` is true when a pin chose it). The app's run keeps the shape its Team step showed.
+- **Pure.** With `--pure`, every routed role runs the forced model, the scout included, and the
+  card says so ("pure: --pure runs every role on claude-opus-5-5"). A pure model of the premium tier
+  or higher keeps the pipeline without a scout, since a scout on the same model saves nothing; the
+  card says so, and `--shape scout` or `--role-model scout=...` still asks for one.
 - **Scout.** The `scout` role, on the economy tier (`haiku`, `gpt-6-luna`); pin it with
   `--role-model scout=...`. It is read-only (Read, Grep and Glob on
   Claude; the `read-only` sandbox on Codex) and runs with the index tools and the read discipline of
   the other team roles. It ends with an evidence pack in JSON: `file:line` facts, the few snippets
   the change needs, risks, test links and the confirmed edit set, the files the senior may edit.
+- **Its start.** The scout's agent definition carries cuanta's context pack, with the files and
+  lines the request names (`path:line`, `path:start-end`, from any field, the evidence included)
+  first; the launch card warns about anchors that did not resolve.
 - **The pack.** cuanta drops facts and snippets whose lines are not in the working copy and paths
   that leave the project, replaces each snippet's text with the lines of its range in the working
   copy, so the senior never reads a snippet the scout made up, caps each section (40 facts, 12 snippets of 40 lines, 8 risks, 12 tests)
@@ -441,12 +462,22 @@ premium tokens on the change, not on exploring.
 
 ### Docs is optional
 
-The docs role runs only when the request asks for docs: one of docs, documentation, documentación,
-documentar, documenta, documente, documenten, README, CHANGELOG, guide, guides, guía, guías,
-docstring, docstrings, release notes or notas de la versión, as whole words in any case and with or
-without accents, in its WHAT, WHERE or TESTS. WHY, CONSTRAINTS and OUT OF SCOPE are not read, so
+The docs role runs only when the request asks for docs. cuanta reads WHAT, WHERE, TESTS and WHY (the
+evidence, where a long mandate puts its docs phase), in that order, and tries three rules in each: the
+name of the docs agent (`docs-updater`), a docs path (`docs/` or `doc/` in a path, `CHANGELOG.*` or
+`README.*`; the path starts with the docs folder), then a docs word, which in WHY counts only on a
+heading, a numbered phase or step line or a bold line: docs, documentation, documentación, documentar, documenta, documente,
+documenten, README, CHANGELOG, guide, guides, guía, guías, docstring, docstrings, release notes or
+notas de la versión, as whole words in any case and with or without accents. Links are ignored, so a
+`https://docs...` URL in a pasted log does not count, log lines never count, and a negated mention
+("no actualices la documentación") never turns docs on. CONSTRAINTS and OUT OF SCOPE are not read, so
 "keep the CHANGELOG in sync" in CONSTRAINTS leaves docs off, and the bare word "document" does not
-count (`document.querySelector`). It never runs in trials, the isolated copies of `--sandbox`.
+count (`document.querySelector`). The card says which rule matched, for example "Docs: on, the
+request names the docs-updater agent in the evidence", and the result repeats it ("docs on (agent:
+docs-updater in the evidence)"). It never runs in trials, the isolated copies of `--sandbox`.
+`--docs on|off|auto` chooses for one run, over `runs.docs`; `--docs off` together with a docs pin is
+refused, and a pin still turns docs on under `--docs auto`. The card says "Docs: on (--docs on)" or
+"Docs: off (--docs off)".
 Pinning the docs role (`--role-model docs=...`) asks for it: docs then runs, in trials and with
 `runs.docs = off` too. The start of the run says which applies. `runs.docs = on` runs docs always,
 as before; `off` never, unless pinned.

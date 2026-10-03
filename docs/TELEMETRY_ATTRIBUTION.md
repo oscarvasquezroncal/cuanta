@@ -115,3 +115,40 @@ The ratio sums useful/read counts from covered runs only; absent reads/reports s
 Preloaded packs do not count as observed source calls. Phase prices do not replace billed run
 costs. Historical numerical reports without these fields load with conservative empty defaults;
 raw delivered answer text is transient for acceptance and is absent from bench numerical JSON.
+
+## Runs that end before their result
+
+When the engine is halted, crashes or is interrupted before its result event, the run's cost and
+turns come from what was received. The run's `api_request` events (telemetry) are used first,
+each with its own reported cost when present and the price table otherwise; without telemetry,
+the stream's assistant usage is priced instead and stored as one `result_usage` row per model.
+Turns are the distinct main-thread assistant message ids (subagent requests, which carry a
+`parent_tool_use_id`, count toward cost only). The run is marked `partial`: totals show it as a
+lower bound (≥), and it never calibrates forecasts, estimate errors, role history or cap margins.
+Stream output tokens are message-start snapshots, so a stream-priced partial cost undercounts.
+
+## Records the listener cannot read
+
+A log record, metric point or span that the mapper cannot read is dropped and replaced by a
+`telemetry_unreadable` event (source `cuanta`, the run id from `cuanta.run_id`, raw holding only
+the record name and the error class). The run result counts these events in one Note, `/health`
+reports `unreadable`, and the traceback goes to `.cuanta/logs/listener.log`. Redaction runs on
+values, so JSON stored inside a string value (such as `tool_input`) is parsed, redacted and stored
+again in compact form.
+
+Codex and OpenCode runs cut by a wall limit or a user stop before their turn completed are
+partial too and are priced from the received telemetry (`sse_event:response.completed` rows for
+Codex); zero-token usage rows are ignored, so a cut run with no usage shows n/a, never $0.
+Governor and budget stops keep their own accounting.
+
+`/health` reports `unreadable` (records the mapper could not read) and `dropped` (events the
+ledger could not store). An event the ledger cannot store becomes a `telemetry_unreadable` marker
+with the error class; non-finite numbers are stored as the strings `NaN`, `Infinity` and
+`-Infinity`, and integers outside the signed 64-bit range read as 0 while raw keeps the original.
+A run served by an already-running background listener counts its markers right after the engine
+exits, without the linger and drain of a listener cuanta starts itself, so a record lost in the
+engine's final export can be missing from the Note.
+
+Decoding is guarded per record as well: a log record, metric point or span whose numbers overflow
+while decoding becomes a `telemetry_unreadable` marker for its run and the rest of the POST lands
+with 200; only a payload whose resource structure cannot be read gets 400.
