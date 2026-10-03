@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from cuanta.cli.runtime import Session, execute
+from cuanta.cli.runtime import Session, execute, interrupted
 
 if TYPE_CHECKING:
     from cuanta.application.loop import LoopReport
@@ -48,6 +48,7 @@ def _loop(
     from cuanta.application.loop import FixLoop, FixStep, TestStep
     from cuanta.bootstrap import Container
     from cuanta.cli.commands.mandate import MandateArgs, run_mandate_core
+    from cuanta.domain.costs import sum_costs
     from cuanta.domain.errors import NotAvailable
     from cuanta.domain.ledger import Run
     from cuanta.domain.loop import LOOP_OUT_OF_SCOPE, loop_gate
@@ -66,6 +67,7 @@ def _loop(
     ledger.add_run(Run(id=loop_id, kind="loop", started_at=started, status="running"))
     budget = budget_usd or container.config.budget_usd
     gateway = container.gateway(ledger)
+    spent: list[float | None] = []
 
     def run_tests(run_id: str) -> TestStep:
         report = gateway.run(
@@ -86,7 +88,21 @@ def _loop(
             max_wall=limits[2],
         )
         report = run_mandate_core(session, container, args, verdict=False)
+        spent.append(report.run.cost_usd)
         return FixStep(report.run.id, report.ok, report.run.cost_usd)
+
+    def settle(status: str) -> None:
+        ledger.update_run(
+            Run(
+                loop_id,
+                "loop",
+                started_at=started,
+                ended_at=container.clock.now_iso(),
+                status=status,
+                cost_usd=sum_costs(spent),
+                partial=True,
+            )
+        )
 
     try:
         outcome = FixLoop(run_tests, fix, session.presenter).run(loop_id, max_iterations, budget)
@@ -100,6 +116,12 @@ def _loop(
                 cost_usd=outcome.spent_usd,
             )
         )
+    except KeyboardInterrupt as interrupt:
+        settle("interrupted")
+        raise interrupted(interrupt, container.recorded_run()) from interrupt
+    except Exception:
+        settle("failed")
+        raise
     finally:
         container.close()
     return _document(outcome)
@@ -162,4 +184,9 @@ def _document(outcome: "LoopReport") -> "Document":
             for item in outcome.iterations
         ],
     }
-    return Document(blocks=tuple(blocks), payload=payload, exit_code=0 if outcome.ok else 1)
+    return Document(
+        blocks=tuple(blocks),
+        payload=payload,
+        exit_code=0 if outcome.ok else 1,
+        recorded_run=outcome.loop_id,
+    )

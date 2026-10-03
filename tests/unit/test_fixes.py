@@ -9,7 +9,9 @@ from cuanta.domain.fixes import FixAction, FixKind, classify
     ("command", "kind", "action", "argument"),
     [
         ("cuanta init", FixKind.OPEN, FixAction.INIT, ""),
+        ("cuanta init --template", FixKind.RUN, FixAction.TEMPLATE, ""),
         ("cuanta refresh", FixKind.OPEN, FixAction.INIT, ""),
+        ("cuanta refresh --template", FixKind.OPEN, FixAction.INIT, ""),
         ("cuanta test", FixKind.RUN, FixAction.TESTS, ""),
         ("cuanta telemetry on --engine codex", FixKind.RUN, FixAction.TELEMETRY_ON, "codex"),
         ("cuanta telemetry on", FixKind.RUN, FixAction.TELEMETRY_ON, "all"),

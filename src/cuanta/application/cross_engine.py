@@ -83,6 +83,7 @@ from cuanta.domain.mandate import (
     INVESTIGATION,
     MandateRequest,
     clip_evidence,
+    with_defaults,
 )
 from cuanta.domain.messages import Message, message_payload, msg
 from cuanta.domain.pack import ContextPack
@@ -317,14 +318,15 @@ def cross_metrics(report: CrossReport) -> dict[str, object]:
 
 
 def request_block(request: MandateRequest) -> str:
+    filled = with_defaults(request)
     lines = [
-        f"TYPE: {request.type}",
-        f"WHAT: {request.what}",
-        f"WHY / EVIDENCE: {request.why}",
-        f"WHERE: {request.where or '-'}",
-        f"CONSTRAINTS: {request.constraints or '-'}",
-        f"TESTS: {request.tests or '-'}",
-        f"OUT OF SCOPE: {request.out_of_scope}",
+        f"TYPE: {filled.type}",
+        f"WHAT: {filled.what}",
+        f"WHY / EVIDENCE: {filled.why}",
+        f"WHERE: {filled.where}",
+        f"CONSTRAINTS: {filled.constraints}",
+        f"TESTS: {filled.tests}",
+        f"OUT OF SCOPE: {filled.out_of_scope}",
     ]
     return "\n".join(lines)
 
@@ -628,6 +630,7 @@ class CrossEnginePipeline:
         self._new_files = new_files
         self.completed: list[CrossStep] = []
         self.current = ""
+        self._root = ""
         self._active: Engine | None = None
         self._halted = False
         self._launchers = launchers
@@ -678,6 +681,14 @@ class CrossEnginePipeline:
 
     def _started(self, run_id: str) -> None:
         self.current = run_id
+        self._root = self._root or run_id
+
+    def _save_interrupted(self) -> None:
+        if not self._root or self._save_metrics is None:
+            return
+        state = CompletionState.PARTIAL if self.completed else CompletionState.FAILED
+        stopped = message_payload(msg("stop.interrupted"))
+        self._save_metrics(self._root, {"completion": state.value, "stopped": stopped})
 
     def _isolated(self, spec: LaunchSpec, engine: str) -> LaunchSpec:
         sandbox = self._sandbox
@@ -807,6 +818,7 @@ class CrossEnginePipeline:
         self._timing.reset()
         self._timing_run = ""
         self._timing_role = ""
+        self._root = ""
         self._lost_telemetry = 0
         self._deadline = (
             self._monotonic() + self._wall_s
@@ -820,23 +832,27 @@ class CrossEnginePipeline:
         with self._timing.measure("forecast_plan"):
             protection = self._change_plan(request) if self._change_plan is not None else None
         before = self._snap()
-        result = self._run(request, plan, progress, protection, before)
-        self._timing_run = result.steps[0].run_id if result.steps else ""
-        self._timing_role = ""
-        after = self._snap()
-        outputs = set(result.verification_outputs)
-        changed = tuple(path for path in _diff(before, after) if path not in outputs)
-        violated = protection is not None and any(guarded(path, protection) for path in changed)
-        state = CompletionState.FAILED if violated else result.state
-        result = replace(
-            result,
-            ok=state in {CompletionState.COMPLETE, CompletionState.COMPLETE_SKIPPED},
-            state=state,
-            change_plan=protection,
-            changed_files=changed,
-        )
-        if result.steps and self._save_metrics is not None:
-            self._save_metrics(result.steps[0].run_id, cross_metrics(result))
+        try:
+            result = self._run(request, plan, progress, protection, before)
+            self._timing_run = result.steps[0].run_id if result.steps else ""
+            self._timing_role = ""
+            after = self._snap()
+            outputs = set(result.verification_outputs)
+            changed = tuple(path for path in _diff(before, after) if path not in outputs)
+            violated = protection is not None and any(guarded(path, protection) for path in changed)
+            state = CompletionState.FAILED if violated else result.state
+            result = replace(
+                result,
+                ok=state in {CompletionState.COMPLETE, CompletionState.COMPLETE_SKIPPED},
+                state=state,
+                change_plan=protection,
+                changed_files=changed,
+            )
+            if result.steps and self._save_metrics is not None:
+                self._save_metrics(result.steps[0].run_id, cross_metrics(result))
+        except KeyboardInterrupt:
+            self._save_interrupted()
+            raise
         if result.steps and self._learn_run is not None:
             self._learn_run(result.steps[0].run_id)
         if result.steps:

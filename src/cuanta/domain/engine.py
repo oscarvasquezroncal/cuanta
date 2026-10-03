@@ -12,6 +12,7 @@ COST_UNKNOWN_SUBTYPE = "error_cost_unknown"
 GOVERNOR_STOP_SUBTYPE = "error_governor_stop"
 WALL_LIMIT_SUBTYPE = "error_max_wall"
 CANCELLED_SUBTYPE = "cancelled"
+RAISED_SUBTYPE = "error_raised"
 
 
 COMMAND_LINE_LIMIT = 30_000

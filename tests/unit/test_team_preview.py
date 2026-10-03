@@ -151,3 +151,19 @@ def test_a_pure_team_plans_its_model_for_every_role_and_audits_clean(tmp_path: P
     assert not [row for row in rows.values() if row.status is AuditStatus.MISMATCH]
     subject.record("R", "feature", applied)
     assert ledger.routing_decisions() == ()
+
+
+def test_a_team_prompt_fills_unstated_fields_like_the_native_prompt() -> None:
+    block = request_block(MandateRequest("feature", "Add a badge")).splitlines()
+    assert block == [
+        "TYPE: feature",
+        "WHAT: Add a badge",
+        "WHY / EVIDENCE: none stated",
+        "WHERE: unknown",
+        "CONSTRAINTS: none stated",
+        "TESTS: none stated",
+        "OUT OF SCOPE: none stated",
+    ]
+    stated = request_block(MandateRequest("bug", "Fix it", "Traceback", "src/a.py", "same API"))
+    assert "TESTS: regression fixture for the pasted error" in stated
+    assert "WHERE: src/a.py" in stated and "CONSTRAINTS: same API" in stated

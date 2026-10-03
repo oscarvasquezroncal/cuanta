@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from cuanta.cli.runtime import Session, execute
+from cuanta.cli.runtime import Session, execute, interrupted
 
 if TYPE_CHECKING:
     from cuanta.cli.document import Block, Document
@@ -28,6 +28,13 @@ def init_command(
     skip_telemetry: Annotated[
         bool, typer.Option("--skip-telemetry", help="Skip telemetry wiring.")
     ] = False,
+    template: Annotated[
+        bool,
+        typer.Option(
+            "--template",
+            help="Only write a missing docs/MANDATE_TEMPLATE.md from the vendored Forge copy.",
+        ),
+    ] = False,
 ) -> None:
 
     def action(session: Session) -> "Document":
@@ -36,6 +43,8 @@ def init_command(
             from cuanta.domain.errors import EnvironmentFailure
 
             raise EnvironmentFailure(f"not a folder: {target}")
+        if template:
+            return _template(replace(session, project=target), dry_run)
         return _run(
             replace(session, project=target),
             dry_run,
@@ -56,7 +65,7 @@ def _run(
     skip_forge: bool,
     skip_telemetry: bool,
 ) -> "Document":
-    from cuanta.application.init_project import InitOptions
+    from cuanta.application.init_project import InitOptions, can_resume
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Document, Hint, KeyValues, Line, MascotBlock, Panel
     from cuanta.cli.output import OutputMode
@@ -81,6 +90,10 @@ def _run(
         report = use_case.run(
             InitOptions(dry_run=dry_run, skip_forge=skip_forge, skip_telemetry=skip_telemetry)
         )
+        recorded = container.recorded_run()
+    except KeyboardInterrupt as interrupt:
+        resumable = not dry_run and can_resume(container.workspace())
+        raise interrupted(interrupt, container.recorded_run(), resumable) from interrupt
     finally:
         container.close()
     context = report.context
@@ -142,7 +155,36 @@ def _run(
         "denials": context.denials,
         "next": next_hint,
     }
-    return Document(blocks=tuple(blocks), payload=payload, exit_code=0 if ok else 1)
+    return Document(
+        blocks=tuple(blocks), payload=payload, exit_code=0 if ok else 1, recorded_run=recorded
+    )
+
+
+def _template(session: Session, dry_run: bool) -> "Document":
+    from cuanta.bootstrap import Container
+    from cuanta.cli.document import Document, Line
+    from cuanta.domain.forge_template import MANDATE_TEMPLATE, TemplateState
+    from cuanta.domain.messages import english
+    from cuanta.domain.progress import Status
+
+    container = Container.for_project(session.project, verbose=session.options.verbose)
+    try:
+        outcome = container.mandate_templates().write(dry_run)
+    finally:
+        container.close()
+    message = english(outcome.message)
+    ready = outcome.written or outcome.state is TemplateState.READY
+    status = Status.OK if ready else Status.INFO
+    payload = {
+        "dry_run": dry_run,
+        "template": {
+            "path": MANDATE_TEMPLATE,
+            "state": outcome.state.value,
+            "written": outcome.written,
+            "message": message,
+        },
+    }
+    return Document(blocks=(Line(message, status),), payload=payload)
 
 
 def _telemetry_consent(session: Session, skipped: bool) -> bool:

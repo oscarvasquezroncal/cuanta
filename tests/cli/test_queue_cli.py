@@ -95,7 +95,7 @@ def test_queue_add_stores_the_mandate_options_and_refuses_bad_ones(
     assert stored(tmp_path)[0]["args"] == asked("Explain the cart", "--model", "opus")
     for bad, message in (
         (["--bogus"], "No such option: --bogus"),
-        (["--type", "bug", "--what", "Fix it"], "missing required fields: --why, --out-of-scope"),
+        (["--type", "bug"], "missing required fields: --what"),
         ([*asked("Keep"), "--keep"], "--keep only applies to --sandbox runs"),
         ([*asked("Shape"), "--shape", "round"], "--shape"),
         ([*asked("Evidence"), "--evidence", str(tmp_path / "absent.log")], "evidence file"),
@@ -110,6 +110,9 @@ def test_queue_add_stores_the_mandate_options_and_refuses_bad_ones(
         error = payload(refused)["error"]
         assert isinstance(error, dict) and message in str(error["message"]), bad
     assert [item["id"] for item in stored(tmp_path)] == ["q1"]
+    accepted = queue(tmp_path, "add", "--type", "bug", "--what", "Fix it", "--json")
+    assert accepted.exit_code == 0, accepted.stdout
+    assert [item["id"] for item in stored(tmp_path)] == ["q1", "q2"]
     assert not launches(fake_runner)
 
 
@@ -361,6 +364,26 @@ def test_queue_run_stops_at_the_first_failure_unless_keep_going(
     assert "1 left in the queue" in text
     assert len(launches(fake_runner)) == 4
     assert [item["id"] for item in stored(tmp_path)] == ["q1"]
+
+
+def test_queue_run_tells_the_notes_of_each_mandate_file_before_it_launches(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    untyped = tmp_path / "m.md"
+    untyped.write_text("Add a badge to the cart\n\nThe cart shows no count.\n", encoding="utf-8")
+    labelled = tmp_path / "b.md"
+    labelled.write_text("TYPE: bug\nWHAT: Fix the cart total\n", encoding="utf-8")
+    for path in (untyped, labelled):
+        assert queue(tmp_path, "add", "-f", str(path), "--simple").exit_code == 0
+    fake_runner.queued["claude -p"] = [ok_stream(), ok_stream()]
+    ran = queue(tmp_path, "run", "--yes", "--plain")
+    assert ran.exit_code == 0, ran.stdout
+    shown = " ".join(ran.stdout.split())
+    first, second = shown.index("queue q1"), shown.index("queue q2")
+    untold = shown.index("type not stated: feature; use -t/--type")
+    told = shown.index("fields from the file's labels: type, what")
+    assert first < untold < second < told
+    assert len(launches(fake_runner)) == 2
 
 
 def test_an_invalid_queued_mandate_fails_without_a_launch(

@@ -25,9 +25,10 @@ from cuanta.application.route_apply import RouteOptions
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.change_plan import ChangePlan, apply_overrides, move_plan, path_matches
-from cuanta.domain.claude_variants import VARIANTS
+from cuanta.domain.claude_variants import VARIANTS, resolve_variant
 from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile
 from cuanta.domain.drafts import Draft
+from cuanta.domain.errors import DomainFailure
 from cuanta.domain.guarantees import (
     Guarantee,
     GuaranteeStatus,
@@ -52,6 +53,7 @@ from cuanta.domain.limits import (
 )
 from cuanta.domain.mandate import (
     DELIVERABLES,
+    ESSENTIAL_FIELDS,
     INVESTIGATION,
     MandateRequest,
     MandateType,
@@ -60,14 +62,16 @@ from cuanta.domain.mandate import (
     missing_fields,
     second_field,
 )
+from cuanta.domain.mandate_file import LonePath, NotText, lone_path, trimmed, typed_path
 from cuanta.domain.messages import Message as Said
 from cuanta.domain.messages import msg
 from cuanta.domain.models import ModelEntry
-from cuanta.domain.routing import ENGINE_ORDER, Provider
+from cuanta.domain.progress import Status
+from cuanta.domain.routing import ENGINE_ORDER, Provider, Role
 from cuanta.domain.scout import DocsChoice, DocsReason, eligible
 from cuanta.domain.team import ProviderAdvice, RoleCard, advice_message, runs_per_role
 from cuanta.tui.cache_text import prefix_content
-from cuanta.tui.fmt import money
+from cuanta.tui.fmt import grouped, money
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.services import Services
 from cuanta.tui.widgets.flow import FlowRow
@@ -88,6 +92,12 @@ AUTOSAVE_S = 1.5
 NARROW_STEPS = 96
 AUTO_MODEL = ""
 BY_KIND = "auto"
+PLAN_MODEL = "plan"
+DEPTH_EFFORT = "depth"
+NO_CHOICE = frozenset({BY_KIND, PLAN_MODEL, DEPTH_EFFORT})
+FAST_OUTPUT = frozenset(name for name in VARIANTS if name.partition("-")[0] == "fast")
+MODEL_SELECT = "#wiz-implementation-model"
+VARIANT_SELECT = "#wiz-implementation-variant"
 MODEL_LABELS = {
     "claude-opus-5-5": "wizard.implementation_opus",
     "claude-sonnet-5": "wizard.implementation_sonnet",
@@ -95,11 +105,20 @@ MODEL_LABELS = {
 NAV_KEYS = ("wizard.next", "wizard.understand", "wizard.launch", "wizard.back")
 NAV_PADDING = 6
 PLAN_ROLES = ("edit", "read", "guard")
+PROFILES = (AUTO_PROFILE, ImplementationProfile.BALANCED.value, ImplementationProfile.FAST.value)
 PLAN_DELAY_S = 0.15
 
 
 def new_draft_id() -> str:
     return f"d{secrets.token_hex(6)}"
+
+
+def fast_output_model(model: str) -> bool:
+    try:
+        resolve_variant("fast", model)
+    except DomainFailure:
+        return False
+    return True
 
 
 LIMIT_INPUTS = ("wiz-limit-budget", "wiz-limit-turns", "wiz-limit-wall")
@@ -182,8 +201,8 @@ class MandateWizard(Vertical):
         self.limits_on = False
         self.limit_settings = LimitSettings()
         self.implementation_profile = ""
-        self.implementation_variant = ""
-        self.implementation_model = ""
+        self._preferred_variant = ""
+        self._configured_variant = ""
         self.sandbox = False
         self.advice = ""
         self.understanding: Understanding | None = None
@@ -211,6 +230,14 @@ class MandateWizard(Vertical):
         self._change_timer: Timer | None = None
         self._change_lock = asyncio.Lock()
         self._limits_timer: Timer | None = None
+        self.pure = False
+        self.document_mode = False
+        self._loaded = ""
+        self._loaded_path = ""
+        self._attached: dict[str, str] = {}
+        self._handed: tuple[str, ...] = ()
+        self._offered_fast = False
+        self._offered_variants = (False, False)
 
     def compose(self) -> ComposeResult:
         t = self._t
@@ -261,12 +288,16 @@ class MandateWizard(Vertical):
         yield Static(t("wizard.tell_title"), classes="card-title")
         yield Static(Content.styled(t("wizard.tell_help"), "$text-muted"), id="wiz-tell-help")
         yield TextArea(id="wiz-story", soft_wrap=True, show_line_numbers=False)
+        with Horizontal(id="wiz-file-row"):
+            yield Input(placeholder=t("wizard.file_placeholder"), id="wiz-file")
+            yield Button(t("wizard.load_file"), id="wiz-load", compact=True)
+        yield Static("", id="wiz-file-note")
         with FlowRow(id="story-chips", classes="chips"):
+            yield Button(t("wizard.understand"), id="wiz-understand", classes="chip", compact=True)
             yield Button(
                 t("wizard.another_example"), id="wiz-example", classes="chip", compact=True
             )
             yield Button(t("wizard.reuse_last"), id="wiz-reuse", classes="chip", compact=True)
-            yield Button(t("wizard.understand"), id="wiz-understand", classes="chip", compact=True)
         yield Static(Content.styled(t("wizard.drafts_title"), "$text-muted"), id="drafts-title")
         yield FlowRow(id="draft-chips", classes="chips")
 
@@ -289,6 +320,9 @@ class MandateWizard(Vertical):
         with FlowRow(classes="chips", id="wiz-evidence-actions"):
             yield Button(t("mandate.attach"), id="wiz-attach", classes="chip", compact=True)
             yield Button(t("mandate.last_failure"), id="wiz-failure", classes="chip", compact=True)
+        with Vertical(id="wiz-body-field"):
+            yield Label(t("wizard.body"))
+            yield TextArea(id="wiz-body", soft_wrap=True, show_line_numbers=False)
         with Vertical(id="wiz-deliverable-field"):
             yield Label(t("wizard.deliverable"))
             yield Select(
@@ -353,7 +387,7 @@ class MandateWizard(Vertical):
                 )
         yield Static("", id="wiz-provider-note")
         with FlowRow(id="implementation-row", classes="chips"):
-            for name in ("balanced", "fast"):
+            for name in PROFILES:
                 yield Button(
                     t(f"wizard.profile_{name}"),
                     id=f"implementation-{name}",
@@ -361,28 +395,27 @@ class MandateWizard(Vertical):
                     compact=True,
                 )
         with Vertical(id="implementation-options", classes="wiz-section"):
-            yield Label(t("wizard.implementation_model"))
+            yield Label(
+                t("wizard.implementation_model_balanced"), id="wiz-implementation-model-label"
+            )
             yield Select(
-                [
-                    (t("wizard.implementation_by_kind"), BY_KIND),
-                    (t(MODEL_LABELS["claude-opus-5-5"]), "claude-opus-5-5"),
-                    (t(MODEL_LABELS["claude-sonnet-5"]), "claude-sonnet-5"),
-                ],
+                self._model_choices(False),
                 allow_blank=False,
-                value=BY_KIND,
+                value=PLAN_MODEL,
                 id="wiz-implementation-model",
             )
             yield Label(t("wizard.implementation_variant"))
             yield Select(
-                [
-                    (t("wizard.implementation_by_kind"), BY_KIND),
-                    *((t(f"wizard.variant_{name}"), name) for name in VARIANTS),
-                ],
+                self._variant_choices(False, False),
                 allow_blank=False,
-                value=BY_KIND,
+                value=DEPTH_EFFORT,
                 id="wiz-implementation-variant",
             )
-            yield Static(t("wizard.implementation_pure"))
+            yield Static(t("wizard.implementation_pure"), id="wiz-implementation-pure-note")
+            with Horizontal(id="wiz-pure-row"):
+                yield Checkbox(
+                    t("wizard.implementation_pure_balanced"), False, id="wiz-pure", compact=True
+                )
         yield Static("", id="wiz-verify-note")
         with Horizontal(id="sandbox-row"):
             yield Checkbox(t("wizard.sandbox"), False, id="wiz-sandbox", compact=True)
@@ -417,6 +450,25 @@ class MandateWizard(Vertical):
         with FlowRow(id="team-actions", classes="chips"):
             yield Button(t("wizard.preview"), id="wiz-team-preview", classes="chip", compact=True)
 
+    def _model_choices(self, fast: bool) -> list[tuple[str, str]]:
+        t = self._t
+        first = (
+            (t("wizard.implementation_by_kind"), BY_KIND)
+            if fast
+            else (t("wizard.keep_plan"), PLAN_MODEL)
+        )
+        return [first, *((t(label), model) for model, label in MODEL_LABELS.items())]
+
+    def _variant_choices(self, fast: bool, fast_output: bool) -> list[tuple[str, str]]:
+        t = self._t
+        first = (
+            (t("wizard.implementation_by_kind"), BY_KIND)
+            if fast
+            else (t("wizard.variant_depth"), DEPTH_EFFORT)
+        )
+        names = (name for name in VARIANTS if fast_output or name not in FAST_OUTPUT)
+        return [first, *((t(f"wizard.variant_{name}"), name) for name in names)]
+
     def on_mount(self) -> None:
         with suppress(NoMatches):
             self._start()
@@ -428,7 +480,7 @@ class MandateWizard(Vertical):
         self.query_one("#forge-gate").display = False
         self.query_one("#preview-card").display = False
         self.query_one("#wiz-verify-note").display = False
-        self.query_one("#implementation-options").display = False
+        self.query_one("#wiz-file-note").display = False
         self.query_one("#run-limits-fields").display = False
         self.query_one("#team-cards").display = False
         self.query_one("#team-simple-note").display = False
@@ -472,9 +524,11 @@ class MandateWizard(Vertical):
         self.limit_settings = limits or LimitSettings()
         self._apply_limit_settings()
         self.implementation_profile = implementation_profile
-        self.implementation_variant = implementation_variant
-        if implementation_variant in VARIANTS:
-            self.query_one("#wiz-implementation-variant", Select).value = implementation_variant
+        self._preferred_variant = (
+            implementation_variant if implementation_variant in VARIANTS else ""
+        )
+        self._configured_variant = self._preferred_variant
+        self._offer_choices(force=True)
         if implementation_profile == "fast":
             self.choose_implementation(implementation_profile)
         self.forge_ready = forge_ready
@@ -489,10 +543,21 @@ class MandateWizard(Vertical):
 
     def set_layout(self, name: str) -> None:
         self.layout_name = name if name in LAYOUTS else GUIDED
+        self._order_tell()
         self._paint()
         if self.one_page and self.understanding is not None:
             self.refresh_change_plan()
             self.refresh_team()
+
+    def _order_tell(self) -> None:
+        tell = self.query_one("#step-tell")
+        chips = self.query_one("#story-chips")
+        row = self.query_one("#wiz-file-row")
+        first = tell.children.index(chips) < tell.children.index(row)
+        if self.one_page and not first:
+            tell.move_child(chips, before=row)
+        elif not self.one_page and first:
+            tell.move_child(chips, after=self.query_one("#wiz-file-note"))
 
     @property
     def one_page(self) -> bool:
@@ -505,6 +570,10 @@ class MandateWizard(Vertical):
     @property
     def story(self) -> str:
         return self.query_one("#wiz-story", TextArea).text.strip()
+
+    @property
+    def file_path(self) -> str:
+        return typed_path(self.query_one("#wiz-file", Input).value)
 
     def choose_simple(self) -> None:
         self.simple = True
@@ -519,10 +588,12 @@ class MandateWizard(Vertical):
         if kind == INVESTIGATION:
             chosen = self.query_one("#wiz-deliverable", Select).value
             tests = deliverable_line(chosen if isinstance(chosen, str) else "report")
+        body = trimmed(self.query_one("#wiz-body", TextArea).text) if self.document_mode else ""
+        evidence = (second if target == "why" else "", body)
         return MandateRequest(
             type=kind,
             what=self.query_one("#wiz-what", TextArea).text.strip(),
-            why=second if target == "why" else "",
+            why="\n\n".join(part for part in evidence if part),
             where=self.query_one("#wiz-where", Input).value.strip(),
             constraints=(
                 second
@@ -552,6 +623,7 @@ class MandateWizard(Vertical):
             target != "constraints" and kind != INVESTIGATION
         )
         self.query_one("#limits-tests").display = target != "tests" and kind != INVESTIGATION
+        self.query_one("#wiz-body-field").display = self.document_mode
         self.show_missing()
 
     def _apply_limit_settings(self) -> None:
@@ -631,11 +703,17 @@ class MandateWizard(Vertical):
         }
 
     def _role_models(self, engine: str) -> tuple[tuple[str, str], ...]:
-        if self.simple or self.fast_profile:
+        if self.simple or self.fast_profile or self.pure_active:
             return ()
         if self.plan is not None:
-            return tuple(self._card_models().items())
-        return tuple(self._kept_models.items()) if engine == self._kept_engine else ()
+            picked = self._card_models()
+        elif engine == self._kept_engine:
+            picked = dict(self._kept_models)
+        else:
+            return ()
+        if self.main_model_chosen:
+            picked.pop(Role.ORCHESTRATOR.value, None)
+        return tuple(picked.items())
 
     def options(self, pinned: bool = True) -> MandateOptions:
         chosen = self.query_one("#wiz-engine", Select).value
@@ -643,11 +721,14 @@ class MandateWizard(Vertical):
         pins = self._role_models(engine) if pinned else ()
         chosen_limits = self.limits() or NO_LIMITS
         understood = self.understanding
+        offered = self.implementation_offered
         return MandateOptions(
             engine=engine,
             profile=self.implementation_profile,
-            variant=self.implementation_variant if self.fast_profile else "",
-            model=self.implementation_model if self.fast_profile else "",
+            variant=self.run_variant if offered else "",
+            model=self.implementation_model if offered else "",
+            pure=self.pure_active,
+            required=ESSENTIAL_FIELDS if self.document_mode else None,
             budget_usd=chosen_limits.budget_usd if self.limits_on else None,
             max_turns=chosen_limits.max_turns if self.limits_on else None,
             max_wall_min=chosen_limits.wall_min if self.limits_on else None,
@@ -697,16 +778,7 @@ class MandateWizard(Vertical):
         for depth in DEPTHS:
             chip = self.query_one(f"#depth-{depth.value}", Button)
             chip.set_class(depth.value == self.depth, "-current")
-        effective = (
-            ImplementationProfile.FAST if self.fast_profile else ImplementationProfile.BALANCED
-        )
-        for name in ("balanced", "fast"):
-            button = self.query_one(f"#implementation-{name}", Button)
-            button.set_class(name == effective, "-current")
-            button.disabled = self.engine != "claude" or self.kind == INVESTIGATION
-        self.query_one("#implementation-options").display = (
-            self.fast_profile and self.engine == "claude"
-        )
+        self._paint_implementation()
         for provider in Provider:
             chip = self.query_one(f"#provider-{provider.value}", Button)
             chip.set_class(provider.value == self.engine, "-current")
@@ -722,6 +794,45 @@ class MandateWizard(Vertical):
         self.query_one("#wiz-reuse").display = bool(self.last_story)
         self._paint_depth()
         self._paint_summary()
+
+    def _paint_implementation(self) -> None:
+        t = self._t
+        fast = self.fast_profile
+        effective = ImplementationProfile.FAST if fast else ImplementationProfile.BALANCED
+        for name in PROFILES:
+            button = self.query_one(f"#implementation-{name}", Button)
+            button.set_class(name == effective, "-current")
+            button.set_class(name == AUTO_PROFILE and self.automatic, "-on")
+            button.disabled = self.fast_blocked
+        self.query_one("#implementation-options").display = self.implementation_offered
+        self.query_one("#wiz-implementation-model-label", Label).update(
+            t("wizard.implementation_model" if fast else "wizard.implementation_model_balanced")
+        )
+        self.query_one("#wiz-implementation-pure-note").display = fast
+        self.query_one("#wiz-pure-row").display = not fast
+        self._offer_choices()
+
+    def _offer_choices(self, force: bool = False) -> None:
+        fast = self.fast_profile
+        if force or fast != self._offered_fast:
+            self._offered_fast = fast
+            self._offer(MODEL_SELECT, self._model_choices(fast))
+        variants = (fast, self.fast_output)
+        if force or variants != self._offered_variants:
+            self._offered_variants = variants
+            choices = self._variant_choices(*variants)
+            self._offer(VARIANT_SELECT, choices, self._preferred_variant)
+
+    def _offer(self, selector: str, choices: list[tuple[str, str]], preferred: str = "") -> None:
+        select = self.query_one(selector, Select)
+        offered = {option for _, option in choices}
+        current = select.value
+        kept = current if isinstance(current, str) and current not in NO_CHOICE else ""
+        chosen = next((value for value in (kept, preferred) if value in offered), "")
+        with self.prevent(Select.Changed):
+            select.set_options(choices)
+            if chosen:
+                select.value = chosen
 
     def _paint_depth(self) -> None:
         t = self._t
@@ -746,9 +857,31 @@ class MandateWizard(Vertical):
             description = t(
                 "wizard.depth_fast_kind_help", reads=chosen.read_budget, choice=self._kind_choice()
             )
+        elif self.implementation_offered and (
+            self.implementation_model or self.implementation_variant or self.pure_active
+        ):
+            description = t(
+                "wizard.depth_balanced_help",
+                reads=chosen.read_budget,
+                tier=t(f"models.tier_{chosen.tier_cap.value}"),
+                model=self._balanced_model(),
+                variant=t(
+                    f"wizard.variant_{self.implementation_variant}"
+                    if self.implementation_variant
+                    else "wizard.variant_depth"
+                ),
+            )
         self.query_one("#wiz-depth-note", Static).update(Content.styled(description, "$text-muted"))
         self._paint_limits()
         self._paint_guarantees()
+
+    def _balanced_model(self) -> str:
+        t = self._t
+        chosen = self.implementation_model
+        if self.pure_active:
+            named = t(MODEL_LABELS[chosen]) if chosen in MODEL_LABELS else t("wizard.main_model")
+            return t("wizard.pure_models", model=named)
+        return t(MODEL_LABELS[chosen]) if chosen in MODEL_LABELS else t("wizard.plan_models")
 
     def _paint_limits(self) -> None:
         t = self._t
@@ -830,7 +963,7 @@ class MandateWizard(Vertical):
         if self.gated:
             self.error("wizard.gate_required")
             return False
-        if not self.story:
+        if not self.story and not self.file_path:
             self.error("wizard.tell_required")
             return False
         self.error("")
@@ -851,7 +984,7 @@ class MandateWizard(Vertical):
         for selector in set(fields.values()):
             self.query_one(selector).remove_class("-invalid")
         self.query_one("#wiz-out-error", Static).update("")
-        missing = missing_fields(request)
+        missing = missing_fields(request, ESSENTIAL_FIELDS if self.document_mode else None)
         if missing:
             field = missing[0]
             if self.step != 1:
@@ -905,6 +1038,7 @@ class MandateWizard(Vertical):
             return
         if self.kind == INVESTIGATION:
             self.query_one("#plan-edit-area").display = False
+        self._hand_request_files()
         self.load_change_plan(self.request(), self._change_revision)
 
     @work(thread=True, exclusive=True, group="change-plan", exit_on_error=False)
@@ -1033,6 +1167,7 @@ class MandateWizard(Vertical):
         if self.simple:
             self.show_simple_team()
         elif self.kind:
+            self._hand_request_files()
             self.load_team()
         self.load_prefix()
 
@@ -1080,6 +1215,7 @@ class MandateWizard(Vertical):
         options = self.decided(self.options())
         pinned = bool(options.route.role_models)
         shown = self.estimate.bounds if self.estimate is not None and not pinned else None
+        self._hand_request_files()
         self.post_message(self.Launch(self.request(), replace(options, estimate=shown)))
         self.remember_launch(self.draft_id, story)
         self.reset(story)
@@ -1112,11 +1248,16 @@ class MandateWizard(Vertical):
         self.kind = ""
         self.suggested_kind = ""
         self.depth = DEFAULT_DEPTH.value
+        self.document_mode = False
+        self._loaded = ""
+        self._loaded_path = ""
+        self._attached = {}
         self.query_one("#wiz-story", TextArea).text = ""
-        for selector in ("#wiz-what", "#wiz-why"):
+        for selector in ("#wiz-what", "#wiz-why", "#wiz-body"):
             self.query_one(selector, TextArea).text = ""
-        for selector in ("#wiz-where", "#wiz-out", "#wiz-constraints", "#wiz-tests"):
+        for selector in ("#wiz-where", "#wiz-out", "#wiz-constraints", "#wiz-tests", "#wiz-file"):
             self.query_one(selector, Input).value = ""
+        self.query_one("#wiz-file-note").display = False
         self._apply_limit_settings()
         self.query_one("#wiz-deliverable", Select).value = "report"
         self.query_one("#wiz-detected", Static).update("")
@@ -1138,6 +1279,7 @@ class MandateWizard(Vertical):
             self.error("wizard.gate_required")
             return
         self.kind = message.kind
+        self._leave_fast()
         self.apply_kind()
         self.error("")
         self._paint()
@@ -1147,6 +1289,9 @@ class MandateWizard(Vertical):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
+        if event.input.id == "wiz-file":
+            self.load_file()
+            return
         if event.input.id in LIMIT_INPUTS:
             self._paint_depth()
             self.queue_limits()
@@ -1163,15 +1308,13 @@ class MandateWizard(Vertical):
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in {"wiz-implementation-model", "wiz-implementation-variant"}:
-            if not isinstance(event.value, str) or not self.fast_profile:
+            if not isinstance(event.value, str) or event.value != event.select.value:
                 return
-            value = "" if event.value == BY_KIND else event.value
-            if event.select.id == "wiz-implementation-model":
-                self.implementation_model = value
-            else:
-                self.implementation_variant = value
+            if event.select.id == "wiz-implementation-variant":
+                self._preferred_variant = ""
+            self._offer_choices()
             self._paint_depth()
-            self.refresh_team()
+            self._refresh_shown_team()
             return
         if event.select.id == "wiz-deliverable":
             self.queue_change_plan()
@@ -1181,6 +1324,7 @@ class MandateWizard(Vertical):
         if event.value not in self.engines or event.value == self.engine:
             return
         self.engine = event.value
+        self._leave_fast()
         self._paint_depth()
         self._paint()
         if self.kind and self.team_shown:
@@ -1189,11 +1333,13 @@ class MandateWizard(Vertical):
             self._team_revision += 1
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        if event.text_area.id in {"wiz-what", "wiz-why"}:
+        if event.text_area.id in {"wiz-what", "wiz-why", "wiz-body"}:
             self.queue_change_plan()
             return
         if event.text_area.id != "wiz-story":
             return
+        if self._loaded_path:
+            self._hand_request_files()
         if self._autosave is not None:
             self._autosave.stop()
         self._autosave = self.set_timer(AUTOSAVE_S, self.autosave)
@@ -1204,6 +1350,12 @@ class MandateWizard(Vertical):
             self.sandbox = event.value
             self.query_one("#wiz-sandbox-note").display = event.value
             return
+        if event.checkbox.id == "wiz-pure":
+            if event.value != self.pure:
+                self.pure = event.value
+                self._paint_depth()
+                self._refresh_shown_team()
+            return
         if event.checkbox.id != "wiz-limits" or event.value == self.limits_on:
             return
         self.limits_on = event.value
@@ -1211,6 +1363,12 @@ class MandateWizard(Vertical):
         self._paint_summary()
         if self.kind and self.team_shown:
             self.refresh_team()
+
+    def _refresh_shown_team(self) -> None:
+        if self.kind and self.team_shown:
+            self.refresh_team()
+        else:
+            self._team_revision += 1
 
     def _call(self, callback: Callable[..., object], *args: object, **kwargs: object) -> None:
         if not self.app.is_running:
@@ -1220,15 +1378,33 @@ class MandateWizard(Vertical):
 
     @work(thread=True, exclusive=True, group="understand", exit_on_error=False)
     def understand(self) -> None:
-        story = self.story
+        told = self._told(self.story)
+        if told is None:
+            return
+        story, whole = told
         self._call(self._busy, True)
         try:
-            understanding = self._services.understand(story)
+            understanding = self._services.understand(story, whole)
         except Exception as error:
             self._call(self._busy, False)
             self._call(self.app.notify, str(error), severity="error")
             return
         self._call(self.apply_understanding, understanding)
+
+    def _told(self, story: str) -> tuple[str, bool] | None:
+        whole = bool(self._loaded) and story == self._loaded
+        path = "" if story else self.file_path
+        found = LonePath(path) if path else lone_path(story)
+        if found is None:
+            return story, whole
+        try:
+            loaded = self._read_file(found.path, found.story_if_missing)
+        except OSError:
+            return story, whole
+        if loaded is None:
+            return None
+        self._call(self.adopt_file, found.path, loaded)
+        return loaded, True
 
     def _busy(self, busy: bool) -> None:
         with suppress(NoMatches):
@@ -1236,21 +1412,25 @@ class MandateWizard(Vertical):
             text = Content.styled(self._t(key), "$accent") if key else ""
             self.query_one("#wiz-detected", Static).update(text)
 
-    def apply_understanding(self, understanding: Understanding) -> None:
+    async def apply_understanding(self, understanding: Understanding) -> None:
         with suppress(NoMatches):
-            self._apply(understanding)
+            await self._apply(understanding)
 
-    def _apply(self, understanding: Understanding) -> None:
+    async def _apply(self, understanding: Understanding) -> None:
         self._plan_overrides.clear()
         self.understanding = understanding
         confident = not understanding.needs_confirm
         self.kind = understanding.kind.option if confident else ""
+        self._leave_fast()
         self.suggested_kind = understanding.kind.option
         self.depth = understanding.depth.option if understanding.depth.option else self.depth
-        self._fill(understanding.request(understanding.kind.option))
+        request = understanding.request(understanding.kind.option)
+        self.document_mode = understanding.document is not None
+        self._fill(replace(request, why="") if self.document_mode else request)
+        self.query_one("#wiz-body", TextArea).text = request.why if self.document_mode else ""
         self._show_detected()
         self.apply_kind()
-        self._show_places(understanding.places)
+        await self._show_places(understanding.places)
         if self.one_page:
             self._paint()
             self.refresh_change_plan()
@@ -1276,6 +1456,9 @@ class MandateWizard(Vertical):
         if understanding.cost_usd is None or understanding.cost_usd > 0:
             by = f"{by} · {money(understanding.cost_usd, t('spectrum.na'))}"
         parts.append((f"\n{by}", "$text-muted"))
+        if understanding.document is not None:
+            whole = t("wizard.whole_mandate", chars=grouped(len(understanding.story)))
+            parts.append((f"\n{whole}", "$text-muted"))
         if understanding.fallback_error:
             fallback = t.message(
                 msg(
@@ -1301,10 +1484,10 @@ class MandateWizard(Vertical):
         if request.type == INVESTIGATION:
             self.query_one("#wiz-deliverable", Select).value = deliverable_of(request.tests)
 
-    def _show_places(self, places: tuple[str, ...]) -> None:
+    async def _show_places(self, places: tuple[str, ...]) -> None:
         row = self.query_one("#where-chips", FlowRow)
-        row.remove_children()
-        row.mount_all(
+        await row.remove_children()
+        await row.mount_all(
             Button(path, id=f"place-{index}", classes="chip place-chip", compact=True)
             for index, path in enumerate(places)
         )
@@ -1516,6 +1699,8 @@ class MandateWizard(Vertical):
                 id=f"override-{route.role.value}",
                 allow_blank=False,
                 value=picked if picked in offered else AUTO_MODEL,
+                disabled=self.pure_active
+                or (route.role is Role.ORCHESTRATOR and self.main_model_chosen),
             )
             selects.append(select)
             widgets.append(
@@ -1593,6 +1778,69 @@ class MandateWizard(Vertical):
         return not self.simple and self.kind != INVESTIGATION
 
     @property
+    def automatic(self) -> bool:
+        return self.implementation_profile in ("", AUTO_PROFILE)
+
+    @property
+    def implementation_offered(self) -> bool:
+        return (
+            self.engine == Provider.CLAUDE
+            and not self.simple
+            and self.kind != INVESTIGATION
+            and (bool(self.kind) or self.fast_profile)
+        )
+
+    @property
+    def pure_active(self) -> bool:
+        return self.pure and self.implementation_offered and not self.fast_profile
+
+    @property
+    def main_model_chosen(self) -> bool:
+        return (
+            bool(self.implementation_model)
+            and self.implementation_offered
+            and not self.fast_profile
+            and not self.per_role
+        )
+
+    @property
+    def fast_blocked(self) -> bool:
+        return self.engine != Provider.CLAUDE or self.kind == INVESTIGATION
+
+    @property
+    def fast_output(self) -> bool:
+        model = self.implementation_model
+        if model:
+            return fast_output_model(model)
+        if self.implementation_profile != ImplementationProfile.FAST:
+            return False
+        choices = (fast_choice(self.kind, False), fast_choice(self.kind, True))
+        return all(choice is not None and fast_output_model(choice.model) for choice in choices)
+
+    @property
+    def implementation_model(self) -> str:
+        return self._picked(MODEL_SELECT)
+
+    @property
+    def implementation_variant(self) -> str:
+        return self._picked(VARIANT_SELECT)
+
+    def _picked(self, selector: str) -> str:
+        value = self.query_one(selector, Select).value
+        return value if isinstance(value, str) and value not in NO_CHOICE else ""
+
+    @property
+    def run_variant(self) -> str:
+        variant = self.implementation_variant
+        if variant or self.fast_profile or not self._configured_variant:
+            return variant
+        return profile(parse_depth(self.depth), self.kind).effort
+
+    def _leave_fast(self) -> None:
+        if self.fast_blocked and self.implementation_profile == ImplementationProfile.FAST:
+            self.implementation_profile = AUTO_PROFILE
+
+    @property
     def fast_profile(self) -> bool:
         chosen = resolved_profile(
             MandateOptions(
@@ -1645,6 +1893,7 @@ class MandateWizard(Vertical):
         if provider not in self.engines or provider == self.engine:
             return
         self.engine = provider
+        self._leave_fast()
         self.query_one("#wiz-engine", Select).value = provider
         self._paint_depth()
         self._paint()
@@ -1686,6 +1935,7 @@ class MandateWizard(Vertical):
             "wiz-team-preview": self.preview_now,
             "wiz-example": self.next_example,
             "wiz-reuse": self.reuse_last,
+            "wiz-load": self.load_file,
             "wiz-attach": lambda: self.post_message(self.EvidenceWanted("attach")),
             "wiz-failure": lambda: self.post_message(self.EvidenceWanted("failure")),
             "wiz-improve": lambda: self.improve(
@@ -1708,23 +1958,11 @@ class MandateWizard(Vertical):
         }
 
     def choose_implementation(self, name: str) -> None:
-        self.implementation_profile = name
-        fast = name == "fast"
-        self.query_one("#implementation-options").display = fast
-        for value in ("balanced", "fast"):
-            self.query_one(f"#implementation-{value}", Button).set_class(value == name, "-current")
-        model = self.query_one("#wiz-implementation-model", Select).value
-        variant = self.query_one("#wiz-implementation-variant", Select).value
-        self.implementation_model = model if fast and isinstance(model, str) else ""
-        self.implementation_variant = variant if fast and isinstance(variant, str) else ""
-        if self.implementation_model == BY_KIND:
-            self.implementation_model = ""
-        if self.implementation_variant == BY_KIND:
-            self.implementation_variant = ""
-        if fast and self.engine != "claude":
-            self.choose_provider("claude")
+        self.implementation_profile = name if name in PROFILES else AUTO_PROFILE
+        if name == ImplementationProfile.FAST and self.engine != Provider.CLAUDE:
+            self.choose_provider(Provider.CLAUDE.value)
+        self._leave_fast()
         self._paint()
-        self._paint_depth()
         self.refresh_team()
 
     def understand_now(self) -> None:
@@ -1733,10 +1971,77 @@ class MandateWizard(Vertical):
 
     def preview_now(self) -> None:
         if self.check_request():
+            self._hand_request_files()
             self.load_preview()
 
     def reuse_last(self) -> None:
         self.query_one("#wiz-story", TextArea).text = self.last_story
+
+    def load_file(self) -> None:
+        box = self.query_one("#wiz-file", Input)
+        path = self.file_path
+        if not path:
+            self.file_note("wizard.file_needed", failed=True)
+            box.focus()
+            return
+        self.read_mandate(path)
+
+    @work(thread=True, exclusive=True, group="mandate-file", exit_on_error=False)
+    def read_mandate(self, path: str) -> None:
+        text = self._read_file(path)
+        if text is not None:
+            self._call(self.adopt_file, path, text)
+
+    def _read_file(self, path: str, story_if_missing: bool = False) -> str | None:
+        try:
+            text = self._services.read_evidence(path)
+        except OSError as error:
+            if story_if_missing:
+                raise
+            if isinstance(error, FileNotFoundError):
+                self._call(self.file_note, "wizard.file_missing", True, path=path)
+                return None
+            reason = error.strerror or str(error)
+            self._call(self.file_note, "wizard.file_unreadable", True, path=path, error=reason)
+            return None
+        except NotText:
+            reason = self._t("mandate.not_text")
+            self._call(self.file_note, "wizard.file_unreadable", True, path=path, error=reason)
+            return None
+        if not text.strip():
+            self._call(self.file_note, "wizard.file_empty", True, path=path)
+            return None
+        return text.removeprefix("\ufeff")
+
+    def adopt_file(self, path: str, text: str) -> None:
+        with suppress(NoMatches):
+            self.query_one("#wiz-story", TextArea).text = text
+            self._loaded = self.story
+            self._loaded_path = path
+            self.query_one("#wiz-file", Input).value = path
+            self.file_note("wizard.file_loaded", path=path, chars=grouped(len(self._loaded)))
+            self.error("")
+            self._hand_request_files()
+
+    @property
+    def request_files(self) -> tuple[str, ...]:
+        evidence = self.query_one("#wiz-why", TextArea).text
+        loaded = self._loaded_path if self._loaded and self.story == self._loaded else ""
+        attached = (path for path, text in self._attached.items() if text in evidence)
+        return tuple(dict.fromkeys(path for path in (loaded, *attached) if path))
+
+    def _hand_request_files(self) -> None:
+        files = self.request_files
+        if files != self._handed:
+            self._handed = files
+            self._services.use_request_files(files)
+
+    def file_note(self, key: str, failed: bool = False, **values: object) -> None:
+        with suppress(NoMatches):
+            note = self.query_one("#wiz-file-note", Static)
+            style = "$error" if failed else "$text-muted"
+            note.update(Content.styled(self._t(key, **values), style))
+            note.display = True
 
     def _append(self, selector: str, text: str) -> None:
         field = self.query_one(selector, Input)
@@ -1745,12 +2050,15 @@ class MandateWizard(Vertical):
             parts.append(text)
         field.value = ", ".join(parts)
 
-    def set_evidence(self, text: str, replace_all: bool) -> None:
+    def set_evidence(self, text: str, replace_all: bool, path: str = "") -> None:
         area = self.query_one("#wiz-why", TextArea)
         if replace_all:
             area.text = text
-            return
-        area.text = "\n\n".join(part for part in (area.text.strip(), text.strip()) if part)
+        else:
+            area.text = "\n\n".join(part for part in (area.text.strip(), text.strip()) if part)
+        if path and text.strip():
+            self._attached[path] = text.strip()
+            self._hand_request_files()
 
     def autosave(self) -> None:
         self._autosave = None
@@ -1840,7 +2148,12 @@ class MandateWizard(Vertical):
     def accept_proposal(self) -> None:
         if self.proposal is None or self.proposal.proposal is None:
             return
-        self._fill(self.proposal.proposal)
+        proposal = self.proposal.proposal
+        if self.document_mode:
+            self._fill(replace(proposal, why=""))
+            self.query_one("#wiz-body", TextArea).text = proposal.why
+        else:
+            self._fill(proposal)
         self.discard_proposal()
 
     def discard_proposal(self) -> None:
@@ -1895,6 +2208,11 @@ class MandateWizard(Vertical):
         card = self.query_one("#preview-card")
         card.display = True
         self.call_after_refresh(card.scroll_visible)
+        told = preview.template_note
+        if told is not None and told.status is Status.WARN:
+            self.app.notify(t.message(told.message, told.text), severity="warning")
+        elif told is not None:
+            self.app.notify(t.message(told.message, told.text))
 
     def _role_lines(self, preview: MandatePreview) -> Content:
         t = self._t
@@ -1914,8 +2232,11 @@ class MandateWizard(Vertical):
     def prefilled(self, request: MandateRequest) -> None:
         self._plan_overrides.clear()
         self.kind = request.type or self.kind or MandateType.FEATURE.value
+        self._leave_fast()
         self.suggested_kind = self.kind
         self.understanding = None
+        self.document_mode = False
+        self.query_one("#wiz-body", TextArea).text = ""
         self.query_one("#wiz-story", TextArea).text = request.what
         self._fill(request)
         self.query_one("#wiz-constraints", Input).value = request.constraints

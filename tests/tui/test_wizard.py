@@ -533,9 +533,9 @@ def test_one_page_layout_stacks_everything_with_a_summary() -> None:
 
 def test_understanding_card_shows_jev_fallback_in_spanish() -> None:
     class FallbackServices(FakeServices):
-        def understand(self, story: str) -> Understanding:
+        def understand(self, story: str, whole: bool = False) -> Understanding:
             return replace(
-                super().understand(story),
+                super().understand(story, whole),
                 fallback_error="jev answered HTTP 503",
                 fallback_from="jev",
             )

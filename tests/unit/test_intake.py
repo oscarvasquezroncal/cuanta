@@ -23,6 +23,8 @@ from cuanta.domain.intake import (
     match_places,
 )
 from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.mandate_file import parse_mandate_file
+from tests.real_run import phased_mandate
 
 STORY = (
     "Quiero entender para qué es esta landing, cómo funciona el carrito y si el hero afecta "
@@ -265,3 +267,92 @@ def test_a_failing_jev_falls_back_to_the_heuristic(monkeypatch: pytest.MonkeyPat
     assert understood.fallback_error == "jev answered HTTP 503"
     assert {item.fallback_error for item in ledger.decisions()} == {"jev answered HTTP 503"}
     assert {item.fallback_from for item in ledger.decisions()} == {"jev"}
+
+
+LABELLED_BUG = (
+    "TIPO: error\n"
+    "QUÉ: arreglar el total del carrito\n"
+    "POR QUÉ: AssertionError: expected 10 got 12\n"
+    "FUERA DE ALCANCE: los pagos\n"
+)
+
+
+def heuristic_intake() -> IntakeService:
+    decisions = DecisionMaker(HeuristicInstinct(), MemoryLedger(), lambda: NOW)
+    return IntakeService(decisions, 0.6, places)
+
+
+def test_a_whole_mandate_keeps_its_title_as_the_what_and_the_rest_as_evidence() -> None:
+    text = phased_mandate()
+    parsed = parse_mandate_file(text).request
+    understood = heuristic_intake().understand(text)
+    assert understood.document is not None
+    request = understood.request()
+    assert (request.what, request.why) == (parsed.what, parsed.why)
+    assert len(request.why) > 11_000
+    assert understood.kind == Choice("refactor", understood.kind.probability)
+    assert not understood.needs_confirm
+    assert not understood.is_read_only
+    assert (request.where, request.out_of_scope, request.constraints) == ("", "", "")
+    assert request.type == "refactor"
+    assert understood.request("investigation").tests.startswith("Deliverable:")
+
+
+def test_a_loaded_file_is_split_whole_even_when_it_is_short() -> None:
+    story = "Fix the cart total\nIt doubles with a discount."
+    loaded = heuristic_intake().understand(story, whole=True)
+    assert loaded.document is not None
+    assert (loaded.request().what, loaded.request().why) == (
+        "Fix the cart total",
+        "It doubles with a discount.",
+    )
+    assert heuristic_intake().understand(story).document is None
+
+
+def test_a_stated_type_wins_over_the_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    states: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        states.append(json.loads(str(body["state"])))
+        answers = {key: jev_answer(value) for key, value in body["questions"].items()}
+        return httpx.Response(200, json={"answers": answers, "usage": {"cost": 0.0}})
+
+    jev = JevInstinct(transport=httpx.MockTransport(handler))
+    decisions = DecisionMaker(jev, MemoryLedger(), lambda: NOW, fallback=HeuristicInstinct())
+    understood = IntakeService(decisions, 0.6, places).understand(LABELLED_BUG)
+    assert understood.kind == Choice("bug", 1.0)
+    assert not understood.needs_confirm
+    request = understood.request()
+    assert request == MandateRequest(
+        type="bug",
+        what="arreglar el total del carrito",
+        why="AssertionError: expected 10 got 12",
+        out_of_scope="los pagos",
+    )
+    assert states[0]["what"] == "arreglar el total del carrito"
+
+
+def test_the_backend_reads_a_mandate_by_its_title_not_its_phases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    states: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        states.append(json.loads(str(body["state"])))
+        answers = {key: jev_answer(value) for key, value in body["questions"].items()}
+        return httpx.Response(200, json={"answers": answers, "usage": {"cost": 0.0}})
+
+    jev = JevInstinct(transport=httpx.MockTransport(handler))
+    decisions = DecisionMaker(jev, MemoryLedger(), lambda: NOW, fallback=HeuristicInstinct())
+    text = phased_mandate()
+    title = parse_mandate_file(text).request.what
+    IntakeService(decisions, 0.6, places).understand(text)
+    state = states[0]
+    assert state["what"] == title
+    assert state["questions"] == []
+    assert state["errors"] == 0
+    assert str(state["story"]).startswith("# Mandato")

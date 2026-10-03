@@ -69,7 +69,7 @@ from cuanta.domain.mandate import (
 )
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pack import ContextPack
-from cuanta.domain.progress import Status, finished, note, started
+from cuanta.domain.progress import Note, Status, finished, note, started
 from cuanta.domain.routing import Provider, Role, RoleRoute, parse_provider
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, sandbox_launch
 from cuanta.domain.scout import (
@@ -124,6 +124,8 @@ class MandateOptions:
     variant: str = ""
     pure: bool = False
     docs: str = ""
+    required: tuple[str, ...] | None = None
+    type_stated: bool = True
 
 
 def scout_launch(options: MandateOptions, task_type: str) -> bool:
@@ -165,6 +167,7 @@ def resolved_profile(
         engine,
         task_type,
         team_requested(options, cross_engine, pinned),
+        options.type_stated,
     )
     automatic = (options.profile or default_profile or AUTO_PROFILE) == AUTO_PROFILE
     if found is ImplementationProfile.FAST and automatic and not ready(engine):
@@ -296,6 +299,13 @@ def pack_notes(
     return (*plan_notes(request, protection), *found)
 
 
+def template_note(prepared: Prepared) -> Note | None:
+    pending = prepared.composed.template
+    if pending is None:
+        return None
+    return note(Status.INFO, pending.borrowed if prepared.spec.temporary_copy else pending.planned)
+
+
 def display_command(parts: tuple[str, ...], prompt: str) -> str:
     shown: list[str] = []
     for part in parts:
@@ -325,8 +335,8 @@ class MissingRequestFields(DomainFailure):
         return translate(msg("mandate.missing_fields", fields=labels))
 
 
-def validate(request: MandateRequest) -> None:
-    missing = missing_fields(request)
+def validate(request: MandateRequest, required: tuple[str, ...] | None = None) -> None:
+    missing = missing_fields(request, required)
     if missing:
         raise MissingRequestFields(request.type, missing)
     allowed = {item.value for item in MandateType}
@@ -448,7 +458,7 @@ class MandateFlow:
         return replace(prepared, preparation_seconds=self._timing.elapsed(started))
 
     def _validate(self, request: MandateRequest, options: MandateOptions) -> None:
-        validate(request)
+        validate(request, options.required)
         engine = options.engine or self._default_engine
         fast = options.profile == ImplementationProfile.FAST
         if fast and (engine != "claude" or request.type == INVESTIGATION):
@@ -667,8 +677,10 @@ class MandateFlow:
     ) -> Applied | None:
         if single:
             applied = single_applied(applied, options)
-        if not (options.pure or fast) or applied is None or self._routing is None:
+        if applied is None or self._routing is None:
             return applied
+        if not (options.pure or fast):
+            return applied if single else self._routing.main_model(applied, options.model)
         model = options.model or applied.orchestrator or applied.single
         return self._routing.pure(applied, model, fast and not options.pure)
 
@@ -855,6 +867,9 @@ class MandateFlow:
                 raise NotAvailable(
                     f"{name} lacks flags cuanta needs: {', '.join(missing)}", f"upgrade {name}"
                 )
+            told = self._keep_template(prepared)
+            if told is not None:
+                progress.publish(told)
             self._record_forecast(prepared, progress)
             steering = session_steering(
                 self._governor, prepared.launcher, prepared.spec, prepared.forecast, progress
@@ -904,6 +919,12 @@ class MandateFlow:
                 "run_wall", elapsed + (prepared.preparation_seconds or 0.0), report.run.id
             )
         return report
+
+    def _keep_template(self, prepared: Prepared) -> Note | None:
+        pending = prepared.composed.template
+        if pending is None or prepared.spec.temporary_copy:
+            return template_note(prepared)
+        return self._service.keep_template(pending)
 
     def _session_scout(
         self, prepared: Prepared, watch: SessionWatch, report: MandateReport
@@ -985,6 +1006,7 @@ class MandatePreview:
     confidence: float
     roles: tuple[RoleRoute, ...] = ()
     per_role: bool = False
+    template_note: Note | None = None
 
 
 def preview_of(prepared: Prepared) -> MandatePreview:
@@ -1001,6 +1023,7 @@ def preview_of(prepared: Prepared) -> MandatePreview:
             if applied is not None and applied.agents is not None
             else ()
         ),
+        template_note=template_note(prepared),
     )
 
 

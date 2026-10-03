@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from cuanta.cli.runtime import Session, execute
+from cuanta.cli.runtime import Session, execute, interrupted
 
 if TYPE_CHECKING:
     from cuanta.bootstrap import Container
@@ -12,7 +12,11 @@ if TYPE_CHECKING:
     from cuanta.cli.document import Document, Line, Table
     from cuanta.domain.cache import PrefixWindow
     from cuanta.domain.errors import CuantaError
+    from cuanta.domain.messages import Message
     from cuanta.domain.queue import QueueEntry, QueueOutcome, QueueSlot
+
+    Resolved = tuple[tuple[QueueSlot, ...], dict[str, MandateArgs | CuantaError]]
+    Told = dict[str, tuple[Message, ...]]
 
 queue_app = typer.Typer(
     help="Queue mandates and run them back to back, each on the warm prefix of the one before.",
@@ -20,6 +24,8 @@ queue_app = typer.Typer(
 )
 
 PASS_THROUGH = {"allow_extra_args": True, "ignore_unknown_options": True}
+FILE_OPTIONS = {"-f": "from_file", "--from": "from_file", "--evidence": "evidence"}
+LONG_FILE_OPTIONS = {"--from": "from_file", "--evidence": "evidence"}
 EMPTY_HINT = "queue empty · cuanta queue add <the options of cuanta mandate>"
 DEFAULT_MODEL = "default"
 STATUS_TEXT = {"ok": "ok", "failed": "failed", "not_run": "not run", "gone": "no longer queued"}
@@ -29,6 +35,7 @@ MANDATE_PARAMS = frozenset(
         "what",
         "why",
         "evidence",
+        "from_file",
         "where",
         "constraints",
         "tests",
@@ -198,15 +205,17 @@ def _texts(params: Mapping[str, object], name: str) -> tuple[str, ...]:
 
 def mandate_args(params: Mapping[str, object]) -> "MandateArgs":
     from cuanta.cli.commands.mandate import MandateArgs
+    from cuanta.domain.mandate_file import mandate_type
 
     unmapped = sorted(set(params) - MANDATE_PARAMS)
     if unmapped:
         raise RuntimeError(f"cuanta queue does not map the mandate options {', '.join(unmapped)}")
     return MandateArgs(
-        type=_text(params, "type_"),
+        type=mandate_type(_text(params, "type_")),
         what=_text(params, "what"),
         why=_text(params, "why"),
         evidence=_path(params, "evidence"),
+        from_file=_path(params, "from_file"),
         where=_text(params, "where"),
         constraints=_text(params, "constraints"),
         tests=_text(params, "tests"),
@@ -239,6 +248,49 @@ def mandate_args(params: Mapping[str, object]) -> "MandateArgs":
     )
 
 
+def _absolute(value: str | Path, folder: Path) -> str:
+    import os
+
+    return os.path.normpath(folder / Path(value).expanduser())
+
+
+def _file_value(args: "MandateArgs", name: str) -> Path | None:
+    value = getattr(args, name)
+    return value if isinstance(value, Path) else None
+
+
+def _rewritten(arguments: Sequence[str], args: "MandateArgs", folder: Path) -> list[str]:
+    found = list(arguments)
+    for index, argument in enumerate(arguments):
+        if argument == "--":
+            break
+        option, equals, value = argument.partition("=")
+        if argument in FILE_OPTIONS and index + 1 < len(arguments):
+            given = _file_value(args, FILE_OPTIONS[argument])
+            if given is not None and Path(arguments[index + 1]) == given:
+                found[index + 1] = _absolute(given, folder)
+        elif equals and option in LONG_FILE_OPTIONS:
+            given = _file_value(args, LONG_FILE_OPTIONS[option])
+            if given is not None and Path(value) == given:
+                found[index] = f"{option}={_absolute(given, folder)}"
+        elif argument.startswith("-f") and not argument.startswith("--") and len(argument) > 2:
+            given = _file_value(args, "from_file")
+            if given is not None and Path(argument[2:]) == given:
+                found[index] = f"-f{_absolute(given, folder)}"
+    return found
+
+
+def anchored(arguments: Sequence[str], folder: Path) -> tuple[str, ...]:
+    args = parse_mandate(arguments)
+    found = _rewritten(arguments, args, folder)
+    again = parse_mandate(found)
+    for name, option in (("from_file", "--from"), ("evidence", "--evidence")):
+        given = _file_value(args, name)
+        if given is not None and _file_value(again, name) != Path(_absolute(given, folder)):
+            found.extend((option, _absolute(given, folder)))
+    return tuple(found)
+
+
 def queued_kind(args: "MandateArgs") -> str:
     return args.type or ("bug" if args.from_failure else "")
 
@@ -246,7 +298,7 @@ def queued_kind(args: "MandateArgs") -> str:
 def check_mandate(args: "MandateArgs", engine: str = "", route: str = "") -> None:
     from cuanta.cli.commands.mandate import mandate_options
     from cuanta.domain.errors import DomainFailure
-    from cuanta.domain.mandate import MandateRequest, MandateType, missing_fields
+    from cuanta.domain.mandate import ESSENTIAL_FIELDS, MandateRequest, MandateType, missing_fields
     from cuanta.domain.messages import english
     from cuanta.domain.routing import RouteMode, parse_provider
     from cuanta.domain.scout import parse_forced_shape, scout_refusal
@@ -281,7 +333,7 @@ def check_mandate(args: "MandateArgs", engine: str = "", route: str = "") -> Non
         tests=args.tests,
         out_of_scope=args.out_of_scope,
     )
-    missing = [name for name in missing_fields(request) if name not in later]
+    missing = [name for name in missing_fields(request, ESSENTIAL_FIELDS) if name not in later]
     if missing:
         names = ", ".join(f"--{name.replace('_', '-')}" for name in missing)
         raise DomainFailure(
@@ -289,28 +341,36 @@ def check_mandate(args: "MandateArgs", engine: str = "", route: str = "") -> Non
         )
 
 
-def resolve(
+def resolve(entries: Sequence["QueueEntry"], engine: str) -> "Resolved":
+    slots, parsed, _ = resolve_told(entries, engine)
+    return slots, parsed
+
+
+def resolve_told(
     entries: Sequence["QueueEntry"], engine: str
-) -> "tuple[tuple[QueueSlot, ...], dict[str, MandateArgs | CuantaError]]":
+) -> "tuple[tuple[QueueSlot, ...], dict[str, MandateArgs | CuantaError], Told]":
+    from cuanta.cli.commands.mandate import from_source
     from cuanta.domain.errors import CuantaError
     from cuanta.domain.queue import QueueSlot
 
     slots: list[QueueSlot] = []
     parsed: dict[str, MandateArgs | CuantaError] = {}
+    told: Told = {}
     for entry in entries:
         try:
-            args = parse_mandate(entry.args)
+            args, notes = from_source(parse_mandate(entry.args))
         except CuantaError as error:
             parsed[entry.id] = error
             slots.append(QueueSlot(entry, engine))
             continue
         parsed[entry.id] = args
+        told[entry.id] = notes
         slots.append(
             QueueSlot(
                 entry, args.engine or engine, args.model, queued_kind(args), args.what, args.sandbox
             )
         )
-    return tuple(slots), parsed
+    return tuple(slots), parsed, told
 
 
 def clock_time(window: "PrefixWindow") -> str:
@@ -419,11 +479,15 @@ def slot_payload(slot: "QueueSlot", parsed: "MandateArgs | CuantaError") -> dict
 
 def _add(session: Session, arguments: tuple[str, ...]) -> "Document":
     from cuanta.bootstrap import Container
+    from cuanta.cli.commands.mandate import from_source
     from cuanta.cli.document import Document, Hint, Line
+    from cuanta.domain.messages import english
     from cuanta.domain.progress import Status
     from cuanta.domain.queue import queue_order
 
-    args = parse_mandate(arguments)
+    arguments = anchored(arguments, Path.cwd())
+    args, sourced = from_source(parse_mandate(arguments))
+    stated = [english(message) for message in sourced]
     container = Container.for_project(session.project)
     try:
         check_mandate(args, container.config.engine, container.routing_policy().mode.value)
@@ -440,12 +504,14 @@ def _add(session: Session, arguments: tuple[str, ...]) -> "Document":
     return Document(
         blocks=(
             Line(text, Status.OK),
+            *(Line(line, Status.INFO) for line in stated),
             Hint(f"runs #{position} of {len(ordered)} · cuanta queue list · cuanta queue run"),
         ),
         payload={
             "added": slot_payload(slot, parsed[entry.id]),
             "position": position,
             "queued": len(ordered),
+            "request_notes": stated,
         },
     )
 
@@ -481,6 +547,7 @@ def _launch(
     slot: "QueueSlot",
     parsed: "MandateArgs | CuantaError",
     documents: dict[str, "Document"],
+    told: "Sequence[Message]" = (),
 ) -> "QueueOutcome":
     from cuanta.bootstrap import Container
     from cuanta.cli.commands.mandate import run_mandate
@@ -496,7 +563,7 @@ def _launch(
         outcome = QueueOutcome(slot, QueueStatus.FAILED, _failure(parsed))
     else:
         try:
-            document = run_mandate(session, parsed)
+            document = run_mandate(session, parsed, told)
         except CuantaError as error:
             outcome = QueueOutcome(slot, QueueStatus.FAILED, _failure(error))
         else:
@@ -522,6 +589,11 @@ def _run_id(document: "Document | None") -> str:
     return value if isinstance(value, str) and value else "-"
 
 
+def _last_run(documents: dict[str, "Document"]) -> str:
+    last = next(reversed(documents.values()), None)
+    return last.recorded_run if last is not None else ""
+
+
 def _run(session: Session, keep_going: bool) -> "Document":
     from dataclasses import replace
 
@@ -532,7 +604,7 @@ def _run(session: Session, keep_going: bool) -> "Document":
     container = Container.for_project(session.project, verbose=session.options.verbose)
     try:
         queue = container.mandate_queue()
-        slots, parsed = resolve(queue.entries(), container.config.engine)
+        slots, parsed, told = resolve_told(queue.entries(), container.config.engine)
         ordered = queue_order(slots)
         window = _window(container, ordered[0].provider if ordered else container.config.engine)
     finally:
@@ -561,21 +633,30 @@ def _run(session: Session, keep_going: bool) -> "Document":
             return Document(blocks=(Hint("nothing run"),), payload=declined)
     unattended = replace(session, options=replace(session.options, yes=True))
     documents: dict[str, Document] = {}
-    report = queue.run(
-        ordered,
-        lambda slot: _launch(unattended, slot, parsed[slot.entry.id], documents),
-        keep_going,
-    )
-    ran = [
-        item
-        for item in report.outcomes
-        if item.status not in {QueueStatus.NOT_RUN, QueueStatus.GONE}
-    ]
-    closing = Container.for_project(session.project, verbose=session.options.verbose)
     try:
-        final = _window(closing, (ran or report.outcomes)[-1].slot.provider)
-    finally:
-        closing.close()
+        report = queue.run(
+            ordered,
+            lambda slot: _launch(
+                unattended, slot, parsed[slot.entry.id], documents, told.get(slot.entry.id, ())
+            ),
+            keep_going,
+        )
+        ran = [
+            item
+            for item in report.outcomes
+            if item.status not in {QueueStatus.NOT_RUN, QueueStatus.GONE}
+        ]
+        closing = Container.for_project(session.project, verbose=session.options.verbose)
+        try:
+            final = _window(closing, (ran or report.outcomes)[-1].slot.provider)
+        finally:
+            closing.close()
+    except KeyboardInterrupt as interrupt:
+        finished = [entry for entry, shown in documents.items() if shown.exit_code == 0]
+        if finished:
+            queue.discard(finished)
+        named = _last_run(documents)
+        raise interrupted(interrupt, named, resumable=bool(queue.entries())) from interrupt
     rows = tuple(
         (
             item.slot.entry.id,
@@ -624,6 +705,7 @@ def _run(session: Session, keep_going: bool) -> "Document":
             "warm": warm_payload(final),
         },
         exit_code=0 if report.ok else 1,
+        recorded_run=_last_run(documents),
     )
 
 

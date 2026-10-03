@@ -598,7 +598,7 @@ def native_run(
         SimpleNamespace(
             launcher=SimpleNamespace(engine=cast("Engine", ReadyEngine())),
             engine_name="claude",
-            composed=SimpleNamespace(request=REQUEST),
+            composed=SimpleNamespace(request=REQUEST, template=None),
             spec=SimpleNamespace(
                 run_id="R9",
                 change_plan=ChangePlan(edit=(EditTarget("src/other.ts", 0.5),)),

@@ -100,6 +100,10 @@ def _read_progress(workspace: Workspace) -> list[str]:
     return [] if len(done) == len(STAGES) else done
 
 
+def can_resume(workspace: Workspace) -> bool:
+    return bool(_read_progress(workspace))
+
+
 def _write_progress(workspace: Workspace, completed: list[str], run_id: str) -> None:
     document = {"completed": completed, "run_id": run_id}
     workspace.write_text(INIT_STATE_FILE, json.dumps(document, indent=2) + "\n")

@@ -6,6 +6,7 @@ from pathlib import Path
 from cuanta.adapters.forge.assets import (
     COMMANDS,
     COMMANDS_DIR,
+    MANDATE_TEMPLATE_ASSET,
     SKILL_DIR,
     init_prompt,
     read_asset,
@@ -104,6 +105,9 @@ class VendoredForgeKit:
     def vendored_version(self) -> str:
         version = vendored_version()
         return f"{version.get('version', '?')} ({version.get('commit', '?')[:7]})"
+
+    def mandate_template(self) -> str:
+        return read_asset(MANDATE_TEMPLATE_ASSET)
 
     def skill_path(self) -> str:
         return str(self._root / ".claude" / "skills" / "agent-system-init" / "SKILL.md")

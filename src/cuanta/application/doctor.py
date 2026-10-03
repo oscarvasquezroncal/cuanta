@@ -5,8 +5,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from cuanta.application.detect import DetectProject, read_forge_state
+from cuanta.application.mandate_template import MandateTemplates
 from cuanta.application.recent_runs import latest_with_requests
 from cuanta.domain.detection import Detection, GraphMode, SizeTier, VerifyTier
+from cuanta.domain.forge_template import (
+    MANDATE_TEMPLATE,
+    TEMPLATE_FIX,
+    UNUSABLE_STATES,
+    TemplateState,
+    unusable_message,
+)
 from cuanta.domain.forge_verify import check_ceilings, placeholders
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, english, msg
@@ -196,6 +204,31 @@ def forge_version_check(kit: ForgeKit) -> Check:
             return [result("forge", Status.OK, msg("doctor.forge.same", version=vendored))]
         message = msg("doctor.forge.differs", version=vendored)
         return [result("forge", Status.WARN, message, "cuanta refresh")]
+
+    return check
+
+
+TEMPLATE_CHECK = "template"
+TEMPLATE_MISSING = frozenset({"doctor.template.restorable", "doctor.template.incomplete"})
+TEMPLATE_UNUSABLE = "doctor.template.unusable"
+
+
+def template_check(templates: MandateTemplates) -> Check:
+    def check(_: Detection) -> Sequence[CheckResult]:
+        status = templates.status()
+        path = MANDATE_TEMPLATE
+        if status.state is TemplateState.ABSENT:
+            return []
+        if status.state is TemplateState.READY:
+            return [result(TEMPLATE_CHECK, Status.OK, msg("doctor.template.ready", path=path))]
+        if status.state in UNUSABLE_STATES:
+            return [result(TEMPLATE_CHECK, Status.WARN, unusable_message(status.state))]
+        if status.state is TemplateState.INCOMPLETE:
+            agents = ", ".join(status.missing)
+            message = msg("doctor.template.incomplete", path=path, agents=agents)
+            return [result(TEMPLATE_CHECK, Status.WARN, message, "cuanta init")]
+        message = msg("doctor.template.restorable", path=path, version=templates.version())
+        return [result(TEMPLATE_CHECK, Status.WARN, message, TEMPLATE_FIX)]
 
     return check
 

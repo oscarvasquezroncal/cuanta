@@ -100,10 +100,7 @@ class AppHeader(Horizontal):
             (t("header.stack"), language or t("header.unknown")),
             (t("header.tier"), detection.verify_tier.value),
             (t("header.graph"), detection.graph_mode.value),
-            (
-                t("header.forge"),
-                t("header.forge_installed" if snapshot.initialized else "header.forge_missing"),
-            ),
+            (t("header.forge"), forge_fact(t, snapshot)),
         ]
         self._facts = facts
         self._paint_facts()
@@ -133,6 +130,16 @@ class AppHeader(Horizontal):
             )
         )
         self.query_one("#header-michi", Michi).mood = mood_for(snapshot)
+
+
+def forge_fact(t: Catalog, snapshot: HomeSnapshot) -> str:
+    if not snapshot.initialized:
+        return t("header.forge_missing")
+    if snapshot.template_missing:
+        return t("header.forge_template")
+    if snapshot.template_unusable:
+        return t("header.forge_template_unusable")
+    return t("header.forge_installed")
 
 
 def mood_for(snapshot: HomeSnapshot) -> Mood:

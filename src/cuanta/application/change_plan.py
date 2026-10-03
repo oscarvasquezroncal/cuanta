@@ -9,9 +9,12 @@ from cuanta.ports.code_index import CodeIndex
 
 
 class IndexChangePlan:
-    def __init__(self, index: CodeIndex, now: Callable[[], str]) -> None:
+    def __init__(
+        self, index: CodeIndex, now: Callable[[], str], excluded: frozenset[str] = frozenset()
+    ) -> None:
         self._index = index
         self._now = now
+        self._excluded = excluded
 
     def compile(
         self, request: MandateRequest, overrides: tuple[tuple[str, str], ...] = ()
@@ -36,5 +39,6 @@ class IndexChangePlan:
             self._index.rows("test_links"),
             verified,
             self._now(),
+            self._excluded,
         )
         return apply_overrides(plan, overrides)

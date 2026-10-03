@@ -52,10 +52,22 @@ HEADING_LINE = re.compile(
     LINE_LEAD + r"(?:(?P<atx>#{1,6})(?:[ \t\r]|$)"
     r"|(?:[-*+][ \t]++)?(?:\*\*|__)[^*_\n]++(?:\*\*|__)[ \t\r]*+:?[ \t\r]*+$)"
 )
-FENCE_LINE = re.compile(LINE_LEAD + r"(?:```[^`]*+$|~~~)")
+FENCE_LINE = re.compile(LINE_LEAD + r"(?P<fence>`{3,}+(?=[^`]*+$)|~{3,}+)(?P<info>.*+)")
 LABEL_LEVEL = 7
 
 Span = tuple[int, int]
+
+
+def fence_after(fence: str, line: str) -> str:
+    found = FENCE_LINE.match(line)
+    if found is None:
+        return fence
+    mark = found["fence"]
+    if not fence:
+        return mark
+    if mark[0] == fence[0] and len(mark) >= len(fence) and not found["info"].strip():
+        return ""
+    return fence
 
 
 def request_text(request: MandateRequest) -> str:
@@ -99,15 +111,16 @@ def _merged(spans: list[Span]) -> tuple[Span, ...]:
 def part_spans(text: str) -> tuple[Span, ...]:
     spans: list[Span] = []
     open_parts: list[tuple[int, int]] = []
-    fenced = False
+    fence = ""
     offset = 0
     for line in text.split("\n"):
         start, offset = offset, offset + len(line) + 1
-        if FENCE_LINE.match(line) is not None:
-            fenced = not fenced
+        after = fence_after(fence, line)
+        if fence or after:
+            fence = after
             continue
-        part = not fenced and NUMBERED_PART.match(line) is not None
-        level = None if fenced else _line_level(line, part)
+        part = NUMBERED_PART.match(line) is not None
+        level = _line_level(line, part)
         if level is None:
             continue
         while open_parts and open_parts[-1][0] >= level:
@@ -133,10 +146,15 @@ LABELS: dict[str, str] = {
     "out_of_scope": "OUT OF SCOPE:",
 }
 REQUIRED = ("type", "what", "why", "out_of_scope")
+ESSENTIAL_FIELDS = ("type", "what")
+NONE_STATED = "none stated"
+PASTED_ERROR_TESTS = "regression fixture for the pasted error"
 DEFAULTS = {
+    "why": NONE_STATED,
     "where": "unknown",
-    "constraints": "none stated",
-    "tests": "regression fixture for the pasted error",
+    "constraints": NONE_STATED,
+    "tests": NONE_STATED,
+    "out_of_scope": NONE_STATED,
 }
 TYPE_DEFAULTS: dict[str, dict[str, str]] = {
     "investigation": {"tests": "Deliverable: a written report"},
@@ -147,14 +165,23 @@ class TemplateError(ValueError):
     pass
 
 
-def missing_fields(request: MandateRequest) -> tuple[str, ...]:
-    required = REQUIRED_BY_TYPE.get(request.type, REQUIRED)
-    return tuple(name for name in required if not getattr(request, name).strip())
+def missing_fields(
+    request: MandateRequest, required: tuple[str, ...] | None = None
+) -> tuple[str, ...]:
+    names = REQUIRED_BY_TYPE.get(request.type, REQUIRED) if required is None else required
+    return tuple(name for name in names if not getattr(request, name).strip())
+
+
+def _defaults(request: MandateRequest) -> dict[str, str]:
+    chosen = {**DEFAULTS, **TYPE_DEFAULTS.get(request.type, {})}
+    if request.type == MandateType.BUG and request.why.strip():
+        chosen["tests"] = PASTED_ERROR_TESTS
+    return chosen
 
 
 def with_defaults(request: MandateRequest) -> MandateRequest:
     values = {item.name: getattr(request, item.name) for item in fields(MandateRequest)}
-    for name, value in {**DEFAULTS, **TYPE_DEFAULTS.get(request.type, {})}.items():
+    for name, value in _defaults(request).items():
         if not values[name].strip():
             values[name] = value
     return MandateRequest(**values)

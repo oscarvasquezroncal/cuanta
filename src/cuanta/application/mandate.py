@@ -4,46 +4,53 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 
 from cuanta.application.engine_run import EngineLauncher, LaunchSpec
-from cuanta.application.gateway import CAPSULE_DIR
 from cuanta.application.instinct import DecisionMaker
+from cuanta.application.mandate_template import MandateTemplates
 from cuanta.application.run_reports import RunReports
 from cuanta.domain.audit import AuditRow
-from cuanta.domain.capsules import capsule_id
 from cuanta.domain.change_plan import ChangePlan, plan_metrics
 from cuanta.domain.detection import Stack
 from cuanta.domain.engine import AssistantText, EngineEvent, RunResult, ToolCall
 from cuanta.domain.errors import DomainFailure
+from cuanta.domain.forge_template import (
+    MANDATE_TEMPLATE,
+    PendingTemplate,
+    TemplateState,
+    missing_failure,
+    unusable_failure,
+)
 from cuanta.domain.governor import ReactionTaken
 from cuanta.domain.governor_report import governor_metrics
 from cuanta.domain.graph_policy import graphless_prompt
 from cuanta.domain.implementation import ImplementationReport
 from cuanta.domain.instinct import SCOPES, Choice, scope_hint_line
-from cuanta.domain.ledger import Capsule, Run, Snapshot
+from cuanta.domain.ledger import Run, Snapshot
 from cuanta.domain.mandate import (
-    INLINE_EVIDENCE_LIMIT,
     MandateRequest,
     Shape,
     TemplateError,
     builtin_block,
-    clip_evidence,
     evidence_from_failure,
     extract_block,
     fill_request,
     single_context,
 )
 from cuanta.domain.messages import english, msg
-from cuanta.domain.progress import Status, note
+from cuanta.domain.progress import Note, Status, note
 from cuanta.domain.report import strip_preamble
 from cuanta.domain.scout import DocsChoice
 from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, docs_payload
 from cuanta.domain.telemetry import unreadable_note
 from cuanta.domain.testing import GatewayStatus
-from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.ledger import Ledger
 from cuanta.ports.progress import ProgressSink
 from cuanta.ports.workspace import Workspace
 
-TEMPLATE_PATH = "docs/MANDATE_TEMPLATE.md"
+TEMPLATE_PATH = MANDATE_TEMPLATE
+IMPLEMENTATION_BLOCK = (
+    "# MANDATE — implementation\n\n"
+    "Implement the request in this native session.\n\n=== REQUEST ===\n"
+)
 BASE_TOOLS = (
     "Read",
     "Grep",
@@ -78,6 +85,7 @@ class Composed:
     command: tuple[str, ...]
     simple: bool = False
     single: bool = False
+    template: PendingTemplate | None = None
 
 
 @dataclass
@@ -141,11 +149,11 @@ class MandateService:
         decisions: DecisionMaker,
         clock_iso: Callable[[], str],
         exclusions: frozenset[str] = frozenset(),
-        capsules: CapsuleStore | None = None,
         scanned: Workspace | None = None,
         meta: Mapping[str, object] | None = None,
+        templates: MandateTemplates | None = None,
     ) -> None:
-        self._capsules = capsules
+        self._templates = templates
         self._meta = dict(meta or {})
         self._workspace = workspace
         self._scanned = scanned or workspace
@@ -156,14 +164,21 @@ class MandateService:
         self._exclusions = exclusions
         self._snapshot_modes: dict[tuple[str, str], dict[str, int]] = {}
 
-    def template_block(self) -> str:
-        text = self._workspace.read_text(TEMPLATE_PATH)
-        if text is None:
-            raise DomainFailure(f"{TEMPLATE_PATH} not found", "run cuanta init first")
+    def template_block(self) -> tuple[str, PendingTemplate | None]:
+        if self._templates is not None:
+            text, pending = self._templates.load()
+        else:
+            found = self._workspace.read_text(TEMPLATE_PATH)
+            if found is None:
+                raise missing_failure()
+            text, pending = found, None
         try:
-            return extract_block(text)
+            return extract_block(text), pending
         except TemplateError as error:
-            raise DomainFailure(str(error), "regenerate it with cuanta refresh") from error
+            raise unusable_failure(TemplateState.BROKEN) from error
+
+    def keep_template(self, pending: PendingTemplate) -> Note | None:
+        return self._templates.keep(pending) if self._templates is not None else None
 
     def from_failure(self) -> tuple[str, int]:
         latest = self._ledger.test_runs(limit=1, project_only=True)
@@ -179,25 +194,6 @@ class MandateService:
         ]
         return evidence_from_failure(rows, record.command, record.capsule_id), len(rows)
 
-    def bounded(self, text: str) -> str:
-        if len(text) <= INLINE_EVIDENCE_LIMIT or self._capsules is None:
-            return text
-        digest, _, size = self._capsules.put(text)
-        reference = capsule_id(digest)
-        self._ledger.add_capsule(
-            Capsule(
-                id=reference,
-                sha256=digest,
-                path=f"{CAPSULE_DIR}/{digest}.log",
-                kind="evidence",
-                size_bytes=size,
-                lines=text.count("\n") + 1,
-                summary=text[:200],
-                created_at=self._clock_iso(),
-            )
-        )
-        return clip_evidence(text, reference)
-
     def compose(
         self,
         request: MandateRequest,
@@ -211,16 +207,14 @@ class MandateService:
         context: str = "",
         implementation: bool = False,
     ) -> Composed:
-        block = (
-            "# MANDATE — implementation\n\n"
-            "Implement the request in this native session.\n\n=== REQUEST ===\n"
+        builtin = (
+            IMPLEMENTATION_BLOCK
             if implementation
             else builtin_block(request.type, simple, shape, graph_available)
-            or self.template_block()
         )
+        block, pending = (builtin, None) if builtin is not None else self.template_block()
         if not graph_available:
             block = graphless_prompt(block)
-        request = replace(request, why=self.bounded(request.why))
         decision_context = {
             "kind": "scope",
             "type": request.type,
@@ -244,6 +238,7 @@ class MandateService:
             tuple(command(prompt)),
             simple,
             implementation or simple or single_context(request.type, simple, shape),
+            pending,
         )
 
     def link_decisions(self, request_hash: str, run_id: str) -> int:

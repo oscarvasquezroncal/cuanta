@@ -84,6 +84,13 @@ ENGLISH: dict[str, str] = {
         "Stopped because the engine did not report the step cost needed to enforce the budget."
     ),
     "engine.budget_stopped": "Stopped at the spend cap or recorded an over-cap result.",
+    "engine.command_line": (
+        "the {engine} command line would be {length} characters (limit {limit})"
+    ),
+    "engine.command_line_hint": (
+        "the request travels on stdin or in a prompt file and does not count; shorten the "
+        "system prompt (the analyst agent's body) or the protected paths"
+    ),
     "stop.finished": "the agent finished",
     "stop.finished_on_request": (
         "the agent finished after the governor asked it to wrap up at {spent} of {limit}"
@@ -109,6 +116,7 @@ ENGLISH: dict[str, str] = {
     "stop.engine_failed": "stopped because the engine ended with {subtype}",
     "stop.engine_exited": "stopped because the engine exited with code {code} before its result",
     "stop.no_result": "stopped because the engine ended without a result",
+    "stop.raised": "stopped by an error before the engine returned a result",
     "stop.user": "stopped by the user",
     "stop.interrupted": "interrupted before the run finished",
     "stop.running": "still running",
@@ -179,6 +187,70 @@ ENGLISH: dict[str, str] = {
     "mandate.field_refactor_second": "Invariants",
     "mandate.field_investigation_what": "What do you want to understand?",
     "mandate.field_investigation_second": "Questions it must answer",
+    "mandate_file.type_not_stated": "type not stated: {type}; use -t/--type",
+    "mandate_file.missing": "mandate file not found: {path}",
+    "mandate_file.missing_hint": "check the path, or pass the request with --what",
+    "mandate_file.unreadable": "the mandate file could not be read: {path} ({error})",
+    "mandate_file.empty": "the mandate file is empty: {path}",
+    "mandate_file.empty_hint": "write the request in the file, or pass it with --what",
+    "mandate_file.with_evidence": "--from and --evidence both give the evidence",
+    "mandate_file.with_evidence_hint": (
+        "put the log in the mandate file, or add a short note with --why"
+    ),
+    "mandate_file.labelled": "fields from the file's labels: {fields}",
+    "mandate_file.over_file": "{options}: the command line wins over the file",
+    "mandate_file.what_moved": "--what: the file's what moves to the top of the evidence",
+    "mandate_file.why_added": "--why: added after the file's evidence",
+    "mandate_file.join": "{first}; {rest}",
+    "mandate_file.type_overridden": (
+        "the file says {stated}; cuanta {command} runs it as {kind}; "
+        "cuanta run FILE keeps the file's type"
+    ),
+    "mandate_file.type_unknown_overridden": (
+        "the file says {stated}, which is not a type; cuanta {command} runs it as {kind}"
+    ),
+    "evidence.missing": "evidence file not found: {path}",
+    "evidence.missing_hint": "check the path, or paste the text with --why",
+    "evidence.unreadable": "the evidence file could not be read: {path} ({error})",
+    "mandate_file.not_text": "{path} is not UTF-8 text",
+    "mandate_file.not_text_hint": "save it as UTF-8",
+    "mandate_file.unknown_type": "unknown type {type} in the file's TYPE line",
+    "mandate_file.unknown_type_hint": "use one of {types}, or pass -t/--type",
+    "shortcut.needs_file": "cuanta run needs a mandate file",
+    "shortcut.needs_file_hint": "cuanta run mandate.md",
+    "shortcut.one_file": "cuanta run takes one mandate file; it got {count}",
+    "shortcut.one_file_hint": "run each file on its own, or queue them with cuanta queue add -f",
+    "shortcut.file_twice": "a mandate file was given as an argument and with --from",
+    "shortcut.text_is_file": "{path} is a file: cuanta {command} -f {path} runs it as the mandate",
+    "shortcut.text_twice": "the request was given twice: as text and with --what",
+    "shortcut.twice_hint": "keep one of them",
+    "shortcut.needs_text": "cuanta {command} needs the request",
+    "shortcut.needs_text_hint": (
+        'cuanta {command} "<what to do>", --what "<text>" when it starts with -, or --from <file>'
+    ),
+    "guide.title": "cuanta · what people do",
+    "guide.app": "Open the app",
+    "guide.app_command": "cuanta  (or cuanta ui)",
+    "guide.file": "Run a mandate from a file: the file is the whole mandate",
+    "guide.file_command": "cuanta run mandate.md  (or cuanta mandate -f mandate.md)",
+    "guide.oneline": "A feature, a fix or an audit in one line",
+    "guide.oneline_command": 'cuanta feat "…" · cuanta fix "…" · cuanta audit "…"',
+    "guide.result": "See a result",
+    "guide.result_command": "cuanta runs show  (the last run) · cuanta runs  (the last ten)",
+    "guide.costs": "See costs",
+    "guide.costs_command": "cuanta costs · cuanta spectrum <run id>",
+    "guide.limits": "Set limits (a run has none unless you set them)",
+    "guide.limits_command": (
+        "cuanta run mandate.md --max-budget-usd 5 --max-turns 50 --max-wall 30"
+    ),
+    "guide.limits_more": "Also: [limits] in .cuanta/config.toml, or the Limits switch in the app.",
+    "guide.more": "Every option: cuanta <command> --help",
+    "interrupt.stopped": "interrupted",
+    "interrupt.run": "interrupted · run {run}",
+    "interrupt.see": "see it: cuanta runs show {run}",
+    "interrupt.resume": "nine lives: re-run to resume",
+    "runs.none_yet": "no runs yet",
+    "runs.none_yet_hint": "start one: cuanta run mandate.md",
     "doctor.python.ok": "{version}",
     "doctor.python.old": "{version} — cuanta needs Python 3.12+",
     "doctor.engine.missing": "not found",
@@ -207,6 +279,21 @@ ENGLISH: dict[str, str] = {
     "doctor.forge.missing": "not installed (vendored {version})",
     "doctor.forge.same": "installed = vendored {version}",
     "doctor.forge.differs": "installed differs from vendored {version}",
+    "doctor.template.ready": "{path} ready",
+    "doctor.template.restorable": (
+        "{path} missing: cuanta writes it from the vendored Forge {version} when a mandate needs it"
+    ),
+    "doctor.template.incomplete": (
+        "{path} missing and the Forge team is incomplete (missing {agents})"
+    ),
+    "doctor.template.unusable": "{problem}: {hint}",
+    "template.broken": "{path} has no fenced === REQUEST === block",
+    "template.unreadable": "{path} cannot be read as a plain file inside the project",
+    "template.unusable_hint": "fix it, or delete it and run cuanta init --template",
+    "template.needs_team": "{path} needs the four Forge agents; missing {agents}",
+    "template.needs_team_hint": "run cuanta init",
+    "template.write_failed": "could not write {path} ({error})",
+    "template.write_failed_hint": "make sure docs is a folder you can write to",
     "doctor.placeholders.found": "{hits}",
     "doctor.placeholders.clean": "{count} agent files clean",
     "doctor.listener.on": "127.0.0.1:{port} · {written} written",
@@ -300,6 +387,7 @@ ENGLISH: dict[str, str] = {
     "plan.gitignore": "edit: .gitignore (+ {entries})",
     "plan.install": "install: {path}",
     "plan.write_differs": "write: {path} (yours differs)",
+    "plan.template": "write: {path} from the vendored Forge {version}",
     "plan.forge_run": "run: claude -p <init-agents body> --output-format stream-json …",
     "plan.verify": "verify: placeholders, ceilings, artifacts; store baselines",
     "plan.telemetry": "edit: .claude/settings.local.json env block (OTLP → 127.0.0.1)",
@@ -320,6 +408,15 @@ ENGLISH: dict[str, str] = {
     "stage.run_unpriced": "run {run} · cost n/a",
     "mandate.handoff": "handoff · {agents}",
     "mandate.halt": "engine reported a halt",
+    "mandate.template_written": "{path} was missing: wrote it from the vendored Forge {version}",
+    "mandate.template_unwritable": (
+        "{path} is missing and could not be written ({error}): this run uses the vendored "
+        "Forge {version} copy"
+    ),
+    "mandate.template_borrowed": (
+        "{path} is missing: this run uses the vendored Forge {version} copy; "
+        "cuanta init --template keeps it"
+    ),
     "instinct.heuristic_ready": "offline, deterministic",
     "instinct.key_missing": "{env} is not set; after setx, open a new terminal",
     "instinct.key_openrouter_mismatch": (
@@ -425,6 +522,7 @@ ENGLISH: dict[str, str] = {
     "check.flags": "flags",
     "check.forge_state": "forge-state",
     "check.forge": "forge",
+    "check.template": "template",
     "check.placeholders": "placeholders",
     "check.ceilings": "ceilings",
     "check.listener": "listener",
@@ -466,6 +564,11 @@ ENGLISH: dict[str, str] = {
     "route.off": "routing off: engine default model",
     "route.single": "single model for this engine: {model}",
     "route.pure": "pure: --pure runs every role on {model}",
+    "route.main_model": "the main session runs on the chosen model {model}",
+    "route.main_pin_conflict": (
+        "the orchestrator is pinned to {pin}, but the main session runs on {model}"
+    ),
+    "route.main_pin_hint": "pin the orchestrator to the main session model, or drop the pin",
     "audit.ok": "ran on the planned model",
     "audit.not_run": "not delegated to in this run",
     "audit.not_seen": (

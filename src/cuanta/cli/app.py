@@ -12,6 +12,7 @@ from cuanta.cli.commands import (
     cat,
     costs,
     doctor,
+    guide,
     index,
     index_read,
     init,
@@ -30,13 +31,20 @@ from cuanta.cli.commands import (
     refresh,
     route,
     runs,
+    shortcuts,
     spectrum,
     telemetry,
     test,
     ui,
 )
 from cuanta.cli.group import hoist_globals
+from cuanta.cli.help_panels import PanelCommand
 from cuanta.cli.theme import ThemeName
+
+QUOTING = (
+    "Words that start with - are read as options: quote the request, and put -- before text "
+    "that starts with -."
+)
 
 app = typer.Typer(
     name="cuanta",
@@ -61,7 +69,7 @@ def root(
         Path | None, typer.Option("--project", help="Project folder (default: cwd).")
     ] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Assume yes to prompts.")] = False,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="More detail.")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-V", help="More detail.")] = False,
 ) -> None:
     from cuanta.cli.output import GlobalOptions
 
@@ -124,10 +132,43 @@ app.command("costs", help="Real costs: spend, outcomes and cost per accepted cha
 app.command("route", help="Plan which model each Forge role gets, and why (dry run).")(
     route.route_command
 )
-app.command("mandate", help="Fill the Forge mandate and run it headlessly.")(
+app.command("mandate", cls=PanelCommand, help="Fill the Forge mandate and run it headlessly.")(
     mandate.mandate_command
 )
-app.command("pounce", help="Alias of mandate.", hidden=True)(mandate.mandate_command)
+app.command("pounce", cls=PanelCommand, help="Alias of mandate.", hidden=True)(
+    mandate.mandate_command
+)
+app.command(
+    "run",
+    cls=PanelCommand,
+    help="Run a mandate file: the file is the whole mandate. Same as mandate -f FILE.",
+    context_settings=shortcuts.SHORTCUT_CONTEXT,
+    options_metavar="[OPTIONS] FILE",
+)(shortcuts.run_command)
+app.command(
+    "feat",
+    cls=PanelCommand,
+    help='A feature: cuanta feat "what to build". Takes every mandate option.',
+    epilog=QUOTING,
+    context_settings=shortcuts.SHORTCUT_CONTEXT,
+    options_metavar='[OPTIONS] "TEXT"',
+)(shortcuts.feat_command)
+app.command(
+    "fix",
+    cls=PanelCommand,
+    help='A fix: cuanta fix "what is broken". Takes every mandate option.',
+    epilog=QUOTING,
+    context_settings=shortcuts.SHORTCUT_CONTEXT,
+    options_metavar='[OPTIONS] "TEXT"',
+)(shortcuts.fix_command)
+app.command(
+    "audit",
+    cls=PanelCommand,
+    help='A read-only audit: cuanta audit "question". Takes every mandate option.',
+    epilog=QUOTING,
+    context_settings=shortcuts.SHORTCUT_CONTEXT,
+    options_metavar='[OPTIONS] "TEXT"',
+)(shortcuts.audit_command)
 app.add_typer(queue.queue_app, name="queue")
 app.command("refresh", help="Forge refresh, graph reindex, VERIFY_TIER drift report.")(
     refresh.refresh_command
@@ -136,6 +177,10 @@ app.command("loop", help="Guarded fix loop (VERIFY_TIER=strong only).")(loop.loo
 app.command("doctor", help="Environment and project health.")(doctor.doctor_command)
 app.command("purr", help="Alias of doctor.", hidden=True)(doctor.doctor_command)
 app.command("ui", help="Open the full-screen app (--web serves it in a browser).")(ui.ui_command)
+app.command("help", help="What people do with cuanta, on one screen, in your language.")(
+    guide.help_command
+)
+app.command("ayuda", help="The same screen as cuanta help.")(guide.help_command)
 app.command("meow", help="Wordmark, Michi, version and palette.")(meow.meow_command)
 
 

@@ -103,6 +103,7 @@ if TYPE_CHECKING:
     from cuanta.application.ledger_view import RunsQuery
     from cuanta.application.mandate import MandateReport, MandateService
     from cuanta.application.mandate_flow import MandateFlow, MandateOptions, Prepared
+    from cuanta.application.mandate_template import MandateTemplates
     from cuanta.application.map import MapQuery
     from cuanta.application.mcp import McpServer
     from cuanta.application.models import ModelService, ProbeOutcome
@@ -173,11 +174,13 @@ class Container:
     extra_env: tuple[tuple[str, str], ...] = ()
     run_mode: str = ""
     verbose: bool = False
+    request_files: tuple[str, ...] = ()
     _shared: Ledger | None = field(default=None, repr=False)
     _opened: list[Ledger] = field(default_factory=list, repr=False)
     decision_scope: DecisionScope = field(default_factory=_new_scope, repr=False)
     _pack_cache: dict[str, ContextPack] = field(default_factory=dict, repr=False)
     _fast_ready: dict[str, bool] = field(default_factory=dict, repr=False)
+    _issued: list[str] = field(default_factory=list, repr=False)
 
     @classmethod
     def for_project(cls, project: Path, verbose: bool = False) -> Container:
@@ -190,10 +193,36 @@ class Container:
         )
 
     def new_run_id(self) -> str:
-        return make_run_id(self.clock.now_ms(), secrets.token_bytes(10))
+        run_id = make_run_id(self.clock.now_ms(), secrets.token_bytes(10))
+        self._issued.append(run_id)
+        return run_id
+
+    def recorded_run(self) -> str:
+        from cuanta.domain.ledger import launched_run
+
+        if not self._issued:
+            return ""
+        if self._shared is None and not (self.cuanta_dir() / "ledger.db").is_file():
+            return ""
+        ledger = self.shared_ledger()
+        for run_id in reversed(self._issued):
+            run = ledger.get_run(run_id)
+            if run is not None:
+                return launched_run(run, ledger.get_run).id
+        return ""
 
     def workspace(self) -> LocalWorkspace:
         return LocalWorkspace(self.project)
+
+    def use_request_files(self, paths: Sequence[Path]) -> None:
+        root = self.project.resolve()
+        found: list[str] = []
+        for path in paths:
+            try:
+                found.append(path.expanduser().resolve().relative_to(root).as_posix())
+            except ValueError:
+                continue
+        self.request_files = tuple(dict.fromkeys(found))
 
     def index_service(self, rebuild: bool = False) -> IndexService:
         from cuanta.adapters.graph.file_graph import graph_path
@@ -351,13 +380,19 @@ class Container:
         from cuanta.application.change_plan import IndexChangePlan
         from cuanta.domain.change_plan import compile_change_plan
 
+        excluded = frozenset(self.request_files)
         if not self.config.index_enabled:
             inventory = LocalIndexInventory(self.project, frozenset(self.config.exclusions))
-            return compile_change_plan(request, inventory.candidates(), (), (), (), (), (), ())
+            candidates = inventory.candidates()
+            return compile_change_plan(
+                request, candidates, (), (), (), (), (), (), excluded=excluded
+            )
         reader = self.index_reader()
         try:
             reader.update()
-            return IndexChangePlan(reader.service.index, self.clock.now_iso).compile(request)
+            return IndexChangePlan(reader.service.index, self.clock.now_iso, excluded).compile(
+                request
+            )
         finally:
             reader.close()
 
@@ -373,7 +408,9 @@ class Container:
         reader = self.index_reader()
         try:
             reader.update()
-            return IndexContextPack(reader, self._pack_cache).compile(request, depth, role, plan)
+            return IndexContextPack(
+                reader, self._pack_cache, frozenset(self.request_files)
+            ).compile(request, depth, role, plan)
         finally:
             reader.close()
 
@@ -542,6 +579,11 @@ class Container:
         from cuanta.adapters.forge.installer import VendoredForgeKit
 
         return VendoredForgeKit(self.home if scope == "user" else self.project)
+
+    def mandate_templates(self) -> MandateTemplates:
+        from cuanta.application.mandate_template import MandateTemplates
+
+        return MandateTemplates(self.state_workspace(), self.forge_kit())
 
     def engine(self, name: str) -> Engine | None:
         factory = plugin_factories("cuanta.engines", BUILTIN_ENGINES).get(name)
@@ -717,7 +759,8 @@ class Container:
             permissions_deny=denied,
             owned_hooks=hooks,
             owned_mcp=mcp,
-            pure_model=spec.model if spec.pure else "",
+            model=spec.model,
+            pure=spec.pure,
             variant=spec.variant,
         )
 
@@ -1173,6 +1216,9 @@ class Container:
 
     def pure_plan(self, plan: RoutePlan, model: str) -> RoutePlan:
         return self.route_advisor(self.shared_ledger()).pure(plan, model)
+
+    def main_model_plan(self, plan: RoutePlan, model: str) -> RoutePlan:
+        return self.route_advisor(self.shared_ledger()).main_model(plan, model)
 
     def team_shape(
         self, request: MandateRequest, options: MandateOptions, cross_engine: bool = False
@@ -1794,7 +1840,7 @@ class Container:
 
         from cuanta.application.results import ResultQuery
 
-        return ResultQuery(self.workspace(), ledger, date.today, self.clock.now_iso)
+        return ResultQuery(self.state_workspace(), ledger, date.today, self.clock.now_iso)
 
     def resolve_run(self, reference: str) -> str:
         from cuanta.domain.errors import DomainFailure
@@ -1809,6 +1855,16 @@ class Container:
         if not matches:
             raise DomainFailure(f"no run matches {reference}", "list them: cuanta runs list")
         raise DomainFailure(f"{reference} matches {len(matches)} runs", "give more of the id")
+
+    def last_run(self) -> str:
+        from cuanta.domain.errors import DomainFailure
+        from cuanta.domain.ledger import last_launched
+        from cuanta.domain.messages import english, msg
+
+        latest = last_launched(self.runs_query().run())
+        if latest is None:
+            raise DomainFailure(english(msg("runs.none_yet")), english(msg("runs.none_yet_hint")))
+        return latest.id
 
     def stored_reports(self) -> frozenset[str]:
         from cuanta.application.run_reports import RUNS_DIR
@@ -2116,9 +2172,9 @@ class Container:
             self.decisions(ledger),
             self.clock.now_iso,
             frozenset(self.config.exclusions),
-            self.capsule_store(),
             scanned=self.workspace(),
             meta=classic_meta(self.run_mode),
+            templates=self.mandate_templates(),
         )
 
     def mandate_flow(self, ledger: Ledger, sandbox: SandboxLaunch | None = None) -> MandateFlow:
@@ -2716,6 +2772,7 @@ class Container:
                 doctor.engine_flags_check(self.engine),
                 doctor.forge_state_check(workspace),
                 doctor.forge_version_check(self.forge_kit()),
+                doctor.template_check(self.mandate_templates()),
                 doctor.user_forge_check(
                     lambda: installed_plugins(self.home), self.forge_kit().vendored_version
                 ),

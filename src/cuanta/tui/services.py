@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import errno
 import os
 import secrets
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -51,7 +53,7 @@ from cuanta.application.map import MapFile, MapQuery, MapStatus
 from cuanta.application.models import CatalogView, ProbeOutcome
 from cuanta.application.new_files import NewFilePair
 from cuanta.application.results import ResultQuery, ResultView, RunFile
-from cuanta.application.routing import RoleStats, RoutePlan, role_stats
+from cuanta.application.routing import RoleStats, RoutePlan, role_stats, route_model
 from cuanta.application.sandbox import SandboxResult
 from cuanta.application.spectrum import ALL_SESSIONS, Selection, SpectrumResult
 from cuanta.application.tests_view import TestsSummary, from_report
@@ -66,6 +68,7 @@ from cuanta.domain.drafts import Draft
 from cuanta.domain.engine import EngineEvent
 from cuanta.domain.errors import CuantaError, DomainFailure, NotAvailable
 from cuanta.domain.fixes import Fix, FixAction
+from cuanta.domain.forge_template import MANDATE_TEMPLATE
 from cuanta.domain.handoff import Handoff, parse_workflow
 from cuanta.domain.implementation import ImplementationProfile, large_feature
 from cuanta.domain.instinct import Choice
@@ -73,6 +76,7 @@ from cuanta.domain.ledger import Decision, Run
 from cuanta.domain.limits import limit_settings
 from cuanta.domain.loop import LOOP_OUT_OF_SCOPE, LoopGate, loop_gate
 from cuanta.domain.mandate import MandateRequest, Shape, parse_shape, single_context
+from cuanta.domain.mandate_file import decoded_text
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.models import ModelEntry
 from cuanta.domain.progress import ProgressEvent
@@ -209,6 +213,8 @@ class Services(Protocol):
 
     def read_evidence(self, path: str) -> str: ...
 
+    def use_request_files(self, paths: Sequence[str]) -> None: ...
+
     def preview_mandate(
         self, request: MandateRequest, signatures: int, options: MandateOptions
     ) -> MandatePreview: ...
@@ -338,7 +344,7 @@ class Services(Protocol):
 
     def team_advice(self, task_type: str) -> ProviderAdvice | None: ...
 
-    def understand(self, story: str) -> Understanding: ...
+    def understand(self, story: str, whole: bool = False) -> Understanding: ...
 
     def last_story(self) -> str: ...
 
@@ -380,7 +386,8 @@ class ContainerServices:
         self._stop_requested = False
         self._stop_lock = threading.Lock()
         self._clarity: dict[str, Clarity] = {}
-        self._plan_cache: tuple[MandateRequest, ChangePlan] | None = None
+        self._plan_cache: tuple[tuple[MandateRequest, tuple[Path, ...]], ChangePlan] | None = None
+        self._request_files: tuple[Path, ...] = ()
         self._sandbox_results: dict[str, SandboxResult] = {}
 
     def result_shown(self, run_id: str) -> None:
@@ -395,7 +402,10 @@ class ContainerServices:
     def _container(self) -> Container:
         from cuanta.bootstrap import Container
 
-        return Container.for_project(self._project)
+        container = Container.for_project(self._project)
+        if self._request_files:
+            container.use_request_files(self._request_files)
+        return container
 
     def home(self) -> HomeSnapshot:
         container = self._container()
@@ -460,6 +470,9 @@ class ContainerServices:
                 control = container.listener()
                 status = control.start_background(control.free_port(container.config.port))
                 return f"127.0.0.1:{status.port}" if status.running else "not running"
+            if fix.action is FixAction.TEMPLATE:
+                container.mandate_templates().write()
+                return MANDATE_TEMPLATE
             return ""
         finally:
             container.close()
@@ -495,11 +508,22 @@ class ContainerServices:
         finally:
             container.close()
 
+    def _typed_file(self, path: str) -> Path:
+        try:
+            target = Path(path).expanduser()
+        except RuntimeError as error:
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path) from error
+        return target if target.is_absolute() else self._project / target
+
     def read_evidence(self, path: str) -> str:
-        target = Path(path).expanduser()
-        if not target.is_absolute():
-            target = self._project / target
-        return target.read_text(encoding="utf-8", errors="replace")
+        return decoded_text(self._typed_file(path).read_bytes(), path)
+
+    def use_request_files(self, paths: Sequence[str]) -> None:
+        found: list[Path] = []
+        for path in paths:
+            with suppress(FileNotFoundError):
+                found.append(self._typed_file(path))
+        self._request_files = tuple(found)
 
     def preview_mandate(
         self, request: MandateRequest, signatures: int, options: MandateOptions
@@ -981,6 +1005,12 @@ class ContainerServices:
             )
             docs = container.docs_choice(request, options)
             plan = container.shape_plan(plan, choice, docs)
+            per_role = per_role_run(options, request.type, container.config.engine)
+            if options.pure and not fast:
+                pinned = options.model or ("" if per_role else route_model(plan, Role.ORCHESTRATOR))
+                plan = container.pure_plan(plan, pinned)
+            elif options.model and not fast and not per_role:
+                plan = container.main_model_plan(plan, options.model)
             limits = mandate_limits(options, request.type, limit_settings(container.config))
             cap = limits.budget_usd
             shape = (
@@ -1009,7 +1039,6 @@ class ContainerServices:
                 shape=choice,
                 docs=docs,
             )
-            per_role = per_role_run(options, request.type, container.config.engine)
             if fast and not options.model:
                 edits = sum(container.plan_sizes(protection).edit)
                 options = fast_defaults(options, request.type, large_feature(request.type, edits))
@@ -1040,11 +1069,12 @@ class ContainerServices:
             container.close()
 
     def _compiled_plan(self, container: Container, request: MandateRequest) -> ChangePlan:
+        key = (request, self._request_files)
         cached = self._plan_cache
-        if cached is not None and cached[0] == request:
+        if cached is not None and cached[0] == key:
             return cached[1]
         plan = container.change_plan(request)
-        self._plan_cache = (request, plan)
+        self._plan_cache = (key, plan)
         return plan
 
     def team_cards(
@@ -1083,21 +1113,23 @@ class ContainerServices:
             container.close()
 
     def change_plan(self, request: MandateRequest) -> ChangePlan:
+        key = (request, self._request_files)
         container = self._container()
         try:
             plan = container.change_plan(request)
-            self._plan_cache = (request, plan)
+            self._plan_cache = (key, plan)
             return plan
         finally:
             container.close()
 
-    def understand(self, story: str) -> Understanding:
+    def understand(self, story: str, whole: bool = False) -> Understanding:
         container = self._container()
         ledger = container.ledger()
         try:
             token = f"intake:{secrets.token_hex(16)}"
             container.decision_scope.set("", token, True)
-            return replace(container.intake(ledger).understand(story), intake_scope=token)
+            found = container.intake(ledger).understand(story, whole)
+            return replace(found, intake_scope=token)
         finally:
             ledger.close()
 

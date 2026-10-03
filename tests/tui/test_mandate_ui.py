@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from textual.pilot import Pilot
@@ -15,6 +16,7 @@ from cuanta.tui.app import CuantaApp
 from cuanta.tui.screens.attach import AttachScreen
 from cuanta.tui.screens.pipeline import PipelineScreen
 from cuanta.tui.screens.result import ResultScreen
+from cuanta.tui.services import ContainerServices
 from cuanta.tui.views.mandate import MandateView
 from cuanta.tui.widgets.wizard import MandateWizard
 from tests.tui.fakes import (
@@ -26,6 +28,7 @@ from tests.tui.fakes import (
     single_context_events,
 )
 from tests.tui.test_app import at, drive, make_app, settle
+from tests.tui.test_cross_services import UNRESOLVED_HOME, unresolvable_home
 from tests.tui.test_t5_screens import render, wait_for
 from tests.tui.test_wizard import current, open_wizard, tell
 
@@ -291,6 +294,49 @@ def test_use_last_failure_and_attach_file() -> None:
         await wait_for(
             pilot, lambda: any(note.startswith("Could not read missing.log") for note in notes(app))
         )
+
+    drive(make_app(services), scenario, size=(120, 50))
+
+
+@pytest.mark.parametrize(
+    ("language", "refusal"),
+    [
+        ("en", "Could not read logs/ansi.txt: not UTF-8 text; save it as UTF-8"),
+        ("es", "No se pudo leer logs/ansi.txt: no es texto UTF-8; guárdalo como UTF-8"),
+    ],
+    ids=["en", "es"],
+)
+def test_attaching_a_file_that_is_not_utf8_says_so(language: str, refusal: str) -> None:
+    services = FakeServices(evidence_bytes={"logs/ansi.txt": "Traceback: envío".encode("cp1252")})
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, BUG)
+        wizard.query_one("#wiz-attach", Button).press()
+        await wait_for(pilot, lambda: isinstance(app.screen, AttachScreen))
+        await pilot.press(*"logs/ansi.txt", "enter")
+        await wait_for(pilot, lambda: refusal in notes(app))
+        assert "envío" not in wizard.query_one("#wiz-why", TextArea).text
+
+    drive(make_app(services, language=language), scenario, size=(120, 50))
+
+
+def test_attaching_a_tilde_path_whose_home_cannot_be_resolved_says_it_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unresolvable_home(monkeypatch, tmp_path)
+    services = FakeServices()
+    monkeypatch.setattr(services, "read_evidence", ContainerServices(tmp_path).read_evidence)
+    path = UNRESOLVED_HOME[1]
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        wizard = await open_wizard(app, pilot)
+        await tell(wizard, pilot, BUG)
+        wizard.query_one("#wiz-attach", Button).press()
+        await wait_for(pilot, lambda: isinstance(app.screen, AttachScreen))
+        await pilot.press(*path, "enter")
+        missing = f"Could not read {path}: No such file or directory"
+        await wait_for(pilot, lambda: missing in notes(app))
 
     drive(make_app(services), scenario, size=(120, 50))
 

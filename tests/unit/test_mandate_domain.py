@@ -324,6 +324,18 @@ def test_a_phase_ends_at_the_next_heading_of_its_level_or_above() -> None:
             "## Fase 1\n```inline``` code\n## Fase 2\nb\n## Reglas\nc\n",
             ["## Fase 1\n```inline``` code\n## Fase 2\nb\n"],
         ),
+        (
+            "## Fase 1\na\n````\n```\n## Reglas\n````\nb\n## Fase 2\nc\n## Notas\nd\n",
+            ["## Fase 1\na\n````\n```\n## Reglas\n````\nb\n## Fase 2\nc\n"],
+        ),
+        (
+            "## Fase 1\n~~~\n```\n~~~\n## Notas\nx\n",
+            ["## Fase 1\n~~~\n```\n~~~\n"],
+        ),
+        (
+            "## Fase 1\n```python\n```python\n## Notas\n```\n## Notas\nx\n",
+            ["## Fase 1\n```python\n```python\n## Notas\n```\n"],
+        ),
         ("## Contexto\nSin fases.\n", []),
         ("", []),
     ],
@@ -336,6 +348,9 @@ def test_a_phase_ends_at_the_next_heading_of_its_level_or_above() -> None:
         "quoted",
         "fenced",
         "inline_fence",
+        "long_fence",
+        "tilde_fence",
+        "info_string_fence",
         "none",
         "empty",
     ],

@@ -30,3 +30,7 @@ class EnvironmentFailure(CuantaError):
 
 class NotAvailable(CuantaError):
     exit_code = ExitCode.NOT_AVAILABLE
+
+
+class InterruptedFailure(CuantaError):
+    exit_code = ExitCode.INTERRUPTED

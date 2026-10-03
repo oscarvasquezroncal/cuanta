@@ -15,8 +15,39 @@ if TYPE_CHECKING:
     from cuanta.cli.document import Document
     from cuanta.cli.output import Environment, GlobalOptions, OutputSettings
     from cuanta.cli.presenters.base import Presenter
+    from cuanta.domain.errors import InterruptedFailure
 
 FORCE_TTY_ENV = "CUANTA_FORCE_TTY"
+HINT_SEPARATOR = " · "
+
+
+class Interrupted(KeyboardInterrupt):
+    def __init__(self, run_id: str = "", resumable: bool = False) -> None:
+        super().__init__(run_id)
+        self.run_id = run_id
+        self.resumable = resumable
+
+
+def interrupted(
+    interrupt: KeyboardInterrupt, run_id: str = "", resumable: bool = False
+) -> Interrupted:
+    if isinstance(interrupt, Interrupted):
+        return Interrupted(interrupt.run_id or run_id, interrupt.resumable or resumable)
+    return Interrupted(run_id, resumable)
+
+
+def interrupted_failure(interrupt: KeyboardInterrupt) -> InterruptedFailure:
+    from cuanta.domain.errors import InterruptedFailure
+    from cuanta.domain.messages import english, msg
+
+    stopped = interrupted(interrupt)
+    hints: list[str] = []
+    if stopped.run_id:
+        hints.append(english(msg("interrupt.see", run=stopped.run_id)))
+    if stopped.resumable:
+        hints.append(english(msg("interrupt.resume")))
+    told = msg("interrupt.run", run=stopped.run_id) if stopped.run_id else msg("interrupt.stopped")
+    return InterruptedFailure(english(told), HINT_SEPARATOR.join(hints))
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +128,7 @@ def execute(ctx: typer.Context, action: Callable[[Session], Document]) -> None:
 
     session = open_session(ctx)
     code = ExitCode.OK
+    document: Document | None = None
     try:
         document = action(session)
         session.presenter.render(document)
@@ -107,9 +139,12 @@ def execute(ctx: typer.Context, action: Callable[[Session], Document]) -> None:
     except CuantaError as error:
         session.presenter.fail(error)
         code = error.exit_code
-    except KeyboardInterrupt:
-        session.presenter.fail(CuantaError("interrupted · nine lives: re-run to resume"))
-        code = ExitCode.INTERRUPTED
+    except (KeyboardInterrupt, typer.Abort) as stop:
+        interrupt = stop if isinstance(stop, KeyboardInterrupt) else KeyboardInterrupt()
+        recorded = document.recorded_run if document is not None else ""
+        failure = interrupted_failure(interrupted(interrupt, recorded))
+        session.presenter.fail(failure)
+        code = failure.exit_code
     except Exception as error:
         if session.options.verbose:
             import traceback

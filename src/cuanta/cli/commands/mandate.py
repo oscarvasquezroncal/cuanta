@@ -4,9 +4,12 @@ from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from cuanta.cli.runtime import Session, execute
+from cuanta.cli.help_panels import ADVANCED, HOW_TO_RUN, LIMITS, WHAT_TO_DO
+from cuanta.cli.runtime import Session, execute, interrupted
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from cuanta.application.cross_engine import CrossReport
     from cuanta.application.forecast import PlannedForecast
     from cuanta.application.mandate import MandateReport, MandateService
@@ -24,6 +27,8 @@ if TYPE_CHECKING:
     from cuanta.domain.scout import DocsChoice, ShapeChoice
     from cuanta.domain.scout_report import ScoutSummary
 
+SHORTCUT_TYPES = {"feat": "feature", "fix": "bug", "audit": "investigation"}
+
 
 @dataclass(frozen=True, slots=True)
 class MandateArgs:
@@ -31,6 +36,7 @@ class MandateArgs:
     what: str = ""
     why: str = ""
     evidence: Path | None = None
+    from_file: Path | None = None
     where: str = ""
     constraints: str = ""
     tests: str = ""
@@ -62,149 +68,247 @@ class MandateArgs:
     variant: str = ""
     pure: bool = False
     docs: str = ""
+    shortcut: str = ""
+    type_stated: bool = True
+    sources: tuple[Path, ...] = ()
 
 
 def mandate_command(
     ctx: typer.Context,
     type_: Annotated[
-        str, typer.Option("--type", help="feature, bug, refactor, investigation.")
+        str,
+        typer.Option(
+            "--type",
+            "-t",
+            help="feature, bug, refactor or investigation.",
+            rich_help_panel=WHAT_TO_DO,
+        ),
     ] = "",
-    what: Annotated[str, typer.Option("--what", help="The change, concretely.")] = "",
-    why: Annotated[str, typer.Option("--why", help="Evidence: the error, the log.")] = "",
+    what: Annotated[
+        str,
+        typer.Option(
+            "--what", help="The change; a long request goes in --from.", rich_help_panel=WHAT_TO_DO
+        ),
+    ] = "",
+    why: Annotated[
+        str,
+        typer.Option("--why", help="Evidence: the error, the log.", rich_help_panel=WHAT_TO_DO),
+    ] = "",
     evidence: Annotated[
-        Path | None, typer.Option("--evidence", help="File whose content becomes the evidence.")
+        Path | None,
+        typer.Option(
+            "--evidence",
+            help="A file whose text becomes the evidence.",
+            rich_help_panel=WHAT_TO_DO,
+        ),
     ] = None,
-    where: Annotated[str, typer.Option("--where", help="File, module or area.")] = "",
-    constraints: Annotated[str, typer.Option("--constraints", help="Invariants to keep.")] = "",
-    tests: Annotated[str, typer.Option("--tests", help="The proof you expect.")] = "",
-    out_of_scope: Annotated[
-        str, typer.Option("--out-of-scope", help="What must not be touched.")
+    from_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--from",
+            "-f",
+            help="A file that is the whole mandate.",
+            rich_help_panel=WHAT_TO_DO,
+        ),
+    ] = None,
+    where: Annotated[
+        str, typer.Option("--where", help="File, module or area.", rich_help_panel=WHAT_TO_DO)
     ] = "",
-    from_failure: Annotated[
-        bool, typer.Option("--from-failure", help="Use the last red cuanta test as evidence.")
-    ] = False,
-    engine: Annotated[str, typer.Option("--engine", help="claude, codex or opencode.")] = "",
-    model: Annotated[str, typer.Option("--model", help="Model for the run.")] = "",
-    profile: Annotated[
-        str, typer.Option("--profile", help="Implementation profile: auto, balanced or fast.")
+    constraints: Annotated[
+        str,
+        typer.Option("--constraints", help="Invariants to keep.", rich_help_panel=WHAT_TO_DO),
+    ] = "",
+    tests: Annotated[
+        str, typer.Option("--tests", help="The proof you expect.", rich_help_panel=WHAT_TO_DO)
+    ] = "",
+    out_of_scope: Annotated[
+        str,
+        typer.Option(
+            "--out-of-scope", help="What must not be touched.", rich_help_panel=WHAT_TO_DO
+        ),
+    ] = "",
+    engine: Annotated[
+        str,
+        typer.Option("--engine", help="claude, codex or opencode.", rich_help_panel=HOW_TO_RUN),
+    ] = "",
+    model: Annotated[
+        str, typer.Option("--model", "-m", help="Model for the run.", rich_help_panel=HOW_TO_RUN)
     ] = "",
     variant: Annotated[
         str,
         typer.Option(
             "--variant",
-            help="Claude effort, ultracode, fast, or fast-<effort> (Opus fast output).",
+            "-v",
+            help="Effort, ultracode, fast or fast-<effort>.",
+            rich_help_panel=HOW_TO_RUN,
+        ),
+    ] = "",
+    profile: Annotated[
+        str,
+        typer.Option(
+            "--profile",
+            "-p",
+            help="Profile: auto, balanced or fast.",
+            rich_help_panel=HOW_TO_RUN,
         ),
     ] = "",
     pure: Annotated[
-        bool, typer.Option("--pure", help="Pin Claude helpers and subagents to the chosen model.")
+        bool,
+        typer.Option(
+            "--pure", help="Pin helpers and subagents to the model.", rich_help_panel=HOW_TO_RUN
+        ),
+    ] = False,
+    depth: Annotated[
+        str,
+        typer.Option(
+            "--depth",
+            help="quick, normal or deep: tiers, effort, reads.",
+            rich_help_panel=HOW_TO_RUN,
+        ),
+    ] = "",
+    docs: Annotated[
+        str,
+        typer.Option("--docs", help="Docs role: auto, on or off.", rich_help_panel=HOW_TO_RUN),
+    ] = "",
+    sandbox: Annotated[
+        bool,
+        typer.Option(
+            "--sandbox",
+            "-s",
+            help="Work in a copy; then cuanta runs apply.",
+            rich_help_panel=HOW_TO_RUN,
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print prompt and command.", rich_help_panel=HOW_TO_RUN),
     ] = False,
     budget: Annotated[
         float | None,
         typer.Option(
             "--max-budget-usd",
             min=0.0,
-            help="Spend cap in USD; none unless set; enforcement depends on the engine.",
+            help="Spend cap in USD; none unless set.",
+            rich_help_panel=LIMITS,
         ),
     ] = None,
-    hu: Annotated[str, typer.Option("--hu", help="Tag the run with a story, e.g. HU-007.")] = "",
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print prompt and command.")] = False,
-    route: Annotated[str, typer.Option("--route", help="Model routing: auto, fixed or off.")] = "",
-    preset: Annotated[str, typer.Option("--preset", help="save, balanced or best.")] = "",
+    max_turns: Annotated[
+        int | None,
+        typer.Option(
+            "--max-turns",
+            min=0,
+            help="Claude turn limit; none unless set.",
+            rich_help_panel=LIMITS,
+        ),
+    ] = None,
+    max_wall: Annotated[
+        float | None,
+        typer.Option(
+            "--max-wall",
+            min=0.0,
+            help="Time limit (min); none unless set.",
+            rich_help_panel=LIMITS,
+        ),
+    ] = None,
+    from_failure: Annotated[
+        bool,
+        typer.Option(
+            "--from-failure",
+            help="Use the last red cuanta test as evidence.",
+            rich_help_panel=ADVANCED,
+        ),
+    ] = False,
+    hu: Annotated[
+        str,
+        typer.Option(
+            "--hu", help="Tag the run with a story, e.g. HU-007.", rich_help_panel=ADVANCED
+        ),
+    ] = "",
+    shape: Annotated[
+        str,
+        typer.Option(
+            "--shape", help="Team shape: single, pipeline or scout.", rich_help_panel=ADVANCED
+        ),
+    ] = "",
+    route: Annotated[
+        str,
+        typer.Option(
+            "--route", help="Model routing: auto, fixed or off.", rich_help_panel=ADVANCED
+        ),
+    ] = "",
+    preset: Annotated[
+        str,
+        typer.Option(
+            "--preset", help="Routing preset: save, balanced or best.", rich_help_panel=ADVANCED
+        ),
+    ] = "",
     role_model: Annotated[
-        list[str] | None, typer.Option("--role-model", help="Pin a role: senior=opus.")
+        list[str] | None,
+        typer.Option("--role-model", help="Pin a role: senior=opus.", rich_help_panel=ADVANCED),
     ] = None,
     override_env_model: Annotated[
         bool,
         typer.Option(
             "--override-env-model",
-            help="Unset CLAUDE_CODE_SUBAGENT_MODEL(_FORCE) for this run so routes apply.",
+            help="Unset CLAUDE_CODE_SUBAGENT_MODEL(_FORCE).",
+            rich_help_panel=ADVANCED,
+        ),
+    ] = False,
+    session: Annotated[
+        str,
+        typer.Option(
+            "--session",
+            help="lean (no plugins, hooks, MCP) or full.",
+            rich_help_panel=ADVANCED,
+        ),
+    ] = "",
+    keep: Annotated[
+        bool,
+        typer.Option(
+            "--keep", help="Keep the copy after the run (--sandbox).", rich_help_panel=ADVANCED
         ),
     ] = False,
     cross_engine: Annotated[
         bool,
         typer.Option(
             "--cross-engine",
-            help="Run each role as its own launch, same provider (a codex team always does).",
+            help="One launch per role, same provider.",
+            rich_help_panel=ADVANCED,
         ),
     ] = False,
     cross_budget: Annotated[
         float | None,
         typer.Option(
             "--cross-budget-usd",
-            help=(
-                "Spend cap for a team run as one launch per role; none unless set "
-                "(--max-budget-usd or [limits] budget_usd also cap it)."
-            ),
+            help="Team spend cap (one launch per role).",
+            rich_help_panel=ADVANCED,
         ),
     ] = None,
     simple: Annotated[
         bool,
         typer.Option(
-            "--simple", help="Simple mode: one agent, no project knowledge (no Forge needed)."
+            "--simple",
+            help="One agent, no project knowledge, no Forge.",
+            rich_help_panel=ADVANCED,
         ),
     ] = False,
-    session: Annotated[
-        str,
-        typer.Option("--session", help="lean (no user plugins, hooks or MCP servers) or full."),
-    ] = "",
-    depth: Annotated[
-        str,
-        typer.Option("--depth", help="quick, normal or deep: model tiers, effort and read budget."),
-    ] = "",
-    max_turns: Annotated[
-        int | None,
-        typer.Option("--max-turns", min=0, help="Turn limit for Claude runs; none unless set."),
-    ] = None,
-    max_wall: Annotated[
-        float | None,
-        typer.Option("--max-wall", min=0.0, help="Wall-time limit in minutes; none unless set."),
-    ] = None,
-    shape: Annotated[
-        str,
-        typer.Option(
-            "--shape",
-            help=(
-                "Investigations: single (one context, default) or pipeline (analyst subagent). "
-                "Features and fixes: pipeline or scout (scout and senior); omitted, the forecast "
-                "picks."
-            ),
-        ),
-    ] = "",
-    sandbox: Annotated[
-        bool,
-        typer.Option(
-            "--sandbox",
-            help="Work in an isolated copy of the project; apply later with cuanta runs apply.",
-        ),
-    ] = False,
-    keep: Annotated[
-        bool, typer.Option("--keep", help="Keep the isolated copy after the run (--sandbox).")
-    ] = False,
-    docs: Annotated[
-        str,
-        typer.Option(
-            "--docs",
-            help=(
-                "Docs role: auto (when the request asks for docs), on or off; overrides runs.docs."
-            ),
-        ),
-    ] = "",
     classic: Annotated[
         bool,
         typer.Option(
             "--classic",
-            help=(
-                "For this run only: pipeline shape (no scout), docs on, read discipline off "
-                "and governor off; recorded as mode classic."
-            ),
+            help="Pipeline, docs on, governor and hooks off.",
+            rich_help_panel=ADVANCED,
         ),
     ] = False,
 ) -> None:
+    from cuanta.domain.mandate_file import mandate_type
+
     args = MandateArgs(
-        type=type_,
+        type=mandate_type(type_),
         what=what,
         why=why,
         evidence=evidence,
+        from_file=from_file,
         where=where,
         constraints=constraints,
         tests=tests,
@@ -252,11 +356,127 @@ def _request(args: MandateArgs, why: str) -> "MandateRequest":
     )
 
 
+def _read_text(path: Path, missing: str, unreadable: str, hint: str) -> str:
+    from cuanta.domain.errors import DomainFailure
+    from cuanta.domain.mandate_file import decoded_text
+    from cuanta.domain.messages import english, msg
+
+    if not path.is_file():
+        raise DomainFailure(english(msg(missing, path=path)), english(msg(hint)))
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise DomainFailure(
+            english(msg(unreadable, path=path, error=error.strerror or error)),
+            english(msg(hint)),
+        ) from error
+    return decoded_text(data, path)
+
+
+def read_mandate(path: Path) -> str:
+    from cuanta.domain.errors import DomainFailure
+    from cuanta.domain.messages import english, msg
+
+    found = path.expanduser()
+    text = _read_text(
+        found, "mandate_file.missing", "mandate_file.unreadable", "mandate_file.missing_hint"
+    )
+    if not text.strip():
+        raise DomainFailure(
+            english(msg("mandate_file.empty", path=found)),
+            english(msg("mandate_file.empty_hint")),
+        )
+    return text
+
+
+def read_evidence(path: Path) -> str:
+    return _read_text(
+        path.expanduser(), "evidence.missing", "evidence.unreadable", "evidence.missing_hint"
+    )
+
+
+def from_source(args: MandateArgs) -> "tuple[MandateArgs, tuple[Message, ...]]":
+    from dataclasses import replace
+
+    from cuanta.domain.errors import DomainFailure
+    from cuanta.domain.mandate import MandateType
+    from cuanta.domain.mandate_file import (
+        command_line_note,
+        labelled_note,
+        overridden,
+        parse_mandate_file,
+        with_overrides,
+    )
+    from cuanta.domain.messages import english, msg
+
+    if args.from_file is None:
+        return args, ()
+    if args.evidence is not None:
+        raise DomainFailure(
+            english(msg("mandate_file.with_evidence")),
+            english(msg("mandate_file.with_evidence_hint")),
+        )
+    path = args.from_file.expanduser()
+    parsed = parse_mandate_file(read_mandate(path))
+    given = _request(args, args.why)
+    request = with_overrides(parsed.request, given)
+    stated = parsed.request.type
+    kind = "" if args.type.strip() else SHORTCUT_TYPES.get(args.shortcut, "")
+    if kind:
+        request = replace(request, type=kind)
+    allowed = sorted(item.value for item in MandateType)
+    if request.type and request.type == stated and stated not in allowed:
+        raise DomainFailure(
+            english(msg("mandate_file.unknown_type", type=stated)),
+            english(msg("mandate_file.unknown_type_hint", types=", ".join(allowed))),
+        )
+    replaced = {*overridden(parsed.request, given), *(("type",) if kind and kind != stated else ())}
+    labels = labelled_note(parsed, replaced)
+    notes = [labels] if labels is not None else []
+    if not request.type.strip() and not args.from_failure:
+        request = replace(request, type=MandateType.FEATURE.value)
+        notes.append(msg("mandate_file.type_not_stated", type=request.type))
+    elif kind and stated and stated != kind:
+        known = stated in allowed
+        key = "mandate_file.type_overridden" if known else "mandate_file.type_unknown_overridden"
+        notes.append(msg(key, stated=stated, command=args.shortcut, kind=kind))
+    changed = command_line_note(parsed.request, given)
+    if changed is not None:
+        notes.append(changed)
+    merged = replace(
+        args,
+        from_file=None,
+        shortcut="",
+        type_stated=bool(args.type.strip() or kind or stated or args.from_failure),
+        sources=(*args.sources, path),
+        type=request.type,
+        what=request.what,
+        why=request.why,
+        where=request.where,
+        constraints=request.constraints,
+        tests=request.tests,
+        out_of_scope=request.out_of_scope,
+    )
+    return merged, tuple(notes)
+
+
+def request_files(args: MandateArgs) -> tuple[Path, ...]:
+    evidence = (args.evidence.expanduser(),) if args.evidence is not None else ()
+    return (*args.sources, *evidence)
+
+
 def _complete(session: Session, request: "MandateRequest") -> "MandateRequest":
     from cuanta.domain.errors import DomainFailure
-    from cuanta.domain.mandate import LABELS, MandateRequest, MandateType, missing_fields
+    from cuanta.domain.mandate import (
+        ESSENTIAL_FIELDS,
+        LABELS,
+        MandateRequest,
+        MandateType,
+        missing_fields,
+    )
+    from cuanta.domain.mandate_file import mandate_type
 
-    missing = missing_fields(request)
+    missing = missing_fields(request, ESSENTIAL_FIELDS)
     if missing and not session.interactive:
         names = ", ".join(f"--{name.replace('_', '-')}" for name in missing)
         raise DomainFailure(f"missing required fields: {names}", "pass them as flags")
@@ -270,7 +490,8 @@ def _complete(session: Session, request: "MandateRequest") -> "MandateRequest":
         "out_of_scope": request.out_of_scope,
     }
     for name in missing:
-        values[name] = str(typer.prompt(LABELS[name].rstrip(":")))
+        answer = str(typer.prompt(LABELS[name].rstrip(":")))
+        values[name] = mandate_type(answer) if name == "type" else answer
     completed = MandateRequest(**values)
     allowed = {item.value for item in MandateType}
     if completed.type not in allowed:
@@ -288,7 +509,7 @@ def _build_request(
     why = args.why
     signatures = 0
     if args.evidence is not None:
-        why = args.evidence.read_text(encoding="utf-8", errors="replace")
+        why = read_evidence(args.evidence)
     effective = args
     if args.from_failure:
         evidence, signatures = service.from_failure()
@@ -310,7 +531,7 @@ def _options(args: MandateArgs) -> "MandateOptions":
     from cuanta.domain.depth import DEPTHS
     from cuanta.domain.errors import DomainFailure
     from cuanta.domain.implementation import PROFILE_CHOICES, ImplementationProfile
-    from cuanta.domain.mandate import Shape
+    from cuanta.domain.mandate import ESSENTIAL_FIELDS, Shape
     from cuanta.domain.messages import english
     from cuanta.domain.plugins import SESSIONS
     from cuanta.domain.routing import Role
@@ -364,6 +585,8 @@ def _options(args: MandateArgs) -> "MandateOptions":
         keep_copy=args.keep,
         scout_mode=args.scout_mode,
         docs=args.docs,
+        required=ESSENTIAL_FIELDS,
+        type_stated=args.type_stated,
     )
 
 
@@ -404,17 +627,22 @@ def run_mandate_core(
     return report
 
 
-def run_mandate(session: Session, args: MandateArgs) -> "Document":
+def run_mandate(
+    session: Session, args: MandateArgs, request_notes: "Sequence[Message]" = ()
+) -> "Document":
     from dataclasses import replace
 
-    from cuanta.application.mandate_flow import display_command
+    from cuanta.application.mandate_flow import display_command, template_note
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Document, Line, Verbatim
     from cuanta.domain.limits import limits_payload
     from cuanta.domain.messages import english
-    from cuanta.domain.progress import Status
+    from cuanta.domain.progress import Note, Status
 
+    args, sourced = from_source(args)
+    stated = [english(message) for message in (*request_notes, *sourced)]
     container = Container.for_project(session.project, verbose=session.options.verbose)
+    container.use_request_files(request_files(args))
     try:
         options = _options(args)
         built = _build_request(session, container.mandate_service(container.shared_ledger()), args)
@@ -425,15 +653,18 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
         args = replace(args, shape=options.shape, scout_mode=options.scout_mode)
         per_role = _per_role(container, args, options, request.type)
         if args.dry_run and per_role:
-            return preview_per_role(container, args, request, choice)
+            return preview_per_role(container, args, request, choice, stated)
         if args.dry_run:
             _, prepared = _prepare(session, container, args, built)
             composed = prepared.composed
             shown = display_command(composed.command, composed.prompt)
             notes = [english(message) for message in prepared.pack_notes]
-            told = [*team_lines(prepared), *shape_lines(choice, prepared.docs)]
-            lines = [*told, *notes]
+            planned = template_note(prepared)
+            setup = [planned] if planned is not None else []
+            told = [*stated, *team_lines(prepared), *shape_lines(choice, prepared.docs)]
+            lines = [*(item.text for item in setup), *told, *notes]
             team = (
+                *(Line(item.text, item.status) for item in setup),
                 *(Line(line, Status.INFO) for line in told),
                 *(Line(line, Status.WARN) for line in notes),
             )
@@ -466,16 +697,22 @@ def run_mandate(session: Session, args: MandateArgs) -> "Document":
                     "docs": docs_json(prepared.docs),
                     "limits": limits_payload(prepared.limits),
                     "pack_notes": notes,
+                    "request_notes": stated,
+                    "template_note": planned.text if planned is not None else None,
                 },
             )
+        for line in stated:
+            session.presenter.publish(Note(Status.INFO, line))
         if per_role:
             return run_cross_engine(session, container, args, request, choice)
         if args.sandbox:
             return run_sandbox(session, container, args, built, choice)
         report = run_mandate_core(session, container, args, built=built, shape=choice)
+        return _final(report)
+    except KeyboardInterrupt as interrupt:
+        raise interrupted(interrupt, container.recorded_run()) from interrupt
     finally:
         container.close()
-    return _final(report)
 
 
 def _classic(
@@ -624,7 +861,11 @@ def per_role_lines(container: "Container", plan: "RoutePlan", provider: "Provide
 
 
 def preview_per_role(
-    container: "Container", args: MandateArgs, request: "MandateRequest", choice: "ShapeChoice"
+    container: "Container",
+    args: MandateArgs,
+    request: "MandateRequest",
+    choice: "ShapeChoice",
+    stated: "Sequence[str]" = (),
 ) -> "Document":
     from cuanta.application.forecast import forecast_failure
     from cuanta.cli.document import Document, Line
@@ -637,7 +878,7 @@ def preview_per_role(
 
     options, plan, provider, limits, docs = _team_plan(container, args, request, choice)
     budget = limits.budget_usd
-    lines = [*per_role_lines(container, plan, provider), *shape_lines(choice, docs)]
+    lines = [*stated, *per_role_lines(container, plan, provider), *shape_lines(choice, docs)]
     lines.append(english(limits_message(limits)))
     lines.append(estimate_line(container.run_estimate(plan, request.type, options.depth)))
     protection = container.change_plan(request)
@@ -681,6 +922,8 @@ def preview_per_role(
             "limits": limits_payload(limits),
             "team": [*lines, *notes],
             "pack_notes": notes,
+            "request_notes": list(stated),
+            "template_note": None,
             "roles": [
                 {
                     "role": route.role.value,
@@ -769,6 +1012,7 @@ def run_cross_engine(
         payload=payload,
         exit_code=0 if ok else 1,
         after_render=isolated.shown if isolated is not None else None,
+        recorded_run=report.steps[0].run_id if report.steps else "",
     )
 
 
@@ -1077,6 +1321,7 @@ def team_lines(prepared: "Prepared") -> list[str]:
     import sys
 
     from cuanta.domain.guarantees import engine_guarantees
+    from cuanta.domain.implementation import ImplementationProfile
     from cuanta.domain.limits import limits_message
     from cuanta.domain.messages import english, msg
 
@@ -1090,7 +1335,8 @@ def team_lines(prepared: "Prepared") -> list[str]:
         lines.append(english(msg("guarantee.codex_builds")))
     if applied is None or not applied.active:
         return [*lines, "team: routing off, the engine picks its default models"]
-    for route in applied.plan.routes:
+    fast = prepared.spec.profile == ImplementationProfile.FAST
+    for route in () if fast else applied.plan.routes:
         model = route.model.id if route.model else "engine default"
         tier = route.tier.value if route.tier else "-"
         lines.append(f"team · {route.role.value} → {model} ({tier}) · {english(route.reason)}")
@@ -1332,6 +1578,7 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
         payload=payload,
         exit_code=0 if ok else 1,
         after_render=isolated.shown if isolated is not None else None,
+        recorded_run=run.id,
     )
 
 

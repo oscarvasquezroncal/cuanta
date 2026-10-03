@@ -13,6 +13,7 @@ from cuanta.application.mandate_flow import MandateOptions, MandateSetup
 from cuanta.application.tests_view import Hairball
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.mandate import MandateRequest, MandateType
+from cuanta.domain.mandate_file import NotText
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.services import Services
 from cuanta.tui.widgets.wizard import GUIDED, LAYOUTS, MandateWizard
@@ -187,10 +188,15 @@ class MandateView(Vertical):
             message = self._t("mandate.attach_failed", path=path, error=error.strerror or error)
             self._call(self.app.notify, message, severity="error")
             return
+        except NotText:
+            reason = self._t("mandate.not_text")
+            message = self._t("mandate.attach_failed", path=path, error=reason)
+            self._call(self.app.notify, message, severity="error")
+            return
         self._call(self._append_evidence, text, path)
 
     def _append_evidence(self, text: str, path: str) -> None:
-        self.wizard.set_evidence(text, replace_all=False)
+        self.wizard.set_evidence(text, replace_all=False, path=path)
         self.app.notify(self._t("mandate.attached", path=path))
 
     @work(thread=True, exit_on_error=False)

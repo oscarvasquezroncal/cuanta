@@ -369,12 +369,14 @@ def compile_change_plan(
     tests: tuple[IndexRow, ...],
     commands: tuple[str, ...] = (),
     now: str = "",
+    excluded: frozenset[str] = frozenset(),
 ) -> ChangePlan:
     paths = tuple(sorted(file.path for file in files))
     protection, released = _exclusions(request, paths)
     text = " ".join(core_text(value) for value in (request.what, request.why, request.where))
     query = request_query(request)
-    hits = rank_files(files, symbols, edges, notes, rules, history, query, request.type, now, 15)
+    ranked = tuple(file for file in files if file.path not in excluded)
+    hits = rank_files(ranked, symbols, edges, notes, rules, history, query, request.type, now, 15)
     anchors = request_anchors(request)
     explicit = tuple(
         pattern

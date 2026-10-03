@@ -16,9 +16,15 @@ from cuanta.domain.intake import (
     heuristic_type,
 )
 from cuanta.domain.mandate import INVESTIGATION, MandateRequest, deliverable_line
+from cuanta.domain.mandate_file import (
+    LONG_STORY,
+    MandateFile,
+    parse_mandate_file,
+    whole_mandate,
+)
 from cuanta.domain.messages import english, msg
 
-STORY_LIMIT = 1_200
+STORY_LIMIT = LONG_STORY
 RISK_LOW = 0.0
 RISK_HIGH = 2.0
 READ_ONLY_THRESHOLD = 0.5
@@ -47,6 +53,7 @@ class Understanding:
     fallback_error: str = ""
     fallback_from: str = ""
     intake_scope: str = ""
+    document: MandateRequest | None = None
 
     @property
     def missing(self) -> tuple[str, ...]:
@@ -68,6 +75,11 @@ class Understanding:
 
     def request(self, kind: str = "") -> MandateRequest:
         chosen = kind or self.kind.option
+        if self.document is not None:
+            tests = self.document.tests
+            if chosen == INVESTIGATION and not tests:
+                tests = deliverable_line("report")
+            return replace(self.document, type=chosen, tests=tests)
         facts = self.facts
         lines = [f"- {question}" for question in facts.questions]
         if chosen == INVESTIGATION and not lines and self.story:
@@ -175,22 +187,27 @@ class IntakeService:
         self._min_confidence = min_confidence
         self._places = places
 
-    def understand(self, story: str) -> Understanding:
+    def understand(self, story: str, whole: bool = False) -> Understanding:
         text = story.strip()
+        document = parse_mandate_file(text) if whole else whole_mandate(text)
         facts = extract(text)
-        guess = heuristic_type(text, facts)
+        if document is None:
+            head, guess, stated = facts, heuristic_type(text, facts), ""
+        else:
+            head, guess, stated = _document_intent(document)
+            facts = replace(facts, read_only=head.read_only)
         state: dict[str, object] = {
             "story": text[:STORY_LIMIT],
-            "questions": list(facts.questions),
-            "errors": len(facts.errors),
+            "questions": list(head.questions),
+            "errors": len(head.errors),
             "mentions": list(facts.mentions),
-            "out_of_scope": list(facts.out_of_scope),
-            "what": facts.core[:STORY_LIMIT],
+            "out_of_scope": list(head.out_of_scope),
+            "what": head.core[:STORY_LIMIT],
         }
         answers, receipt = self._decisions.ask_many(intake_asks(text, facts, guess), state)
         fallback_error = self._decisions.last_fallback_error
         kind = _choice(answers, KIND, guess)
-        if kind.option not in KINDS:
+        if kind.option not in KINDS or stated:
             kind = guess
         scope = _choice(answers, SCOPE, Choice("normal", 0.5))
         depth = _choice(answers, DEPTH, Choice(depth_for_scope(scope.option), scope.probability))
@@ -209,5 +226,14 @@ class IntakeService:
             needs_confirm=kind.probability < self._min_confidence,
             fallback_error=fallback_error,
             fallback_from=self._decisions.configured_backend.name if fallback_error else "",
+            document=document.request if document is not None else None,
         )
         return replace(draft, places=tuple(self._places(facts, draft.request())))
+
+
+def _document_intent(document: MandateFile) -> tuple[IntakeFacts, Choice, str]:
+    title = document.request.what
+    head = extract(title)
+    stated = document.request.type if document.request.type in KINDS else ""
+    guess = Choice(stated, 1.0) if stated else heuristic_type(title, head)
+    return head, guess, stated

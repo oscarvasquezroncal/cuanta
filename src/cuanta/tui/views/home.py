@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from contextlib import suppress
+
+from rich.cells import cell_len
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
+from textual.css.query import NoMatches
+from textual.events import Resize
 from textual.message import Message
 from textual.widgets import Button, DataTable, Sparkline, Static
 
@@ -19,7 +24,7 @@ from cuanta.tui.fmt import compact, cost_money, glyph, grouped, run_money, statu
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.widgets.facts import Facts
 from cuanta.tui.widgets.flow import FlowRow
-from cuanta.tui.widgets.header import mood_for
+from cuanta.tui.widgets.header import forge_fact, mood_for
 from cuanta.tui.widgets.michi import Michi
 
 QUICK_ACTIONS = (
@@ -38,6 +43,9 @@ RUN_COLUMNS = ("col_kind", "col_engine", "col_status", "col_cost", "col_started"
 HOME_TYPES = ("investigation", "fix", "feature")
 LABEL_WIDTH = 22
 VALUE_WIDTH = 10
+NEXT_ROWS = 3
+NEXT_NARROW = 20
+NEXT_FIX_MARGIN = 4
 
 
 class HomeView(VerticalScroll):
@@ -51,6 +59,8 @@ class HomeView(VerticalScroll):
         super().__init__(id="home", classes="view")
         self._t = catalog
         self._motion = motion
+        self._next_text = Content("")
+        self._next_fix = ""
 
     def compose(self) -> ComposeResult:
         t = self._t
@@ -61,9 +71,11 @@ class HomeView(VerticalScroll):
                 yield Facts(Content.styled(t("app.loading"), "$text-muted"), id="project-facts")
         with Horizontal(id="next-card", classes="card"):
             yield Static(t("home.next_step"), classes="card-title", id="next-title")
-            yield Static("", id="next-text")
-            yield Static("", id="next-fix", classes="command")
-            yield Button(t("action.run_fix"), id="next-run", compact=True)
+            with Horizontal(id="next-body"):
+                yield Static("", id="next-text")
+                with Horizontal(id="next-actions"):
+                    yield Static("", id="next-fix", classes="command")
+                    yield Button(t("action.run_fix"), id="next-run", compact=True)
         with FlowRow(id="actions"):
             for section, key in QUICK_ACTIONS:
                 yield Button(
@@ -94,6 +106,9 @@ class HomeView(VerticalScroll):
         self.query_one("#next-run", Button).display = False
         self.query_one("#home-queue", Static).display = False
 
+    def on_resize(self, event: Resize) -> None:
+        self.call_after_refresh(self._fit_next)
+
     def show(self, snapshot: HomeSnapshot) -> None:
         t = self._t
         detection = snapshot.report.detection
@@ -105,10 +120,7 @@ class HomeView(VerticalScroll):
             (t("home.tier"), detection.verify_tier.value),
             (t("home.evidence"), detection.verify.evidence),
             (t("home.graph"), detection.graph_mode.value),
-            (
-                t("home.forge"),
-                t("header.forge_installed" if snapshot.initialized else "header.forge_missing"),
-            ),
+            (t("home.forge"), forge_fact(t, snapshot)),
             (t("home.files"), grouped(detection.file_count)),
         ]
         self.query_one("#project-facts", Facts).show(facts)
@@ -117,6 +129,7 @@ class HomeView(VerticalScroll):
         michi.display = not (snapshot.initialized and snapshot.runs)
         self._show_actions(snapshot.initialized)
         self._show_next(snapshot)
+        self.call_after_refresh(self._fit_next)
         self._show_runs(snapshot)
         self.query_one("#home-costs", Static).update(costs_card(t, snapshot.costs))
         week = self.query_one("#week", Sparkline)
@@ -152,27 +165,45 @@ class HomeView(VerticalScroll):
         command.update("")
         button = self.query_one("#next-run", Button)
         title = self.query_one("#next-title", Static)
+        self._next_fix = ""
         if not snapshot.initialized:
             title.update(t("home.fresh_title"))
-            text.update(Content(t("home.fresh_body")))
+            self._next_text = Content(t("home.fresh_body"))
+            text.update(self._next_text)
             button.label = t("action.init")
             button.display = True
             return
         title.update(t("home.next_step"))
         if step is None:
-            text.update(Content.assemble((f"{glyph(Status.OK)} ", "$success"), t("home.all_clear")))
+            self._next_text = Content.assemble(
+                (f"{glyph(Status.OK)} ", "$success"), t("home.all_clear")
+            )
+            text.update(self._next_text)
             button.display = False
             return
-        text.update(
-            Content.assemble(
-                (f"{glyph(step.status)} ", status_style(step.status)),
-                (t.check_name(step.name), "bold"),
-                f"  {t.message(step.message, step.detail)}",
-            )
+        self._next_text = Content.assemble(
+            (f"{glyph(step.status)} ", status_style(step.status)),
+            (t.check_name(step.name), "bold"),
+            f"  {t.message(step.message, step.detail)}",
         )
+        text.update(self._next_text)
+        self._next_fix = step.fix
         command.update(Content.styled(step.fix, "$accent"))
         button.label = t(FIX_LABELS[classify(step.fix).kind])
-        button.display = True
+        button.display = bool(step.fix)
+
+    def _fit_next(self) -> None:
+        with suppress(NoMatches):
+            width = self.query_one("#next-body").size.width
+            button = self.query_one("#next-run", Button)
+            if not width:
+                return
+            run = button.outer_size.width if button.display else 0
+            inline = width - cell_len(self._next_fix) - NEXT_FIX_MARGIN - run
+            acting = bool(self._next_fix) or button.display
+            crowded = inline < NEXT_NARROW or len(self._next_text.wrap(inline)) > NEXT_ROWS
+            self.query_one("#next-fix").set_class(not self._next_fix, "-empty")
+            self.query_one("#next-card").set_class(acting and crowded, "-stacked")
 
     def _show_runs(self, snapshot: HomeSnapshot) -> None:
         t = self._t

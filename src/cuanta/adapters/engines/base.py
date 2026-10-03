@@ -25,6 +25,7 @@ from cuanta.domain.engine import (
 )
 from cuanta.domain.errors import DomainFailure
 from cuanta.domain.gateway import split_command
+from cuanta.domain.messages import english, msg
 from cuanta.ports.system import ProcessRunner, StreamHandle
 
 HELP_TIMEOUT_S = 30.0
@@ -231,10 +232,15 @@ class StreamingEngine:
         length = command_line_length(command)
         if length > COMMAND_LINE_LIMIT:
             raise DomainFailure(
-                f"the {self.name} command line would be {length:,} characters "
-                f"(limit {COMMAND_LINE_LIMIT:,})",
-                "shorten the request or pass long text as --evidence, which cuanta stores "
-                "as a capsule",
+                english(
+                    msg(
+                        "engine.command_line",
+                        engine=self.name,
+                        length=f"{length:,}",
+                        limit=f"{COMMAND_LINE_LIMIT:,}",
+                    )
+                ),
+                english(msg("engine.command_line_hint")),
             )
         return command
 

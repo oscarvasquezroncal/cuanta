@@ -188,7 +188,10 @@ def test_config_role_pins_keep_the_auto_profile_on_the_balanced_team() -> None:
         assert wizard.kind == "feature" and not fast()
         assert wizard.query_one("#implementation-balanced").has_class("-current")
         assert not wizard.query_one("#implementation-fast").has_class("-current")
-        assert not wizard.query_one("#implementation-options").display
+        assert wizard.query_one("#implementation-auto").has_class("-on")
+        assert wizard.query_one("#implementation-options").display
+        assert wizard.query_one("#wiz-pure-row").display
+        assert not wizard.query_one("#wiz-implementation-pure-note").display
         wizard.go(2)
         assert current(wizard) == "team"
         await wait_for(

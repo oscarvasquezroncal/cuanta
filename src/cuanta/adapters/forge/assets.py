@@ -26,6 +26,7 @@ REQUIRED_SKILL_FILES = (
     "templates/LOOP.template.md",
 )
 COMMANDS = ("init-agents.md", "refresh-agents.md")
+MANDATE_TEMPLATE_ASSET = f"{SKILL_DIR}/templates/MANDATE_TEMPLATE.template.md"
 RESUME_LINE = "Phases 0 and 0.5 were executed by cuanta. Resume from .claude/forge-state.json."
 STAGING_DIR = ".cuanta/forge-out"
 STAGING_LINE = (

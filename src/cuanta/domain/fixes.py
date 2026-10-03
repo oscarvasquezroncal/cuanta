@@ -16,7 +16,11 @@ class FixAction(StrEnum):
     TESTS = "tests"
     TELEMETRY_ON = "telemetry_on"
     LISTENER_START = "listener_start"
+    TEMPLATE = "template"
     NONE = "none"
+
+
+TEMPLATE_FLAG = "--template"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +43,8 @@ def classify(command: str) -> Fix:
     if len(words) < 2 or words[0] != "cuanta":
         return Fix(FixKind.COPY, FixAction.NONE, command)
     verb = words[1]
+    if verb == "init" and TEMPLATE_FLAG in words:
+        return Fix(FixKind.RUN, FixAction.TEMPLATE, command)
     if verb in {"init", "refresh"}:
         return Fix(FixKind.OPEN, FixAction.INIT, command)
     if verb == "test":

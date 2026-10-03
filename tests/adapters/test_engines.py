@@ -544,6 +544,11 @@ def test_an_oversized_command_line_fails_with_a_cuanta_message() -> None:
     request = EngineRequest(
         prompt="x", cwd="", env={}, allowed_tools=tuple(f"Bash(tool{i} *)" for i in range(3_000))
     )
-    with pytest.raises(DomainFailure, match="command line would be"):
+    with pytest.raises(DomainFailure, match="command line would be") as caught:
         ClaudeCodeEngine(runner).run(request, lambda event: None)
+    assert caught.value.hint == (
+        "the request travels on stdin or in a prompt file and does not count; shorten the "
+        "system prompt (the analyst agent's body) or the protected paths"
+    )
+    assert "capsule" not in caught.value.hint
     assert runner.calls == []

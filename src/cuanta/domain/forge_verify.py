@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from cuanta.domain.forge_state import FORGE_PHASES
@@ -14,6 +14,8 @@ OVER_CEILING = "Over ceiling"
 OVER_CAP = "Over cap"
 NO_GRAPH_LINE = "No code graph, deliberately"
 AGENT_FILES = ("architecture-analyst.md", "tester.md", "docs-updater.md")
+SENIOR_FILE = "-senior.md"
+SENIOR_WANTED = "<lang>-senior.md"
 SUPPORT_ARTIFACTS = (
     "docs/CHANGELOG_INTERNAL.md",
     "docs/FLAGS.md",
@@ -121,16 +123,21 @@ def _listed(status_ok: bool, missing: list[str], bad: str, good: str) -> Finding
     return finding(Status.OK if status_ok else Status.FAIL, good)
 
 
+def missing_agents(agent_names: Iterable[str]) -> tuple[str, ...]:
+    names = frozenset(agent_names)
+    missing = [name for name in AGENT_FILES if name not in names]
+    if not any(name.endswith(SENIOR_FILE) for name in names):
+        missing.append(SENIOR_WANTED)
+    return tuple(missing)
+
+
 def check_artifacts(tree: ForgeTree) -> list[Finding]:
     findings: list[Finding] = []
     root = tree.texts.get("CLAUDE.md")
     graph_ok = tree.graph_wired or (root is not None and NO_GRAPH_LINE in root)
     findings.append(finding(Status.OK if graph_ok else Status.FAIL, "verify.graph"))
-    senior = [name for name in tree.agent_names if name.endswith("-senior.md")]
-    missing_agents = [name for name in AGENT_FILES if name not in tree.agent_names]
-    if not senior:
-        missing_agents.append("<lang>-senior.md")
-    findings.append(_listed(True, missing_agents, "verify.agents_missing", "verify.agents_ok"))
+    absent = list(missing_agents(tree.agent_names))
+    findings.append(_listed(True, absent, "verify.agents_missing", "verify.agents_ok"))
     ground_truth = any(
         name.startswith("GROUND_TRUTH") and name.endswith(".md") for name in tree.docs_names
     )

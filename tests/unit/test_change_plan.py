@@ -180,6 +180,30 @@ def _backend(request: MandateRequest, extra: tuple[str, ...] = ()) -> ChangePlan
     return compile_change_plan(request, files, (), (), (), (), (), ())
 
 
+def test_an_excluded_file_is_never_ranked_but_stays_when_the_request_names_it() -> None:
+    files = tuple(_file(path) for path in (*BACKEND, "notes/interpreter.md"))
+    excluded = frozenset({"app/services/interpreter.py", "notes/interpreter.md"})
+    anchored = MandateRequest("bug", "the IndexError at app/services/interpreter.py:20")
+    plan = compile_change_plan(anchored, files, (), (), (), (), (), (), excluded=excluded)
+    assert (
+        EditTarget(
+            "app/services/interpreter.py",
+            1.0,
+            "explicit request anchor app/services/interpreter.py:20",
+        )
+        in plan.edit
+    )
+    named = MandateRequest("bug", "fix the steps in notes/interpreter.md")
+    kept = compile_change_plan(named, files, (), (), (), (), (), (), excluded=excluded)
+    assert EditTarget("notes/interpreter.md", 1.0, "explicit request path") in kept.edit
+    ranked = MandateRequest("bug", "the interpreter drops an intent")
+    plain = compile_change_plan(ranked, files, (), (), (), (), (), (), excluded=excluded)
+    assert excluded.isdisjoint({target.path for target in plain.edit})
+    assert excluded.isdisjoint(plain.read)
+    unexcluded = compile_change_plan(ranked, files, (), (), (), (), (), ())
+    assert "app/services/interpreter.py" in {target.path for target in unexcluded.edit}
+
+
 def test_anchors_from_every_field_become_explicit_targets_and_never_new_files() -> None:
     request = MandateRequest(
         "feature",

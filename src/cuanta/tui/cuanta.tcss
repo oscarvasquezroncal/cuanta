@@ -174,10 +174,24 @@ Screen.-single #sidebar {
     margin-right: 2;
 }
 
+#next-body {
+    width: 1fr;
+    height: auto;
+    align: left middle;
+}
+
 #next-text {
     width: 1fr;
-    height: 3;
+    height: auto;
+    min-height: 3;
+    max-height: 8;
     content-align: left middle;
+}
+
+#next-actions {
+    width: auto;
+    height: auto;
+    align: left middle;
 }
 
 #next-fix {
@@ -189,6 +203,24 @@ Screen.-single #sidebar {
 
 #next-run {
     width: auto;
+}
+
+#next-card.-stacked #next-body {
+    layout: vertical;
+}
+
+#next-card.-stacked #next-fix {
+    height: 1;
+    margin: 0 2 0 0;
+}
+
+#next-card.-stacked #next-fix.-empty {
+    display: none;
+}
+
+#next-card.-stacked #next-run {
+    height: 1;
+    padding: 0 2;
 }
 
 Screen.-short #home-michi, Screen.-icons #home-michi, Screen.-single #home-michi {
@@ -1087,6 +1119,39 @@ Button.chip.depth-chip.-current, Button.chip.layout-chip.-current, Button.chip.p
 
 #wiz-detected, #wiz-depth-note, #wiz-limits-note, #wiz-tell-help {
     height: auto;
+}
+
+#wiz-file-row {
+    height: auto;
+    margin-top: 1;
+}
+
+#wiz-file {
+    width: 1fr;
+}
+
+#wiz-file-row Button {
+    width: auto;
+    margin-left: 1;
+}
+
+#wiz-file-note, #wiz-body-field, #wiz-pure-row {
+    height: auto;
+}
+
+#wiz-body {
+    height: auto;
+    min-height: 4;
+    max-height: 12;
+}
+
+#wiz-pure-row Checkbox {
+    width: auto;
+}
+
+Button.chip.implementation-chip.-on {
+    color: $primary;
+    text-style: bold underline;
 }
 
 #run-limits-fields, #run-limits-row, #summary-actions, #sandbox-row, #wiz-sandbox-note {

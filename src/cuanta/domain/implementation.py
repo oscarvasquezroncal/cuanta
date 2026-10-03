@@ -82,12 +82,13 @@ def fast_choice(task_type: str, large: bool) -> FastChoice | None:
 
 
 def resolve_profile(
-    value: str, default: str, engine: str, task_type: str, team: bool
+    value: str, default: str, engine: str, task_type: str, team: bool, stated: bool = True
 ) -> ImplementationProfile:
     chosen = value or default or AUTO_PROFILE
     if chosen != AUTO_PROFILE:
         return ImplementationProfile(chosen)
-    if engine == Provider.CLAUDE and not team and fast_choice(task_type, False) is not None:
+    claude = engine == Provider.CLAUDE
+    if stated and claude and not team and fast_choice(task_type, False) is not None:
         return ImplementationProfile.FAST
     return ImplementationProfile.BALANCED
 

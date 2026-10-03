@@ -7,6 +7,7 @@ from cuanta.domain.engine import (
     CANCELLED_SUBTYPE,
     COST_UNKNOWN_SUBTYPE,
     GOVERNOR_STOP_SUBTYPE,
+    RAISED_SUBTYPE,
     TURN_LIMIT_SUBTYPE,
     WALL_LIMIT_SUBTYPE,
 )
@@ -151,6 +152,8 @@ def stop_message(
     if reason:
         return _implementation_stop(run, payload, reason)
     end = run.end_reason
+    if end == RAISED_SUBTYPE:
+        return msg("stop.raised")
     if end == CANCELLED_SUBTYPE:
         return msg("stop.user")
     if end == WALL_LIMIT_SUBTYPE:

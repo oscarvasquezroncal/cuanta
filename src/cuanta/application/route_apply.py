@@ -76,6 +76,7 @@ class Applied:
     single: str = ""
     env_override: str = ""
     unset: tuple[str, ...] = ()
+    main_forced: bool = False
 
     @property
     def active(self) -> bool:
@@ -275,8 +276,11 @@ class MandateRouting:
         return found if options.docs else without_role(found, Role.DOCS)
 
     def record(self, run_id: str, task_type: str, applied: Applied) -> None:
-        if applied.active and applied.plan.pure is None:
-            self._advisor.record(run_id, task_type, applied.plan)
+        if not applied.active or applied.plan.pure is not None:
+            return
+        forced = applied.main_forced
+        plan = without_role(applied.plan, Role.ORCHESTRATOR) if forced else applied.plan
+        self._advisor.record(run_id, task_type, plan)
 
     def pinned(self, mode: str = "") -> bool:
         return policy_pinned(self._policy(), mode)
@@ -300,6 +304,16 @@ class MandateRouting:
             env_override="",
             unset=(),
         )
+
+    def main_model(self, applied: Applied, model: str) -> Applied:
+        if applied.engine != CLAUDE or not applied.active or not applied.orchestrator:
+            return applied
+        plan = self._advisor.main_model(applied.plan, model)
+        route = plan.route(Role.ORCHESTRATOR)
+        if plan is applied.plan or route is None or route.model is None:
+            return applied
+        chosen = route.model.resolved or route.model.id
+        return replace(applied, plan=plan, orchestrator=chosen, main_forced=True)
 
     def protect(self, applied: Applied, plan: ChangePlan, session: str = "") -> Applied:
         if applied.engine != CLAUDE or applied.agents is None:

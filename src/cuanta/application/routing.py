@@ -151,6 +151,29 @@ def pure_plan(
     )
 
 
+def main_model_plan(plan: RoutePlan, model: str, entries: Sequence[ModelEntry] = ()) -> RoutePlan:
+    route = plan.route(Role.ORCHESTRATOR)
+    if not model or route is None or route.model is None or route.engine != CLAUDE:
+        return plan
+    entry = _pure_entry(model, plan.routes, entries)
+    chosen = entry.resolved or entry.id
+    pin = plan.policy.role_models.get(Role.ORCHESTRATOR, "")
+    if pin and not _same_model(pin, entry, entries):
+        raise DomainFailure(
+            english(msg("route.main_pin_conflict", pin=pin, model=chosen)),
+            english(msg("route.main_pin_hint")),
+        )
+    if _names(route.model) & _names(entry):
+        return plan
+    main = replace(
+        route, tier=entry.tier, model=entry, reason=msg("route.main_model", model=chosen)
+    )
+    return replace(
+        plan,
+        routes=tuple(main if item.role is Role.ORCHESTRATOR else item for item in plan.routes),
+    )
+
+
 def without_role(plan: RoutePlan, role: Role) -> RoutePlan:
     if plan.route(role) is None:
         return plan
@@ -215,6 +238,9 @@ class RouteAdvisor:
 
     def pure(self, plan: RoutePlan, model: str, fast: bool = False) -> RoutePlan:
         return pure_plan(plan, model, tuple(self._catalog()), fast)
+
+    def main_model(self, plan: RoutePlan, model: str) -> RoutePlan:
+        return main_model_plan(plan, model, tuple(self._catalog()))
 
     def scout_plan(self, plan: RoutePlan) -> RoutePlan:
         if plan.route(Role.SCOUT) is not None:

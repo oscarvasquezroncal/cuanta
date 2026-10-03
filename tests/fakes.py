@@ -25,6 +25,8 @@ class FakeStream:
 
     def lines(self) -> Iterator[str]:
         yield from self.output
+        if self.interrupt:
+            raise KeyboardInterrupt
 
     def wait(self) -> int:
         return self.code
@@ -51,6 +53,7 @@ class FakeStream:
     sent: list[str] = field(default_factory=list)
     ended: bool = False
     terminated: bool = False
+    interrupt: bool = False
 
 
 @dataclass

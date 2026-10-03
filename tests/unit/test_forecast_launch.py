@@ -246,7 +246,7 @@ def prepared(ledger: MemoryLedger, run_id: str) -> Prepared:
         SimpleNamespace(
             launcher=SimpleNamespace(engine=StubEngine()),
             engine_name="claude",
-            composed=SimpleNamespace(request=REQUEST),
+            composed=SimpleNamespace(request=REQUEST, template=None),
             spec=SimpleNamespace(run_id=run_id),
             applied=None,
             forecast=planned,
@@ -318,7 +318,7 @@ def test_a_failed_native_forecast_is_reported_and_the_launch_goes_ahead() -> Non
         SimpleNamespace(
             launcher=SimpleNamespace(engine=StubEngine()),
             engine_name="claude",
-            composed=SimpleNamespace(request=REQUEST),
+            composed=SimpleNamespace(request=REQUEST, template=None),
             spec=SimpleNamespace(run_id="R1"),
             applied=None,
             forecast=None,

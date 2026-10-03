@@ -113,3 +113,4 @@ class Document:
     payload: dict[str, JsonValue] = field(default_factory=dict)
     exit_code: int = 0
     after_render: Callable[[], None] | None = field(default=None, compare=False, repr=False)
+    recorded_run: str = ""

@@ -5,7 +5,15 @@ from dataclasses import dataclass
 from datetime import date
 
 from cuanta.application.cache_state import PrefixQuery
-from cuanta.application.doctor import CheckResult, Doctor, DoctorReport, result
+from cuanta.application.doctor import (
+    TEMPLATE_CHECK,
+    TEMPLATE_MISSING,
+    TEMPLATE_UNUSABLE,
+    CheckResult,
+    Doctor,
+    DoctorReport,
+    result,
+)
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.consumption import daily_tokens, window_start
 from cuanta.domain.detection import ForgeState
@@ -36,6 +44,18 @@ class HomeSnapshot:
     def initialized(self) -> bool:
         return self.report.detection.forge_state is ForgeState.INITIALIZED
 
+    @property
+    def template_missing(self) -> bool:
+        return self._template_key() in TEMPLATE_MISSING
+
+    @property
+    def template_unusable(self) -> bool:
+        return self._template_key() == TEMPLATE_UNUSABLE
+
+    def _template_key(self) -> str:
+        found = self.check(TEMPLATE_CHECK)
+        return found.message.key if found is not None and found.message is not None else ""
+
     def check(self, name: str) -> CheckResult | None:
         for check in self.report.checks:
             if check.name == name:
@@ -53,6 +73,9 @@ def next_step(report: DoctorReport) -> CheckResult | None:
         for check in report.checks:
             if check.status is status and check.fix and check.name not in QUIET_CHECKS:
                 return check
+    for check in report.checks:
+        if check.message is not None and check.message.key == TEMPLATE_UNUSABLE:
+            return check
     return None
 
 

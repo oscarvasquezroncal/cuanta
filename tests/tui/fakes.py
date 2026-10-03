@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -37,12 +37,19 @@ from cuanta.application.mandate_flow import (
     effective_limits,
     mandate_limits,
     per_role_run,
+    resolved_profile,
 )
 from cuanta.application.map import MapFile, MapStatus
 from cuanta.application.models import CatalogView, ProbeOutcome
 from cuanta.application.new_files import NewFilePair
 from cuanta.application.results import ResultView, RunFile
-from cuanta.application.routing import RoleStats, RoutePlan
+from cuanta.application.routing import (
+    RoleStats,
+    RoutePlan,
+    main_model_plan,
+    pure_plan,
+    route_model,
+)
 from cuanta.application.spectrum import ALL_SESSIONS, Selection, SpectrumQuery, SpectrumResult
 from cuanta.application.tests_view import Hairball, TestsSummary
 from cuanta.application.trials import Trial, TrialChange, TrialSummary
@@ -85,11 +92,13 @@ from cuanta.domain.envelope import EnvelopeInputs, RoleInput, RoleModel, envelop
 from cuanta.domain.fixes import Fix
 from cuanta.domain.forge_verify import Finding
 from cuanta.domain.handoff import Handoff, Workflow
+from cuanta.domain.implementation import ImplementationProfile
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import Capsule, Decision, Run
 from cuanta.domain.limits import LimitSettings
 from cuanta.domain.loop import LoopGate, StopReason
 from cuanta.domain.mandate import MandateRequest, parse_shape, single_context
+from cuanta.domain.mandate_file import decoded_text
 from cuanta.domain.messages import Message, msg, option_message
 from cuanta.domain.models import ModelEntry, Tier, TierSource
 from cuanta.domain.new_files import original_of, side_by_side
@@ -636,7 +645,12 @@ class FakeServices:
     requests: list[MandateRequest] = field(default_factory=list)
     stops: int = 0
     evidence_files: dict[str, str] = field(default_factory=dict)
+    evidence_bytes: dict[str, bytes] = field(default_factory=dict)
+    evidence_errors: dict[str, OSError] = field(default_factory=dict)
+    request_files: list[tuple[str, ...]] = field(default_factory=list)
+    launched_files: list[tuple[str, ...]] = field(default_factory=list)
     profile: str = "balanced"
+    variant: str = ""
     role_pins: bool = False
 
     def mandate_setup(self) -> MandateSetup:
@@ -648,6 +662,7 @@ class FakeServices:
             1.59,
             limits=self.limits,
             profile=self.profile,
+            variant=self.variant,
             pinned=self.role_pins,
         )
 
@@ -655,9 +670,16 @@ class FakeServices:
         return "AssertionError: [total] expected 10 got 12", 2
 
     def read_evidence(self, path: str) -> str:
+        if path in self.evidence_errors:
+            raise self.evidence_errors[path]
+        if path in self.evidence_bytes:
+            return decoded_text(self.evidence_bytes[path], path)
         if path not in self.evidence_files:
             raise FileNotFoundError(2, "No such file or directory", path)
         return self.evidence_files[path]
+
+    def use_request_files(self, paths: Sequence[str]) -> None:
+        self.request_files.append(tuple(paths))
 
     def preview_mandate(
         self, request: MandateRequest, signatures: int, options: MandateOptions
@@ -680,6 +702,7 @@ class FakeServices:
             0.72,
             roles if per_role or native else (),
             per_role,
+            template_note=self.preview_note,
         )
 
     report_run: Run | None = None
@@ -693,6 +716,7 @@ class FakeServices:
         progress: Callable[[ProgressEvent], None],
     ) -> MandateReport:
         self.requests.append(request)
+        self.launched_files.append(self.request_files[-1] if self.request_files else ())
         progress(Note(Status.INFO, "pounce started"))
         if self.block:
             observer(self.events[0])
@@ -906,6 +930,7 @@ class FakeServices:
     saved: dict[str, object] = field(default_factory=dict)
     gate_open: bool = True
     loop_runs: int = 0
+    preview_note: Note | None = None
 
     def telemetry_plan(self, engine: str) -> tuple[WiringPlan, ...]:
         return (
@@ -1133,7 +1158,11 @@ class FakeServices:
     ) -> tuple[RoutePlan, Estimate]:
         self.team_options.append(options)
         routes = self.routes(request, options)
-        plan = RoutePlan(self.team_policy(options), None, None, (), routes, "heuristic")
+        plan = self.chosen_models(
+            RoutePlan(self.team_policy(options), None, None, (), routes, "heuristic"),
+            request,
+            options,
+        )
         cap = mandate_limits(options, request.type, self.limits).budget_usd
         found = estimate(plan, self.similar, load_prices(), request.type, options.depth, cap)
         return plan, replace(
@@ -1143,6 +1172,22 @@ class FakeServices:
             shape=self.team_shape,
             docs=self.team_docs,
         )
+
+    def chosen_models(
+        self, plan: RoutePlan, request: MandateRequest, options: MandateOptions
+    ) -> RoutePlan:
+        profile = resolved_profile(
+            options, self.profile, "claude", request.type, pinned=self.role_pins
+        )
+        if profile is ImplementationProfile.FAST:
+            return plan
+        per_role = per_role_run(replace(options, profile=profile.value), request.type, "claude")
+        if options.pure:
+            orchestrator = "" if per_role else route_model(plan, Role.ORCHESTRATOR)
+            return pure_plan(plan, options.model or orchestrator, self.catalog)
+        if options.model and not per_role:
+            return main_model_plan(plan, options.model, self.catalog)
+        return plan
 
     def team_policy(self, options: MandateOptions) -> RoutingPolicy:
         return RoutingPolicy(
@@ -1182,11 +1227,11 @@ class FakeServices:
         self.change_plan_requests.append(request)
         return self.change_plan_result
 
-    def understand(self, story: str) -> Understanding:
+    def understand(self, story: str, whole: bool = False) -> Understanding:
         self.understood.append(story)
         decisions = DecisionMaker(HeuristicInstinct(), MemoryLedger(), lambda: FIXED_TIME)
         service = IntakeService(decisions, 0.6, lambda facts, request: PLACES)
-        return service.understand(story)
+        return service.understand(story, whole)
 
     def last_story(self) -> str:
         return self.last

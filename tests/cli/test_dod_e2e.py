@@ -185,11 +185,10 @@ def test_mandate_requires_template_and_fields(tmp_path: Path, env: dict[str, str
     (root / "docs" / "MANDATE_TEMPLATE.md").write_text(
         TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8"
     )
-    no_scope = invoke(
-        ["mandate", "--type", "bug", "--what", "x", "--why", "y", "--json", "--project", str(root)]
-    )
-    assert no_scope.exit_code == 1
-    assert "--out-of-scope" in json.loads(no_scope.stdout)["error"]["message"]
+    no_what = invoke(["mandate", "--type", "bug", "--why", "y", "--json", "--project", str(root)])
+    assert no_what.exit_code == 1
+    assert "--what" in json.loads(no_what.stdout)["error"]["message"]
+    assert "--out-of-scope" not in json.loads(no_what.stdout)["error"]["message"]
     bad_type = invoke(
         [
             "mandate",
@@ -222,7 +221,7 @@ def test_from_failure_needs_red_result(tmp_path: Path, env: dict[str, str]) -> N
     assert "cuanta test" in json.loads(result.stdout)["error"]["hint"]
 
 
-def test_a_200_kb_evidence_file_launches_through_stdin_and_a_capsule(
+def test_a_200_kb_evidence_file_launches_whole_through_stdin(
     tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = copy_repo("bugfix", tmp_path)
@@ -254,12 +253,12 @@ def test_a_200_kb_evidence_file_launches_through_stdin_and_a_capsule(
     )
     assert pounce.exit_code == 0, pounce.stdout + pounce.stderr
     prompt = captured.read_text(encoding="utf-8")
-    assert len(prompt) < 30_000
+    assert len(prompt) > log.stat().st_size
+    shown = {line.strip() for line in prompt.splitlines()}
     assert lines[0] in prompt
-    assert lines[-1] in prompt
-    assert "cuanta cat cap:" in prompt
-    capsules = list((root / ".cuanta" / "capsules").glob("*.log"))
-    assert any(path.stat().st_size > 200_000 for path in capsules)
+    assert all(line in shown for line in lines[1:])
+    assert "cuanta cat cap:" not in prompt
+    assert "characters in total" not in prompt
 
 
 def _pounce(root: Path, env: dict[str, str], *extra: str) -> dict[str, Any]:

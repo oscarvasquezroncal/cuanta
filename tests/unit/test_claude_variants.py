@@ -50,7 +50,7 @@ def test_pure_environment_pins_helpers_and_forces_subagent_model() -> None:
 
 def test_owned_profile_contains_pure_pins_and_ultracode_settings(tmp_path: Path) -> None:
     profile = LeanProfile(LocalWorkspace(tmp_path), tuple)
-    _, path = profile.files(pure_model="sonnet", variant="ultracode")
+    _, path = profile.files(model="sonnet", pure=True, variant="ultracode")
     settings = json.loads(Path(path).read_text(encoding="utf-8"))
     assert settings["model"] == "claude-sonnet-5"
     assert settings["env"]["ANTHROPIC_SMALL_FAST_MODEL"] == "claude-sonnet-5"
@@ -105,3 +105,16 @@ def test_one_session_denies_delegation_and_scheduling_but_ultracode_keeps_workfl
     ultracode = session_denied_tools("fast-ultracode")
     assert {"Agent", "Workflow", "SendMessage"}.isdisjoint(ultracode)
     assert {"RemoteTrigger", "CronCreate"}.issubset(ultracode)
+
+
+def test_a_session_that_is_not_pure_checks_fast_output_against_its_own_model(
+    tmp_path: Path,
+) -> None:
+    profile = LeanProfile(LocalWorkspace(tmp_path), tuple)
+    _, path = profile.files(model="claude-opus-5-5", variant="fast-low")
+    settings = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert settings["fastMode"] is True
+    assert settings["effortLevel"] == "low"
+    assert "model" not in settings and "env" not in settings
+    with pytest.raises(DomainFailure, match="supported Opus model"):
+        profile.files(model="claude-sonnet-5", variant="fast-low")

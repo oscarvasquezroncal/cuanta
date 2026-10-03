@@ -1399,9 +1399,9 @@ def test_fast_and_ordered_launches_refuse_without_same_session_input(tmp_path: P
         with pytest.raises(DomainFailure, match="follow-up turns in one session"):
             launcher.launch(spec, lambda _: None)
     assert not [call for call in runner.calls if "-p" in call]
-    assert {run.id: run.status for run in ledger.runs()} == {
-        "ORDERED": "interrupted",
-        "FAST": "interrupted",
+    assert {run.id: (run.status, run.end_reason) for run in ledger.runs()} == {
+        "ORDERED": ("failed", "error_raised"),
+        "FAST": ("failed", "error_raised"),
     }
     balanced = launcher.launch(base, lambda _: None)
     assert balanced.outcome.ok and balanced.implementation is None
@@ -1812,3 +1812,18 @@ def test_an_explicit_fast_profile_refuses_a_configured_pin_with_a_fast_reason(
     same = pinned_flow(tmp_path / "same", {Role.SENIOR: "claude-opus-5-5"})
     prepared = same.prepare(FEATURE_REQUEST, 0, MandateOptions(profile="fast"), preview=True)
     assert prepared.spec.profile == "fast" and prepared.spec.model == "claude-opus-5-5"
+
+
+def test_a_type_nobody_stated_never_picks_the_fast_profile() -> None:
+    guessed = MandateOptions(type_stated=False)
+    assert resolved_profile(guessed, AUTO_PROFILE, "claude", "feature") is (
+        ImplementationProfile.BALANCED
+    )
+    forced = replace(guessed, profile="fast")
+    assert resolved_profile(forced, AUTO_PROFILE, "claude", "feature") is ImplementationProfile.FAST
+    assert resolved_profile(guessed, "fast", "claude", "feature") is ImplementationProfile.FAST
+    stated = resolved_profile(MandateOptions(), AUTO_PROFILE, "claude", "feature")
+    assert stated is ImplementationProfile.FAST
+    assert resolve_profile("", AUTO_PROFILE, "claude", "bug", False, stated=False) is (
+        ImplementationProfile.BALANCED
+    )

@@ -14,10 +14,18 @@ if TYPE_CHECKING:
     from cuanta.domain.shells import Shell
 
 runs_app = typer.Typer(
-    help="Runs cuanta launched, with their stored reports.", no_args_is_help=True
+    help="Runs cuanta launched, with their stored reports. Alone, the last ten.",
+    invoke_without_command=True,
 )
 
 LIST_LIMIT = 30
+RECENT = 10
+
+
+@runs_app.callback()
+def recent_command(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        execute(ctx, lambda session: _list(session, RECENT))
 
 
 @runs_app.command("list", help="Recent runs, newest first.")
@@ -28,10 +36,12 @@ def list_command(
     execute(ctx, lambda session: _list(session, limit))
 
 
-@runs_app.command("show", help="A run's report and consumption.")
+@runs_app.command("show", help="A run's report and consumption; without an id, the last run.")
 def show_command(
     ctx: typer.Context,
-    run_id: Annotated[str, typer.Argument(help="Run id or a unique prefix.")],
+    run_id: Annotated[
+        str, typer.Argument(help="Run id or a unique prefix; omitted, the last run.")
+    ] = "",
     markdown: Annotated[
         bool, typer.Option("--markdown", help="Print the human run report as Markdown.")
     ] = False,
@@ -120,6 +130,7 @@ def _list(session: Session, limit: int) -> "Document":
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Column, Document, Hint, Table
     from cuanta.cli.fmt import usd
+    from cuanta.domain.messages import english, msg
 
     container = Container.for_project(session.project)
     runs = container.runs_query().run(limit)
@@ -157,9 +168,10 @@ def _list(session: Session, limit: int) -> "Document":
     )
     blocks: list[Block] = [table]
     if not runs:
-        blocks.append(Hint("no runs yet · run cuanta mandate or cuanta test"))
+        empty = (english(msg("runs.none_yet")), english(msg("runs.none_yet_hint")))
+        blocks.append(Hint(" · ".join(empty)))
     else:
-        blocks.append(Hint("cuanta runs show <id> · cuanta runs open <id>"))
+        blocks.append(Hint("cuanta runs show [id] · cuanta runs open <id>"))
     payload: dict[str, object] = {
         "runs": [
             {
@@ -223,7 +235,7 @@ def error_text(error: float | None) -> str:
 def _load(container: "Container", run_id: str) -> "ResultView":
     from cuanta.domain.errors import DomainFailure
 
-    resolved = container.resolve_run(run_id)
+    resolved = container.resolve_run(run_id) if run_id else container.last_run()
     view = container.result_query(container.shared_ledger()).load(resolved)
     if view is None:
         raise DomainFailure(f"run {run_id} is not in the ledger", "list them: cuanta runs list")

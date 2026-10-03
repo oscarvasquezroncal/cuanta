@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from cuanta.domain.costs import CostSource
@@ -208,3 +209,19 @@ class Forecast:
     per_role: str = "[]"
     features: str = "{}"
     source: str = "envelope"
+
+
+def launched_run(run: Run, lookup: Callable[[str], Run | None]) -> Run:
+    seen = {run.id}
+    current = run
+    while current.parent_id and current.parent_id not in seen:
+        parent = lookup(current.parent_id)
+        if parent is None:
+            return current
+        seen.add(parent.id)
+        current = parent
+    return current
+
+
+def last_launched(newest_first: Iterable[Run]) -> Run | None:
+    return next((run for run in newest_first if not run.parent_id), None)

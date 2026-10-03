@@ -15,6 +15,7 @@ from cuanta.domain.claude_variants import pure_environment
 from cuanta.domain.engine import (
     CANCELLED_SUBTYPE,
     GOVERNOR_STOP_SUBTYPE,
+    RAISED_SUBTYPE,
     TURN_LIMIT_SUBTYPE,
     WALL_LIMIT_SUBTYPE,
     EngineEvent,
@@ -394,14 +395,12 @@ class EngineLauncher:
             max_wall_s=max(0.0, spec.wall_limit_s or spec.max_wall_s),
         )
         self._ledger.add_run(run)
-        self._save_metadata(run_id, spec)
-        if before is not None:
-            before(run_id)
         outcome: EngineOutcome | None = None
         spawned: LedgerEvent | None = None
         implementation: ImplementationSession | None = None
         received = Received()
         wall = WallTimer(spec.max_wall_s, self._expire)
+        raised = False
         self._sent = 0
 
         def stream_event(event: EngineEvent) -> None:
@@ -416,6 +415,9 @@ class EngineLauncher:
                 wall.disarm()
 
         try:
+            self._save_metadata(run_id, spec)
+            if before is not None:
+                before(run_id)
             with self._telemetry() as status:
                 implementation = self._implementation(replace(spec, run_id=run_id))
                 port = status.port if status is not None and status.running else None
@@ -426,10 +428,13 @@ class EngineLauncher:
                 outcome = self._run_engine(
                     request, stream_event, implementation, run_id, spec.role, wall
                 )
+        except Exception:
+            raised = True
+            raise
         finally:
             if spawned is not None:
                 self._ledger.add_events([spawned])
-            final, finished = self._close(run, spec, outcome, received)
+            final, finished = self._close(run, spec, outcome, received, raised)
             result = final.result if final is not None else None
             text = result.text if result is not None else ""
             if text and self._reports is not None:
@@ -447,7 +452,12 @@ class EngineLauncher:
         return len(self._ledger.events(EventQuery(run_id=run_id, kind=UNREADABLE_KIND)))
 
     def _close(
-        self, run: Run, spec: LaunchSpec, outcome: EngineOutcome | None, received: Received
+        self,
+        run: Run,
+        spec: LaunchSpec,
+        outcome: EngineOutcome | None,
+        received: Received,
+        raised: bool = False,
     ) -> tuple[EngineOutcome | None, Run]:
         early = ended_early(outcome)
         result = outcome.result if outcome is not None else None
@@ -467,10 +477,10 @@ class EngineLauncher:
         finished = replace(
             run,
             ended_at=self._clock.now_iso(),
-            status="interrupted" if outcome is None else ("ok" if outcome.ok else "failed"),
+            status=_status(outcome, raised),
             model=_main_model(outcome) or (received.main_model if early else "") or run.model,
             turns=max(turns, received.turns) if early else turns,
-            end_reason=_end_reason(outcome),
+            end_reason=RAISED_SUBTYPE if outcome is None and raised else _end_reason(outcome),
             cost_usd=cost.value,
             cost_source=cost.kind,
             partial=early,
@@ -545,6 +555,12 @@ def _over_cap(
             terminal_reason="budget_exhausted",
         ),
     )
+
+
+def _status(outcome: EngineOutcome | None, raised: bool) -> str:
+    if outcome is None:
+        return "failed" if raised else "interrupted"
+    return "ok" if outcome.ok else "failed"
 
 
 def _end_reason(outcome: EngineOutcome | None) -> str:

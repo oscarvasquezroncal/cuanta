@@ -151,9 +151,15 @@ class _Scope:
 
 
 class IndexContextPack:
-    def __init__(self, reader: IndexRead, cache: dict[str, ContextPack] | None = None) -> None:
+    def __init__(
+        self,
+        reader: IndexRead,
+        cache: dict[str, ContextPack] | None = None,
+        excluded: frozenset[str] = frozenset(),
+    ) -> None:
         self._reader = reader
         self._cache = cache if cache is not None else {}
+        self._excluded = excluded
 
     def compile(
         self,
@@ -166,7 +172,9 @@ class IndexContextPack:
         chosen = profile(parse_depth(depth), request.type)
         now = index.meta().get("updated_at", "")
         protection = (
-            plan if plan is not None else IndexChangePlan(index, lambda: now).compile(request)
+            plan
+            if plan is not None
+            else IndexChangePlan(index, lambda: now, self._excluded).compile(request)
         )
         state = {
             "files": tuple(
@@ -187,6 +195,7 @@ class IndexContextPack:
             "role": role,
             "plan": asdict(protection),
             "version": PACK_VERSION,
+            **({"excluded": sorted(self._excluded)} if self._excluded else {}),
         }
         key = hashlib.sha256(stable_json(identity).encode()).hexdigest()
         current = {
@@ -217,13 +226,15 @@ class IndexContextPack:
         pack_tokens: int,
     ) -> tuple[tuple[PackItem, ...], tuple[Placed, ...]]:
         index = self._reader.service.index
-        files = {file.path: file for file in index.files()}
+        indexed = {file.path: file for file in index.files()}
+        files = {path: file for path, file in indexed.items() if path not in self._excluded}
         query = (
             request_query(request) or " ".join((request.what, request.where)).strip() or request.why
         )
-        hits = IndexRead(self._reader.service, lambda: index.meta().get("updated_at", "")).find(
-            query, read_budget, request.type
+        found = IndexRead(self._reader.service, lambda: index.meta().get("updated_at", "")).find(
+            query, read_budget + len(self._excluded), request.type
         )
+        hits = tuple(hit for hit in found if hit.path in files)[:read_budget]
         roles = role.lower().replace("_", "-")
         scope = _Scope(
             plan,
@@ -236,12 +247,16 @@ class IndexContextPack:
             {hit.path: max(1.0, hit.score) for hit in hits},
             {hit.path: "; ".join(hit.reasons) for hit in hits},
         )
-        anchoring = _anchoring(request, files)
+        anchoring = _anchoring(request, indexed)
+        for path in self._excluded:
+            anchoring.by_path.pop(path, None)
         first, named = self._first(anchoring, scope, _named(request, files))
         ordered = tuple(
-            dict.fromkeys(
+            path
+            for path in dict.fromkeys(
                 (*first, *named, *sorted(scope.edit), *(hit.path for hit in hits), *plan.read)
             )
+            if path not in self._excluded
         )
         items = self._base(plan)
         for path in ordered[: max(read_budget, len(first))]:

@@ -88,6 +88,15 @@ class LocalWorkspace:
     def exists(self, relative: str) -> bool:
         return self._path(relative).exists()
 
+    def redirected(self, relative: str) -> bool:
+        path = self._path(relative)
+        try:
+            if path.is_symlink() or path.is_junction():
+                return True
+            return not path.resolve().is_relative_to(self._root.resolve())
+        except (OSError, RuntimeError):
+            return True
+
     def is_dir(self, relative: str) -> bool:
         return self._path(relative).is_dir()
 
