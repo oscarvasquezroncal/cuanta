@@ -115,7 +115,9 @@ def test_result_shows_turns_and_marks_a_turn_limit_cut() -> None:
         await settle(app, pilot)
         facts = render(app.screen.query_one("#result-facts", Static))
         assert "turns 40/40" in facts
-        assert "cut by turn limit" in render(app.screen.query_one("#result-turns-cut", Static))
+        assert "stopped at the turn limit of 40 turns" in render(
+            app.screen.query_one("#result-stop", Static)
+        )
 
     drive(make_app(), scenario, size=(120, 40))
 

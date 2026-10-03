@@ -44,7 +44,7 @@ from cuanta.domain.bench_proof import (
 )
 from cuanta.domain.costs import sum_costs
 from cuanta.domain.errors import CuantaError
-from cuanta.domain.messages import msg
+from cuanta.domain.messages import Message, msg
 from cuanta.domain.progress import Status, finished, note, started
 from cuanta.domain.read_efficiency import CODE_FORMULA, ReadEfficiency
 from cuanta.ports.bench import BenchSandbox
@@ -92,6 +92,7 @@ class Attempt:
     anatomy: AnatomyReport = field(default_factory=AnatomyReport)
     read_efficiency: ReadEfficiency = field(default_factory=ReadEfficiency)
     proof: ProofRecord | None = None
+    partial: bool = False
 
 
 def _empty(
@@ -283,7 +284,13 @@ class BenchExecutor:
             anatomy=done.anatomy,
             read_efficiency=done.read_efficiency,
             proof=done.proof,
+            partial=done.partial,
         )
+
+
+def _unknown_spend(metrics: Sequence[RunMetrics]) -> Message:
+    cut = any(item.partial and item.cost_usd is not None for item in metrics)
+    return msg("bench.cost_partial" if cut else "bench.cost_unknown")
 
 
 def _unlaunched(empty: RunMetrics, error: str) -> RunMetrics:
@@ -333,6 +340,8 @@ def stored_run(item: RunMetrics) -> dict[str, object]:
     data = asdict(item)
     if item.proof is None:
         del data["proof"]
+    if not item.partial:
+        del data["partial"]
     return data
 
 
@@ -379,6 +388,7 @@ def metrics_from_json(item: dict[str, object]) -> RunMetrics:
         anatomy=_anatomy(item.get("anatomy")),
         read_efficiency=_read_efficiency(item.get("read_efficiency")),
         proof=_proof(item.get("proof")),
+        partial=item.get("partial") is True,
     )
 
 
@@ -567,7 +577,7 @@ class BenchRunner:
         stopped = False
         for item in planned:
             if meta.budget_usd > 0 and spent is None:
-                progress.publish(note(Status.WARN, msg("bench.cost_unknown")))
+                progress.publish(note(Status.WARN, _unknown_spend(metrics)))
                 stopped = True
                 break
             remaining = meta.budget_usd - spent if spent is not None else 0.0
@@ -598,7 +608,7 @@ class BenchRunner:
                 item.index,
             )
             metrics.append(result)
-            spent = sum_costs((spent, result.cost_usd))
+            spent = sum_costs((spent, result.budget_cost))
             verdict = "bench.accepted" if result.accepted else "bench.rejected"
             progress.publish(
                 finished(key, Status.OK if result.accepted else Status.FAIL, msg(verdict))
@@ -625,7 +635,7 @@ class BenchRunner:
         for _, members in groupby(planned, key=lambda item: item.group):
             group = tuple(members)
             if meta.budget_usd > 0 and spent is None:
-                progress.publish(note(Status.WARN, msg("bench.cost_unknown")))
+                progress.publish(note(Status.WARN, _unknown_spend(metrics)))
                 stopped = True
                 break
             key = comparison_key(group[0])

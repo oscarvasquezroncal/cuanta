@@ -99,6 +99,9 @@ class CodexParser(LineParser):
                 return [ToolCall(str(item_type), str(item.get("id") or ""), {})]
         return []
 
+    def turn_completed(self) -> bool:
+        return self._turns > 0
+
     def finish(self, exit_code: int) -> RunResult | None:
         return RunResult(
             ok=exit_code == 0 and not self._failed,

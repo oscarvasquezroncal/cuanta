@@ -20,13 +20,13 @@ from cuanta.application.assistant import Improvement
 from cuanta.application.cross_engine import TEAM_ROLES
 from cuanta.application.estimate import Estimate
 from cuanta.application.intake import Understanding
-from cuanta.application.mandate_flow import MandateOptions, MandatePreview
+from cuanta.application.mandate_flow import MandateOptions, MandatePreview, resolved_profile
 from cuanta.application.route_apply import RouteOptions
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.cache import UNKNOWN_PREFIX, PrefixWindow
 from cuanta.domain.change_plan import ChangePlan, apply_overrides, move_plan, path_matches
 from cuanta.domain.claude_variants import VARIANTS
-from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile, turn_limit
+from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile
 from cuanta.domain.drafts import Draft
 from cuanta.domain.guarantees import (
     Guarantee,
@@ -40,9 +40,16 @@ from cuanta.domain.implementation import (
     FastChoice,
     ImplementationProfile,
     fast_choice,
-    resolve_profile,
 )
 from cuanta.domain.intake import GAP_ANSWERS, GAP_FIELD
+from cuanta.domain.limits import (
+    NO_LIMITS,
+    LimitSettings,
+    LimitsMode,
+    RunLimits,
+    depth_limits,
+    limits_message,
+)
 from cuanta.domain.mandate import (
     DELIVERABLES,
     INVESTIGATION,
@@ -53,15 +60,15 @@ from cuanta.domain.mandate import (
     missing_fields,
     second_field,
 )
+from cuanta.domain.messages import Message as Said
 from cuanta.domain.messages import msg
 from cuanta.domain.models import ModelEntry
 from cuanta.domain.routing import ENGINE_ORDER, Provider
-from cuanta.domain.scout import eligible
+from cuanta.domain.scout import DocsChoice, DocsReason, eligible
 from cuanta.domain.team import ProviderAdvice, RoleCard, advice_message, runs_per_role
 from cuanta.tui.cache_text import prefix_content
 from cuanta.tui.fmt import money
 from cuanta.tui.i18n import Catalog
-from cuanta.tui.screens.confirm import ConfirmScreen
 from cuanta.tui.services import Services
 from cuanta.tui.widgets.flow import FlowRow
 
@@ -95,15 +102,26 @@ def new_draft_id() -> str:
     return f"d{secrets.token_hex(6)}"
 
 
-def parse_cap(text: str) -> float | None:
+LIMIT_INPUTS = ("wiz-limit-budget", "wiz-limit-turns", "wiz-limit-wall")
+LIMIT_CELL = 34
+NONE_SET = "0"
+
+
+def limit_text(value: float, whole: bool = False) -> str:
+    if whole:
+        return str(int(value))
+    return f"{value:f}".rstrip("0").rstrip(".")
+
+
+def parse_limit(text: str, default: float, whole: bool = False) -> float | None:
     cleaned = text.strip().lstrip("$").strip()
     if not cleaned:
-        return None
+        return default
     try:
-        value = float(cleaned)
+        value = int(cleaned) if whole else float(cleaned)
     except ValueError:
         return None
-    return value if value > 0 else None
+    return float(value) if value >= 0 else None
 
 
 class IntentCard(Static):
@@ -160,14 +178,12 @@ class MandateWizard(Vertical):
         self.suggested_kind = ""
         self.engine = ""
         self.engines: tuple[str, ...] = ()
-        self.budget = 0.0
-        self.max_turns = 0
         self.depth = DEFAULT_DEPTH.value
+        self.limits_on = False
+        self.limit_settings = LimitSettings()
         self.implementation_profile = ""
         self.implementation_variant = ""
         self.implementation_model = ""
-        self.custom_cap = False
-        self.no_cap = False
         self.sandbox = False
         self.advice = ""
         self.understanding: Understanding | None = None
@@ -185,11 +201,16 @@ class MandateWizard(Vertical):
         self._team_lock = asyncio.Lock()
         self._team_revision = 0
         self._shaped_revision = -1
+        self._kept_models: dict[str, str] = {}
+        self._kept_engine = ""
+        self._cards_engine = ""
+        self.role_pins = False
         self.change_plan: ChangePlan | None = None
         self._plan_overrides: dict[str, str] = {}
         self._change_revision = 0
         self._change_timer: Timer | None = None
         self._change_lock = asyncio.Lock()
+        self._limits_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         t = self._t
@@ -380,13 +401,19 @@ class MandateWizard(Vertical):
         yield Static("", id="wiz-depth-note")
         yield Static("", id="wiz-estimate")
         yield Static("", id="wiz-prefix")
-        yield Static("", id="wiz-cap-note")
-        with Horizontal(id="cap-row"):
-            yield Button(t("wizard.cap_custom"), id="wiz-custom-cap", classes="chip", compact=True)
-            yield Checkbox(t("wizard.no_cap"), False, id="wiz-no-cap", compact=True)
-        with Horizontal(id="wiz-cap-field"):
-            yield Label(t("wizard.cap_label"))
-            yield Input(placeholder=t("wizard.cap_placeholder"), id="wiz-budget")
+        yield Static("", id="wiz-limits-note")
+        with Horizontal(id="run-limits-row"):
+            yield Checkbox(t("wizard.limits"), False, id="wiz-limits", compact=True)
+        with FlowRow(id="run-limits-fields", cell=LIMIT_CELL):
+            with Vertical(classes="limit-field"):
+                yield Label(t("wizard.limit_budget"))
+                yield Input(id="wiz-limit-budget")
+            with Vertical(classes="limit-field", id="limit-turns-field"):
+                yield Label(t("wizard.limit_turns"))
+                yield Input(id="wiz-limit-turns")
+            with Vertical(classes="limit-field"):
+                yield Label(t("wizard.limit_wall"))
+                yield Input(id="wiz-limit-wall")
         with FlowRow(id="team-actions", classes="chips"):
             yield Button(t("wizard.preview"), id="wiz-team-preview", classes="chip", compact=True)
 
@@ -402,7 +429,7 @@ class MandateWizard(Vertical):
         self.query_one("#preview-card").display = False
         self.query_one("#wiz-verify-note").display = False
         self.query_one("#implementation-options").display = False
-        self.query_one("#wiz-cap-field").display = False
+        self.query_one("#run-limits-fields").display = False
         self.query_one("#team-cards").display = False
         self.query_one("#team-simple-note").display = False
         self.query_one("#wiz-sandbox-note").display = False
@@ -425,14 +452,15 @@ class MandateWizard(Vertical):
     def configure(
         self,
         engine: str,
-        budget: float,
         engines: tuple[tuple[str, bool], ...],
         forge_ready: bool = True,
         init_estimate: float | None = None,
-        max_turns: int = 0,
+        limits: LimitSettings | None = None,
         implementation_profile: str = AUTO_PROFILE,
         implementation_variant: str = "",
+        role_pins: bool = False,
     ) -> None:
+        self.role_pins = role_pins
         ready = {name for name, installed in engines if installed}
         self.engines = tuple(name for name in ENGINE_ORDER if name in ready)
         self.engine = engine if engine in self.engines else next(iter(self.engines), "")
@@ -441,8 +469,8 @@ class MandateWizard(Vertical):
         selector.disabled = not self.engines
         if self.engine:
             selector.value = self.engine
-        self.budget = budget
-        self.max_turns = max_turns
+        self.limit_settings = limits or LimitSettings()
+        self._apply_limit_settings()
         self.implementation_profile = implementation_profile
         self.implementation_variant = implementation_variant
         if implementation_variant in VARIANTS:
@@ -526,12 +554,61 @@ class MandateWizard(Vertical):
         self.query_one("#limits-tests").display = target != "tests" and kind != INVESTIGATION
         self.show_missing()
 
-    def cap(self) -> float | None:
-        if self.no_cap:
-            return 0.0
-        if self.custom_cap:
-            return parse_cap(self.query_one("#wiz-budget", Input).value)
-        return profile(parse_depth(self.depth), self.kind).cost_cap_usd
+    def _apply_limit_settings(self) -> None:
+        settings = self.limit_settings
+        fixed = settings.fixed
+        self.limits_on = settings.mode is LimitsMode.DEPTH or fixed.active
+        unset = NONE_SET if settings.mode is LimitsMode.OFF and fixed.active else ""
+        values = (
+            (fixed.budget_usd, False),
+            (float(fixed.max_turns), True),
+            (fixed.wall_min, False),
+        )
+        for selector, (value, whole) in zip(LIMIT_INPUTS, values, strict=True):
+            text = limit_text(value, whole) if value > 0 else unset
+            self.query_one(f"#{selector}", Input).value = text
+        self.query_one("#wiz-limits", Checkbox).value = self.limits_on
+
+    def depth_limits(self) -> RunLimits:
+        return depth_limits(profile(parse_depth(self.depth), self.kind))
+
+    @property
+    def takes_turns(self) -> bool:
+        return self.engine == Provider.CLAUDE
+
+    def _limit(self, selector: str, default: float, whole: bool = False) -> float | None:
+        return parse_limit(self.query_one(f"#{selector}", Input).value, default, whole)
+
+    def limits(self) -> RunLimits | None:
+        if not self.limits_on:
+            return NO_LIMITS
+        derived = self.depth_limits()
+        budget = self._limit("wiz-limit-budget", derived.budget_usd)
+        turns = (
+            self._limit("wiz-limit-turns", derived.max_turns, whole=True)
+            if self.takes_turns
+            else 0.0
+        )
+        wall = self._limit("wiz-limit-wall", derived.wall_min)
+        if budget is None or turns is None or wall is None:
+            return None
+        return RunLimits(budget, int(turns), wall)
+
+    def _bad_limit(self) -> str:
+        derived = self.depth_limits()
+        checks = (
+            ("wiz-limit-budget", derived.budget_usd, False, True),
+            ("wiz-limit-turns", float(derived.max_turns), True, self.takes_turns),
+            ("wiz-limit-wall", derived.wall_min, False, True),
+        )
+        for selector, default, whole, shown in checks:
+            if shown and self._limit(selector, default, whole) is None:
+                return selector
+        return ""
+
+    @property
+    def team_shown(self) -> bool:
+        return self.one_page or STEPS[self.step] == "team"
 
     def decided(self, options: MandateOptions) -> MandateOptions:
         choice = self.estimate.shape if self.estimate is not None else None
@@ -546,35 +623,42 @@ class MandateWizard(Vertical):
         mode = choice.mode.value if choice.scout else options.scout_mode
         return replace(options, shape=choice.shape.value, scout_mode=mode)
 
-    def options(self) -> MandateOptions:
+    def _card_models(self) -> dict[str, str]:
+        return {
+            select.id.removeprefix("override-"): value
+            for select in self.query_one("#team-cards").query(Select)
+            if select.id and isinstance(value := select.value, str) and value
+        }
+
+    def _role_models(self, engine: str) -> tuple[tuple[str, str], ...]:
+        if self.simple or self.fast_profile:
+            return ()
+        if self.plan is not None:
+            return tuple(self._card_models().items())
+        return tuple(self._kept_models.items()) if engine == self._kept_engine else ()
+
+    def options(self, pinned: bool = True) -> MandateOptions:
         chosen = self.query_one("#wiz-engine", Select).value
         engine = chosen if isinstance(chosen, str) and chosen in self.engines else self.engine
-        pinned = (
-            tuple(
-                (select.id.removeprefix("override-"), value)
-                for select in self.query_one("#team-cards").query(Select)
-                if select.id and isinstance(value := select.value, str) and value
-            )
-            if self.plan is not None and not self.simple
-            else ()
-        )
-        custom = parse_cap(self.query_one("#wiz-budget", Input).value) if self.custom_cap else None
+        pins = self._role_models(engine) if pinned else ()
+        chosen_limits = self.limits() or NO_LIMITS
         understood = self.understanding
         return MandateOptions(
             engine=engine,
             profile=self.implementation_profile,
             variant=self.implementation_variant if self.fast_profile else "",
             model=self.implementation_model if self.fast_profile else "",
-            budget_usd=custom or 0.0,
+            budget_usd=chosen_limits.budget_usd if self.limits_on else None,
+            max_turns=chosen_limits.max_turns if self.limits_on else None,
+            max_wall_min=chosen_limits.wall_min if self.limits_on else None,
+            limits="" if self.limits_on else LimitsMode.OFF.value,
             route=RouteOptions(
-                role_models=pinned,
+                role_models=pins,
                 scope=understood.scope if understood is not None else None,
                 risk=understood.risk if understood is not None else None,
             ),
             simple=self.simple,
             depth=self.depth,
-            max_turns=self.max_turns,
-            no_cap=self.no_cap,
             intake_scope=understood.intake_scope if understood is not None else "",
             sandbox=self.sandbox,
             plan_overrides=tuple(
@@ -663,28 +747,36 @@ class MandateWizard(Vertical):
                 "wizard.depth_fast_kind_help", reads=chosen.read_budget, choice=self._kind_choice()
             )
         self.query_one("#wiz-depth-note", Static).update(Content.styled(description, "$text-muted"))
-        if self.no_cap:
-            note = t("wizard.cap_none")
-        elif self.custom_cap:
-            value = parse_cap(self.query_one("#wiz-budget", Input).value)
-            note = t("wizard.cap_note", cap=money(value)) if value else t("wizard.bad_cap")
-        else:
-            note = t("wizard.cap_depth", cap=money(chosen.cost_cap_usd))
-        limit = turn_limit(chosen, self.max_turns)
-        if self.engine == "claude" and limit > 0:
-            note = f"{note}  ·  {t('wizard.turn_limit', turns=limit)}"
-        self.query_one("#wiz-cap-note", Static).update(Content.styled(note, "$text-muted"))
-        self.query_one("#wiz-cap-field").display = self.custom_cap and not self.no_cap
+        self._paint_limits()
         self._paint_guarantees()
+
+    def _paint_limits(self) -> None:
+        t = self._t
+        derived = depth_limits(profile(parse_depth(self.depth), self.kind))
+        self.query_one("#wiz-limit-budget", Input).placeholder = t(
+            "wizard.limit_budget_placeholder", cap=money(derived.budget_usd)
+        )
+        self.query_one("#wiz-limit-turns", Input).placeholder = t(
+            "wizard.limit_turns_placeholder", turns=derived.max_turns
+        )
+        self.query_one("#wiz-limit-wall", Input).placeholder = t("wizard.limit_wall_placeholder")
+        chosen = self.limits()
+        note = t("wizard.bad_limit") if chosen is None else t.message(limits_message(chosen))
+        self.query_one("#wiz-limits-note", Static).update(Content.styled(note, "$text-muted"))
+        fields = self.query_one("#run-limits-fields", FlowRow)
+        fields.display = self.limits_on
+        self.query_one("#limit-turns-field").display = self.takes_turns
+        self.call_after_refresh(fields.reflow)
 
     def _paint_guarantees(self) -> None:
         t = self._t
-        guarantees = engine_guarantees(self.engine) if self.engine else ()
+        chosen = self.limits() or NO_LIMITS
+        guarantees = engine_guarantees(self.engine, limits=chosen) if self.engine else ()
         self.query_one("#wiz-guarantees", Static).update(
             Content("\n").join(Content(t.message(row.message)) for row in guarantees)
         )
         reason = readonly_unavailable(self.engine) if self.kind == INVESTIGATION else None
-        warning = reason or cap_warning(self.engine, self.cap() or 0.0)
+        warning = reason or cap_warning(self.engine, chosen.budget_usd)
         self.query_one("#wiz-guarantee-warning", Static).update(
             Content.styled(t.message(warning), "$error" if reason else "$warning")
         )
@@ -783,8 +875,12 @@ class MandateWizard(Vertical):
                 widget.add_class("-invalid")
                 widget.focus()
             return False
-        if self.custom_cap and not self.no_cap and self.cap() is None:
-            self.error("wizard.bad_cap")
+        bad = self._bad_limit() if self.limits_on else ""
+        if bad:
+            if not self.team_shown:
+                self.go(STEPS.index("team"))
+            self.error("wizard.bad_limit")
+            self.query_one(f"#{bad}", Input).focus()
             return False
         self.error("")
         return True
@@ -908,7 +1004,25 @@ class MandateWizard(Vertical):
         if STEPS[self.step] == "team":
             self.refresh_team()
 
+    def queue_limits(self) -> None:
+        if not self.kind or not self.team_shown:
+            return
+        if self._limits_timer is not None:
+            self._limits_timer.stop()
+        self._limits_timer = self.set_timer(PLAN_DELAY_S, self.refresh_limits)
+
+    def refresh_limits(self) -> None:
+        self._limits_timer = None
+        if self.kind and self.team_shown and self.limits() is not None:
+            self.refresh_team()
+
     def refresh_team(self) -> None:
+        if self._limits_timer is not None:
+            self._limits_timer.stop()
+            self._limits_timer = None
+        if self.plan is not None and self.query("#team-cards .team-card"):
+            self._kept_models = self._card_models()
+            self._kept_engine = self._cards_engine
         self._team_revision += 1
         self.plan = None
         self.estimate = None
@@ -983,8 +1097,13 @@ class MandateWizard(Vertical):
         if self._change_timer is not None:
             self._change_timer.stop()
             self._change_timer = None
+        if self._limits_timer is not None:
+            self._limits_timer.stop()
+            self._limits_timer = None
         self.change_plan = None
         self._plan_overrides.clear()
+        self._kept_models = {}
+        self._kept_engine = ""
         self.query_one("#change-plan").display = False
         self.query_one("#team-protected").display = False
         self.plan = None
@@ -993,14 +1112,12 @@ class MandateWizard(Vertical):
         self.kind = ""
         self.suggested_kind = ""
         self.depth = DEFAULT_DEPTH.value
-        self.custom_cap = False
-        self.no_cap = False
         self.query_one("#wiz-story", TextArea).text = ""
         for selector in ("#wiz-what", "#wiz-why"):
             self.query_one(selector, TextArea).text = ""
-        for selector in ("#wiz-where", "#wiz-out", "#wiz-constraints", "#wiz-tests", "#wiz-budget"):
+        for selector in ("#wiz-where", "#wiz-out", "#wiz-constraints", "#wiz-tests"):
             self.query_one(selector, Input).value = ""
-        self.query_one("#wiz-no-cap", Checkbox).value = False
+        self._apply_limit_settings()
         self.query_one("#wiz-deliverable", Select).value = "report"
         self.query_one("#wiz-detected", Static).update("")
         self.query_one("#preview-card").display = False
@@ -1030,15 +1147,17 @@ class MandateWizard(Vertical):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
-        if event.input.id == "wiz-budget":
+        if event.input.id in LIMIT_INPUTS:
             self._paint_depth()
+            self.queue_limits()
             return
         if not self.one_page:
             self.advance()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "wiz-budget":
+        if event.input.id in LIMIT_INPUTS:
             self._paint_depth()
+            self.queue_limits()
         elif event.input.id in {"wiz-where", "wiz-out", "wiz-constraints", "wiz-tests"}:
             self.queue_change_plan()
 
@@ -1064,7 +1183,7 @@ class MandateWizard(Vertical):
         self.engine = event.value
         self._paint_depth()
         self._paint()
-        if self.kind and (self.one_page or STEPS[self.step] == "team"):
+        if self.kind and self.team_shown:
             self.refresh_team()
         else:
             self._team_revision += 1
@@ -1085,31 +1204,13 @@ class MandateWizard(Vertical):
             self.sandbox = event.value
             self.query_one("#wiz-sandbox-note").display = event.value
             return
-        if event.checkbox.id != "wiz-no-cap":
+        if event.checkbox.id != "wiz-limits" or event.value == self.limits_on:
             return
-        if not event.value:
-            self.no_cap = False
-            self._paint_depth()
-            return
-        if self.no_cap:
-            return
-        self.app.push_screen(
-            ConfirmScreen(
-                self._t,
-                "wizard.no_cap_title",
-                "wizard.no_cap_body",
-                "wizard.no_cap_confirm",
-                "wizard.no_cap_cancel",
-            ),
-            self.no_cap_answer,
-        )
-
-    def no_cap_answer(self, confirmed: bool | None) -> None:
-        self.no_cap = bool(confirmed)
-        if not confirmed:
-            self.query_one("#wiz-no-cap", Checkbox).value = False
+        self.limits_on = event.value
         self._paint_depth()
         self._paint_summary()
+        if self.kind and self.team_shown:
+            self.refresh_team()
 
     def _call(self, callback: Callable[..., object], *args: object, **kwargs: object) -> None:
         if not self.app.is_running:
@@ -1265,7 +1366,7 @@ class MandateWizard(Vertical):
         revision = self._team_revision
         try:
             request = self.request()
-            options = self.options()
+            options = self.options(pinned=False)
             plan, estimate = self._services.team_plan(request, options)
             cards = self._services.team_cards(plan, estimate, options, request.type)
             per_role = runs_per_role(
@@ -1364,6 +1465,8 @@ class MandateWizard(Vertical):
             (t("wizard.keep_plan"), AUTO_MODEL),
             *((self._model_choice(entry), entry.id) for entry in models.get(engine, ())),
         ]
+        offered = {value for _, value in choices}
+        kept = self._kept_models if engine == self._kept_engine else {}
         cards = self.query_one("#team-cards", Vertical)
         await cards.remove_children(".team-card")
         if engine != self.engine or revision != self._team_revision or not self.kind:
@@ -1407,11 +1510,12 @@ class MandateWizard(Vertical):
                 lines.append((f"\n{t.message(card.context)}", "$text-muted"))
             lines.extend((f"\n{t.message(warning)}", "$warning") for warning in warnings)
             body = Content.assemble(*lines)
+            picked = kept.get(route.role.value, AUTO_MODEL)
             select = Select(
                 choices,
                 id=f"override-{route.role.value}",
                 allow_blank=False,
-                value=AUTO_MODEL,
+                value=picked if picked in offered else AUTO_MODEL,
             )
             selects.append(select)
             widgets.append(
@@ -1426,6 +1530,7 @@ class MandateWizard(Vertical):
         if engine != self.engine or revision != self._team_revision or not self.kind:
             return
         self.plan = plan
+        self._cards_engine = engine
         self.estimate = estimate
         self._shaped_revision = revision
         self.query_one("#team-simple-note").display = False
@@ -1439,15 +1544,20 @@ class MandateWizard(Vertical):
             Content.styled(self._t.message(message), "$accent")
             for message in (
                 estimate.shape.message if estimate.shape is not None else None,
-                estimate.docs.message
-                if estimate.docs is not None and not estimate.docs.on
-                else None,
+                self._docs_message(estimate.docs),
             )
             if message is not None
         ]
         if not lines:
             return found
         return Content("\n").join((*lines, found))
+
+    def _docs_message(self, docs: DocsChoice | None) -> Said | None:
+        if docs is None or docs.reason is DocsReason.FORCED_ON:
+            return None
+        if docs.on and self.fast_profile:
+            return None
+        return docs.message
 
     def _forecast_content(self, estimate: Estimate) -> Content:
         t = self._t
@@ -1484,8 +1594,14 @@ class MandateWizard(Vertical):
 
     @property
     def fast_profile(self) -> bool:
-        chosen = resolve_profile(
-            self.implementation_profile, AUTO_PROFILE, self.engine, self.kind, self.simple
+        chosen = resolved_profile(
+            MandateOptions(
+                engine=self.engine, profile=self.implementation_profile, simple=self.simple
+            ),
+            AUTO_PROFILE,
+            self.engine,
+            self.kind,
+            pinned=self.role_pins,
         )
         return chosen is ImplementationProfile.FAST
 
@@ -1532,7 +1648,7 @@ class MandateWizard(Vertical):
         self.query_one("#wiz-engine", Select).value = provider
         self._paint_depth()
         self._paint()
-        if self.kind and (self.one_page or STEPS[self.step] == "team"):
+        if self.kind and self.team_shown:
             self.refresh_team()
         else:
             self._team_revision += 1
@@ -1540,7 +1656,7 @@ class MandateWizard(Vertical):
     def choose_depth(self, depth: str) -> None:
         self.depth = parse_depth(depth).value
         self._paint()
-        if self.kind and (self.one_page or STEPS[self.step] == "team"):
+        if self.kind and self.team_shown:
             self.refresh_team()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1572,7 +1688,6 @@ class MandateWizard(Vertical):
             "wiz-reuse": self.reuse_last,
             "wiz-attach": lambda: self.post_message(self.EvidenceWanted("attach")),
             "wiz-failure": lambda: self.post_message(self.EvidenceWanted("failure")),
-            "wiz-custom-cap": self.toggle_custom_cap,
             "wiz-improve": lambda: self.improve(
                 self.proposal is not None and self.proposal.proposal is None
             ),
@@ -1622,12 +1737,6 @@ class MandateWizard(Vertical):
 
     def reuse_last(self) -> None:
         self.query_one("#wiz-story", TextArea).text = self.last_story
-
-    def toggle_custom_cap(self) -> None:
-        self.custom_cap = not self.custom_cap
-        self._paint_depth()
-        if self.custom_cap:
-            self.query_one("#wiz-budget", Input).focus()
 
     def _append(self, selector: str, text: str) -> None:
         field = self.query_one(selector, Input)

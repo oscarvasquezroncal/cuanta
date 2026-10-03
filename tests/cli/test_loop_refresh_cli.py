@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
 from cuanta.adapters.system.process_runner import SubprocessRunner
 from cuanta.bootstrap import Container
 from tests.fakes import FakeRunner, copy_repo
@@ -22,8 +23,8 @@ TEMPLATE = (
 def env(monkeypatch: pytest.MonkeyPatch, fake_runner: FakeRunner) -> dict[str, str]:
     original = Container.for_project
 
-    def build(cls: type[Container], project: Path) -> Container:
-        container = original(project)
+    def build(cls: type[Container], project: Path, verbose: bool = False) -> Container:
+        container = original(project, verbose)
         container.runner = SubprocessRunner()
         return container
 
@@ -70,6 +71,30 @@ def test_loop_fixes_then_stops_green(tmp_path: Path, env: dict[str, str]) -> Non
     assert report["stop"] == "green"
     assert len(report["iterations"]) == 1
     assert report["iterations"][0]["ok"] is True
+
+
+def test_loop_gives_each_fix_its_spend_turn_and_time_limits(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    root = copy_repo("bugfix", tmp_path)
+    assert (
+        invoke(["init", str(root), "--yes", "--json", "--skip-telemetry"], env=env).exit_code == 0
+    )
+    _configure(root)
+    limits = ("--max-budget-usd", "5", "--max-turns", "12", "--max-wall", "30")
+    result = invoke(
+        ["loop", "--max-iterations", "2", *limits, "--json", "--project", str(root)], env=env
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    fixes = [item["mandate_run"] for item in json.loads(result.stdout)["iterations"]]
+    ledger = SqliteLedger(root / ".cuanta" / "ledger.db")
+    try:
+        runs = {run.id: run for run in ledger.runs()}
+    finally:
+        ledger.close()
+    assert fixes
+    for fix in fixes:
+        assert (runs[fix].cap_usd, runs[fix].max_turns, runs[fix].max_wall_s) == (5.0, 12, 1800.0)
 
 
 def test_refresh_reports_tier_and_runs_forge(tmp_path: Path, env: dict[str, str]) -> None:

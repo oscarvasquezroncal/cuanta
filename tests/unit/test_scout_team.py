@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -23,10 +24,12 @@ from cuanta.application.mandate_flow import (
 )
 from cuanta.application.route_apply import Applied
 from cuanta.application.routing import RoutePlan
-from cuanta.application.scout import read_budget
+from cuanta.application.scout import SessionWatch, read_budget, session_scout
 from cuanta.application.steering import GovernorSetup, Steering
+from cuanta.cli.commands.mandate import scout_rows
 from cuanta.domain.agents import AgentsPlan
-from cuanta.domain.change_plan import ChangePlan, EditTarget
+from cuanta.domain.change_plan import ChangePlan, EditTarget, compile_change_plan
+from cuanta.domain.code_index import IndexedFile
 from cuanta.domain.detection import Stack
 from cuanta.domain.engine import AssistantText, EngineEvent, ToolCall
 from cuanta.domain.envelope import (
@@ -47,8 +50,9 @@ from cuanta.domain.governor import role_plan
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import Run
 from cuanta.domain.mandate import MandateRequest
-from cuanta.domain.messages import msg
+from cuanta.domain.messages import Message, msg
 from cuanta.domain.models import ModelEntry, Tier
+from cuanta.domain.progress import Note, Status
 from cuanta.domain.role_budgets import role_split
 from cuanta.domain.routing import SCOUT_ROLES, Provider, Role, RoleRoute, RoutingPolicy
 from cuanta.domain.sandbox import SandboxLaunch
@@ -56,6 +60,7 @@ from cuanta.domain.scout import DocsChoice, DocsMode, DocsReason, ScoutMode
 from cuanta.domain.scout_report import parse_scout
 from cuanta.ports.engine import Engine
 from cuanta.ports.progress import ProgressSink
+from tests.real_run import REAL_RUN_ID, phased_mandate
 from tests.unit.test_cross_handoffs import FIX, REQUEST, Act, Harness, Recorder, lines, seed
 
 DOCS_REQUEST = MandateRequest(
@@ -334,6 +339,41 @@ def test_docs_run_when_asked_and_stay_off_in_trials(tmp_path: Path) -> None:
     assert "Docs: off in trials" in notes(recorder)
 
 
+def test_a_team_of_launches_runs_docs_when_only_the_evidence_asks(tmp_path: Path) -> None:
+    seed(tmp_path)
+    request = replace(REQUEST, why="Fase 5: el docs-updater registra los cambios")
+    asked = Harness(tmp_path, {"scout": [Act(pack_text())]}, docs_mode=DocsMode.AUTO)
+    report, recorder = run(asked, request=request)
+    assert report.steps[-1].role is Role.DOCS
+    assert "Docs: on, the request names the docs-updater agent in the evidence" in notes(recorder)
+    assert cross_metrics(report)["docs"] == {
+        "on": True,
+        "reason": "agent",
+        "field": "why",
+        "term": "docs-updater",
+    }
+    seed(tmp_path / "off")
+    off = Harness(
+        tmp_path / "off",
+        {"scout": [Act(pack_text())]},
+        docs_mode=DocsMode.OFF,
+        docs_flag=True,
+    )
+    report, recorder = run(off, request=request)
+    assert Role.DOCS not in [step.role for step in report.steps]
+    assert "Docs: off (--docs off)" in notes(recorder)
+    assert cross_metrics(report)["docs"] == {"on": False, "reason": "flag_off"}
+    seed(tmp_path / "on")
+    on = Harness(tmp_path / "on", {"scout": [Act(pack_text())]}, docs_flag=True)
+    report, recorder = run(on)
+    assert report.steps[-1].role is Role.DOCS
+    assert "Docs: on (--docs on)" in notes(recorder)
+    assert scout_rows(parse_scout(None, cross_metrics(report)["docs"]))[-1] == (
+        "docs",
+        "on (--docs on)",
+    )
+
+
 def test_a_claude_scout_launch_is_read_only_and_the_launch_mode_runs_per_role(
     tmp_path: Path,
 ) -> None:
@@ -379,8 +419,10 @@ class WatchedService:
         self.events = events
         self.changed = changed
         self.saved: list[MandateReport] = []
+        self.published = 0
 
     def run(self, *args: object) -> MandateReport:
+        self.published = len(cast("Recorder", args[3]).events)
         observer = cast("Callable[[EngineEvent], None]", args[5])
         for event in self.events:
             observer(event)
@@ -470,8 +512,72 @@ def test_a_native_run_whose_scout_never_ran_records_it(tmp_path: Path) -> None:
     assert summary.outside_unnamed == ("src/layout.ts",)
 
 
+def test_a_native_run_publishes_the_anchor_notes_before_the_engine_starts(tmp_path: Path) -> None:
+    seed(tmp_path)
+    events: list[EngineEvent] = [
+        ToolCall("Agent", "T1", {"subagent_type": "scout", "prompt": "explora"})
+    ]
+    missing = msg("pack.anchors_missing", anchors="app/models/legacy.py:12")
+    _, recorder, service = native_run(tmp_path, events, (), (missing,))
+    text = "File:line references not found among the indexed files: app/models/legacy.py:12"
+    found = [
+        index
+        for index, event in enumerate(recorder.events)
+        if isinstance(event, Note) and event.status is Status.WARN and event.text == text
+    ]
+    assert len(found) == 1 and found[0] < service.published
+
+
+def test_a_scout_cut_off_before_its_pack_still_hands_the_anchored_edit_set() -> None:
+    files = tuple(
+        IndexedFile(path, "h", "python", 100, coverage="ast")
+        for path in (
+            "app/services/interpreter.py",
+            "app/routers/consult.py",
+            "tests/test_consult.py",
+        )
+    )
+    request = MandateRequest(
+        "feature",
+        "Implementar el mandato adjunto",
+        why=phased_mandate().replace(
+            "## Fase 1 — Auditoría", "## Fase 1 — Auditoría (solo lectura)"
+        ),
+        tests="pytest en verde",
+        out_of_scope="el frontend",
+    )
+
+    def rows(edit: tuple[str, ...]) -> dict[str, str]:
+        watch = SessionWatch()
+        watch(ToolCall("Agent", "T1", {"subagent_type": "scout", "prompt": "explora"}))
+        payload = session_scout(
+            watch, None, edit, (), lambda text: "cap:002743b907f8faea", REAL_RUN_ID
+        )
+        return dict(scout_rows(parse_scout(payload)))
+
+    plan = compile_change_plan(request, files, (), (), (), (), (), ())
+    assert not plan.read_only
+    shown = rows(tuple(item.path for item in plan.edit))
+    assert "app/services/interpreter.py" in shown["edit set"]
+    assert not shown["evidence pack"].startswith("11/6,000 tokens")
+    frozen = compile_change_plan(
+        replace(request, why="Solo lectura.\n" + request.why), files, (), (), (), (), (), ()
+    )
+    assert frozen.read_only and not frozen.edit
+    assert rows(tuple(item.path for item in frozen.edit)) == {
+        "evidence pack": (
+            "11/6,000 tokens · 0 facts · 0 snippets · scout native · cap:002743b907f8faea"
+        ),
+        "edit set": "-",
+        "senior reads outside the pack": "not measured in a native session",
+    }
+
+
 def native_run(
-    tmp_path: Path, events: list[EngineEvent], changed: tuple[str, ...]
+    tmp_path: Path,
+    events: list[EngineEvent],
+    changed: tuple[str, ...],
+    pack_notes: tuple[Message, ...] = (),
 ) -> tuple[MandateReport, Recorder, WatchedService]:
     service = WatchedService(events, changed)
     flow = MandateFlow(
@@ -503,6 +609,7 @@ def native_run(
             scout=True,
             docs=docs,
             read_hooks=False,
+            pack_notes=pack_notes,
         ),
     )
     recorder = Recorder()

@@ -61,6 +61,7 @@ class Act:
     writes: Mapping[str, str] = field(default_factory=dict)
     subtype: str = "success"
     whole_cap: bool = False
+    partial: bool = False
 
 
 class Recorder:
@@ -115,7 +116,7 @@ class Actor:
             target.write_text(content, encoding="utf-8")
         ok = act.subtype == "success"
         cost = request.max_budget_usd if act.whole_cap else act.cost
-        result = RunResult(ok, act.subtype, cost, 1, "s", (), act.text)
+        result = RunResult(ok, act.subtype, cost, 1, "s", (), act.text, partial=act.partial)
         on_event(result)
         return EngineOutcome(0 if ok else 1, result, 0)
 
@@ -174,8 +175,11 @@ class Harness:
     docs_off: list[bool] = field(default_factory=list)
     discipline: Callable[[str], bool] | None = None
     docs_mode: DocsMode = DocsMode.ON
+    docs_flag: bool = False
     sandbox: SandboxLaunch | None = None
     timing: bool = False
+    wall_s: float = 0.0
+    monotonic: Callable[[], float] | None = None
 
     def allocate(
         self, plan: RoutePlan, kind: str, depth: str, cap: float, repair: bool, docs_off: bool
@@ -233,8 +237,11 @@ class Harness:
             checkpoint=self.checkpoint,
             read_discipline=self.discipline,
             docs_mode=self.docs_mode,
+            docs_flag=self.docs_flag,
             sandbox=self.sandbox,
             timing=PhaseRecorder(FixedClock(), self.ledger) if self.timing else None,
+            wall_s=self.wall_s,
+            monotonic=self.monotonic,
         )
 
     def run(

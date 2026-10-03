@@ -9,16 +9,25 @@ import socket
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from cuanta.adapters.system.log_file import LogFile
 from cuanta.adapters.telemetry import claude_code_mapper, codex_mapper
-from cuanta.adapters.telemetry.mapping import raw_json
-from cuanta.adapters.telemetry.otlp_json import iter_logs, iter_metrics, iter_spans
+from cuanta.adapters.telemetry.mapping import as_int, as_text, first, raw_json
+from cuanta.adapters.telemetry.otlp_json import (
+    LogRecord,
+    SpanRecord,
+    Unreadable,
+    iter_logs,
+    iter_metrics,
+    iter_spans,
+)
 from cuanta.domain.ledger import LedgerEvent
-from cuanta.domain.telemetry import LOCALHOST
+from cuanta.domain.telemetry import LOCALHOST, unreadable_event
 from cuanta.ports.ledger import Ledger
 
 PATHS = ("/v1/logs", "/v1/metrics", "/v1/traces")
@@ -26,45 +35,111 @@ MAX_BODY = 32 * 1024 * 1024
 MAX_PORT = 65535
 BATCH_SIZE = 500
 FLUSH_INTERVAL_S = 0.25
+VALUE_ERRORS = (ArithmeticError, TypeError, ValueError)
 UNSUPPORTED_HINT = (
     "cuanta listens for OTLP/JSON only: set OTEL_EXPORTER_OTLP_PROTOCOL=http/json "
     '(Codex: protocol = "json")'
 )
 
 
-def map_payload(path: str, payload: Any, keep_prompts: bool = False) -> list[LedgerEvent]:
-    events: list[LedgerEvent] = []
+Failed = Callable[[str, Exception], None]
+
+
+def _log_event(record: LogRecord, keep_prompts: bool) -> LedgerEvent:
+    if codex_mapper.handles(record):
+        return codex_mapper.map_log(record, keep_prompts)
+    if claude_code_mapper.handles(record):
+        return claude_code_mapper.map_log(record, keep_prompts)
+    return LedgerEvent(
+        source="otlp",
+        kind=record.name or "log",
+        trace_id=record.trace_id,
+        ts=record.ts,
+        raw=raw_json(record.raw, keep_prompts),
+    )
+
+
+def _span_event(span: SpanRecord) -> LedgerEvent:
+    return LedgerEvent(
+        source="otlp",
+        kind=f"span:{span.name}",
+        trace_id=span.trace_id,
+        duration_ms=as_int(span.duration_ms),
+        ts=span.ts,
+        raw=raw_json({"name": span.name, "attributes": span.attributes}, False),
+    )
+
+
+@dataclass
+class _Batch:
+    failed: Failed | None
+    events: list[LedgerEvent] = field(default_factory=list)
+
+    def lost(
+        self,
+        error: Exception,
+        name: str,
+        attrs: dict[str, Any],
+        resource: dict[str, Any],
+        trace_id: str,
+        ts: str,
+    ) -> None:
+        run_id = as_text(first(attrs, "cuanta.run_id") or first(resource, "cuanta.run_id"))
+        self.events.append(unreadable_event(run_id, trace_id, ts, name, type(error).__name__))
+        if self.failed is not None:
+            self.failed(name, error)
+
+    def unreadable(self, item: Unreadable) -> None:
+        self.lost(item.error, item.name, item.attributes, item.resource, item.trace_id, item.ts)
+
+
+def map_payload(
+    path: str, payload: Any, keep_prompts: bool = False, failed: Failed | None = None
+) -> list[LedgerEvent]:
+    batch = _Batch(failed)
     if path == "/v1/logs":
         for record in iter_logs(payload):
-            if codex_mapper.handles(record):
-                events.append(codex_mapper.map_log(record, keep_prompts))
-            elif claude_code_mapper.handles(record):
-                events.append(claude_code_mapper.map_log(record, keep_prompts))
-            else:
-                events.append(
-                    LedgerEvent(
-                        source="otlp",
-                        kind=record.name or "log",
-                        trace_id=record.trace_id,
-                        ts=record.ts,
-                        raw=raw_json(record.raw, keep_prompts),
-                    )
+            if isinstance(record, Unreadable):
+                batch.unreadable(record)
+                continue
+            try:
+                batch.events.append(_log_event(record, keep_prompts))
+            except Exception as error:
+                batch.lost(
+                    error,
+                    record.name,
+                    record.attributes,
+                    record.resource,
+                    record.trace_id,
+                    record.ts,
                 )
     elif path == "/v1/metrics":
-        events.extend(claude_code_mapper.map_metric(point) for point in iter_metrics(payload))
+        for point in iter_metrics(payload):
+            if isinstance(point, Unreadable):
+                batch.unreadable(point)
+                continue
+            try:
+                batch.events.append(claude_code_mapper.map_metric(point))
+            except Exception as error:
+                batch.lost(error, point.name, point.attributes, point.resource, "", point.ts)
     elif path == "/v1/traces":
         for span in iter_spans(payload):
-            events.append(
-                LedgerEvent(
-                    source="otlp",
-                    kind=f"span:{span.name}",
-                    trace_id=span.trace_id,
-                    duration_ms=span.duration_ms,
-                    ts=span.ts,
-                    raw=raw_json({"name": span.name, "attributes": span.attributes}, False),
-                )
-            )
-    return events
+            if isinstance(span, Unreadable):
+                batch.unreadable(span)
+                continue
+            try:
+                batch.events.append(_span_event(span))
+            except Exception as error:
+                batch.lost(error, span.name, span.attributes, span.resource, span.trace_id, span.ts)
+    return batch.events
+
+
+def _trace(error: BaseException) -> str:
+    return "".join(traceback.format_exception(error))
+
+
+def _storable(text: str) -> str:
+    return text.encode("utf-8", "replace").decode("utf-8")
 
 
 @dataclass
@@ -72,13 +147,16 @@ class ListenerStats:
     received: int = 0
     written: int = 0
     rejected: int = 0
+    unreadable: int = 0
+    dropped: int = 0
     started: float = field(default_factory=time.monotonic)
 
 
 class EventWriter:
-    def __init__(self, ledger_factory: Callable[[], Ledger]) -> None:
+    def __init__(self, ledger_factory: Callable[[], Ledger], log: LogFile | None = None) -> None:
         self._queue: queue.Queue[LedgerEvent | None] = queue.Queue()
         self._ledger_factory = ledger_factory
+        self._log = log if log is not None else LogFile(None)
         self._thread = threading.Thread(target=self._loop, name="cuanta-writer", daemon=True)
         self._trace_runs: dict[str, str] = {}
         self.stats = ListenerStats()
@@ -107,7 +185,10 @@ class EventWriter:
         return replace(event, run_id=cached) if cached else event
 
     def _loop(self) -> None:
-        ledger = self._ledger_factory()
+        ledger = self._open()
+        if ledger is None:
+            self._discard()
+            return
         pending: list[LedgerEvent] = []
         running = True
         while running:
@@ -116,21 +197,80 @@ class EventWriter:
                 if item is None:
                     running = False
                 else:
-                    pending.append(self._attribute(ledger, item))
+                    pending.append(item)
                 while len(pending) < BATCH_SIZE:
                     extra = self._queue.get_nowait()
                     if extra is None:
                         running = False
                         break
-                    pending.append(self._attribute(ledger, extra))
+                    pending.append(extra)
             except queue.Empty:
                 pass
             if pending:
-                self.stats.written += ledger.add_events(pending)
+                self._flush(ledger, pending)
                 pending = []
             if self._queue.empty():
                 self._idle.set()
-        ledger.close()
+        self._close(ledger)
+
+    def _open(self) -> Ledger | None:
+        try:
+            return self._ledger_factory()
+        except Exception as error:
+            self._log.write("ledger unavailable; telemetry is dropped and counted", _trace(error))
+            return None
+
+    def _discard(self) -> None:
+        while self._queue.get() is not None:
+            self.stats.dropped += 1
+            if self._queue.empty():
+                self._idle.set()
+        self._idle.set()
+
+    def _close(self, ledger: Ledger) -> None:
+        try:
+            ledger.close()
+        except Exception as error:
+            self._log.write("ledger close failed", _trace(error))
+
+    def _flush(self, ledger: Ledger, pending: list[LedgerEvent]) -> None:
+        try:
+            attributed = [self._attribute(ledger, event) for event in pending]
+            self.stats.written += ledger.add_events(attributed)
+        except VALUE_ERRORS:
+            self._one_by_one(ledger, pending)
+        except Exception as error:
+            self._dropped(len(pending), error)
+
+    def _one_by_one(self, ledger: Ledger, pending: list[LedgerEvent]) -> None:
+        for index, event in enumerate(pending):
+            try:
+                self.stats.written += ledger.add_events([self._attribute(ledger, event)])
+            except VALUE_ERRORS as error:
+                self._unstorable(ledger, event, error)
+            except Exception as error:
+                self._dropped(len(pending) - index, error)
+                return
+
+    def _unstorable(self, ledger: Ledger, event: LedgerEvent, error: Exception) -> None:
+        self._log.write(f"unstorable {event.kind}", _trace(error))
+        marker = unreadable_event(
+            _storable(event.run_id),
+            _storable(event.trace_id),
+            _storable(event.ts),
+            _storable(event.kind),
+            type(error).__name__,
+        )
+        try:
+            self.stats.written += ledger.add_events([marker])
+        except Exception as marker_error:
+            self._dropped(1, marker_error)
+            return
+        self.stats.unreadable += 1
+
+    def _dropped(self, count: int, error: Exception) -> None:
+        self.stats.dropped += count
+        self._log.write(f"ledger write failed; events dropped: {count}", _trace(error))
 
     def drain(self, timeout: float = 10.0) -> bool:
         return self._idle.wait(timeout)
@@ -151,16 +291,25 @@ class OtlpServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self, port: int, writer: EventWriter, keep_prompts: bool, token: str) -> None:
+    def __init__(
+        self,
+        port: int,
+        writer: EventWriter,
+        keep_prompts: bool,
+        token: str,
+        log: LogFile | None = None,
+    ) -> None:
         self.writer = writer
         self.keep_prompts = keep_prompts
         self.token = token
+        self.log = log if log is not None else LogFile(None)
         super().__init__((LOCALHOST, port), OtlpHandler)
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         if isinstance(sys.exc_info()[1], ConnectionError):
             return
-        super().handle_error(request, client_address)
+        peer = client_address[0] if isinstance(client_address, tuple) else client_address
+        self.log.write(f"request from {peer}", traceback.format_exc())
 
 
 class OtlpHandler(BaseHTTPRequestHandler):
@@ -177,6 +326,10 @@ class OtlpHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def record_unreadable(self, name: str, error: Exception) -> None:
+        self.server.writer.stats.unreadable += 1
+        self.server.log.write(f"unreadable {name}", _trace(error))
 
     def _local(self) -> bool:
         if _loopback(self.client_address[0]):
@@ -197,6 +350,8 @@ class OtlpHandler(BaseHTTPRequestHandler):
                     "pid": os.getpid(),
                     "received": stats.received,
                     "written": stats.written,
+                    "unreadable": stats.unreadable,
+                    "dropped": stats.dropped,
                     "uptime_s": round(time.monotonic() - stats.started, 1),
                 },
             )
@@ -238,7 +393,14 @@ class OtlpHandler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, ValueError):
             self._send(400, {"error": "invalid JSON"})
             return
-        events = map_payload(self.path, payload, self.server.keep_prompts)
+        try:
+            events = map_payload(
+                self.path, payload, self.server.keep_prompts, self.record_unreadable
+            )
+        except Exception as error:
+            self.server.log.write(f"unreadable payload {self.path}", _trace(error))
+            self._send(400, {"error": "unreadable OTLP payload"})
+            return
         self.server.writer.submit(events)
         self._send(200, {"partialSuccess": {}})
 
@@ -292,10 +454,15 @@ class RunningListener:
 
 
 def build_listener(
-    port: int, ledger_factory: Callable[[], Ledger], keep_prompts: bool, token: str
+    port: int,
+    ledger_factory: Callable[[], Ledger],
+    keep_prompts: bool,
+    token: str,
+    *,
+    log: LogFile | None = None,
 ) -> RunningListener:
-    writer = EventWriter(ledger_factory)
-    server = OtlpServer(port, writer, keep_prompts, token)
+    writer = EventWriter(ledger_factory, log)
+    server = OtlpServer(port, writer, keep_prompts, token, log)
     return RunningListener(server, writer)
 
 
@@ -305,10 +472,12 @@ def bind_listener(
     keep_prompts: bool,
     token: str,
     attempts: int = 50,
+    *,
+    log: LogFile | None = None,
 ) -> RunningListener:
     for port in range(start, min(start + attempts, MAX_PORT + 1)):
         try:
-            return build_listener(port, ledger_factory, keep_prompts, token)
+            return build_listener(port, ledger_factory, keep_prompts, token, log=log)
         except OSError:
             continue
     raise OSError(f"no free port in {start}..{start + attempts - 1}")

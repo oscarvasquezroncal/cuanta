@@ -592,6 +592,14 @@ def test_a_run_that_never_launched_spent_nothing() -> None:
     assert not ended_by_cap(skipped.proof, False)
 
 
+def test_a_partial_run_has_no_cost_a_budget_can_count() -> None:
+    whole = run(record(Comparison.SCOUT, "scout"), 0.4)
+    cut = replace(whole, partial=True)
+    assert whole.budget_cost == 0.4
+    assert cut.cost_usd == 0.4 and cut.budget_cost is None
+    assert launched_cost(cut) is None
+
+
 def test_the_report_and_payload_state_each_target_from_the_records() -> None:
     metrics = [
         discipline("discipline-on", 1_000, 3_000),

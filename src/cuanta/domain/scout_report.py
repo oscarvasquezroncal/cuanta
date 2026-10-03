@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from cuanta.domain.evidence_pack import PackCheck, SeniorScope
-from cuanta.domain.scout import DocsChoice
+from cuanta.domain.scout import DocsChoice, DocsReason
 
 SCOUT_KEY = "scout"
 DOCS_KEY = "docs"
@@ -36,6 +36,8 @@ class ScoutSummary:
     senior_checked: bool = False
     docs: str = ""
     docs_reason: str = ""
+    docs_field: str = ""
+    docs_term: str = ""
     dispatched: bool = True
 
     @property
@@ -92,7 +94,10 @@ def scout_payload(
 
 
 def docs_payload(choice: DocsChoice) -> dict[str, object]:
-    return {"on": choice.on, "reason": choice.reason.value}
+    found: dict[str, object] = {"on": choice.on, "reason": choice.reason.value}
+    if choice.term:
+        found.update(field=choice.field, term=choice.term)
+    return found
 
 
 def _int(value: object) -> int:
@@ -138,5 +143,17 @@ def parse_scout(value: object, docs: object = None) -> ScoutSummary:
         senior_checked=bool(checked),
         docs="" if not isinstance(on, bool) else "on" if on else "off",
         docs_reason=_text(docs_data.get("reason")),
+        docs_field=_text(docs_data.get("field")),
+        docs_term=_text(docs_data.get("term")),
         dispatched=data.get("dispatched") is not False,
     )
+
+
+def summary_docs(summary: ScoutSummary) -> DocsChoice | None:
+    if summary.docs not in {"on", "off"}:
+        return None
+    try:
+        reason = DocsReason(summary.docs_reason)
+    except ValueError:
+        return None
+    return DocsChoice(summary.docs == "on", reason, summary.docs_field, summary.docs_term)

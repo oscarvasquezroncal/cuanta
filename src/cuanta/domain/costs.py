@@ -14,10 +14,11 @@ class CostTotal:
     known: int = 0
     missing: int = 0
     estimated: int = 0
+    partial: int = 0
 
     @property
     def lower_bound(self) -> bool:
-        return self.missing > 0
+        return self.missing > 0 or self.partial > 0
 
     @property
     def value(self) -> float | None:

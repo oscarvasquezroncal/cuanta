@@ -4,7 +4,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from cuanta.application.instinct import DecisionMaker
+from cuanta.domain.claude_variants import MODEL_ALIASES
 from cuanta.domain.costs import sum_costs
+from cuanta.domain.errors import DomainFailure
 from cuanta.domain.instinct import SCOPES, Choice
 from cuanta.domain.ledger import RoutingDecision
 from cuanta.domain.messages import Message, english, msg
@@ -25,8 +27,10 @@ from cuanta.domain.routing import (
     investigation_policy,
     learned_tier,
     pin_issues,
+    pinned,
     plan_route,
     policy_reason,
+    pure_route,
     raise_for_risk,
     route_role,
 )
@@ -37,6 +41,8 @@ RISK_LOW = 0.0
 RISK_HIGH = 2.0
 GREEN = "green"
 RED = "red"
+CLAUDE = "claude"
+FAST_PIN_HINT = "use --profile balanced to honor role pins"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,9 +67,88 @@ class RoutePlan:
     requests: tuple[RoleRequest, ...]
     routes: tuple[RoleRoute, ...]
     backend: str
+    pure: ModelEntry | None = None
 
     def route(self, role: Role) -> RoleRoute | None:
         return next((route for route in self.routes if route.role is role), None)
+
+
+def route_model(plan: RoutePlan, role: Role) -> str:
+    route = plan.route(role)
+    if route is None or route.model is None:
+        return ""
+    return route.model.resolved or route.model.id
+
+
+def _names(entry: ModelEntry) -> frozenset[str]:
+    return frozenset(
+        name.lower()
+        for name in (entry.key, entry.id, entry.resolved, MODEL_ALIASES.get(entry.id, ""))
+        if name
+    )
+
+
+def _wanted(reference: str) -> frozenset[str]:
+    written = reference.strip().lower()
+    name = written.removeprefix(f"{CLAUDE}:")
+    return frozenset({written, name, MODEL_ALIASES.get(name, name)})
+
+
+def _claude(entries: Sequence[ModelEntry]) -> tuple[ModelEntry, ...]:
+    return tuple(entry for entry in entries if entry.engine == CLAUDE)
+
+
+def _pure_entry(
+    chosen: str, routes: Sequence[RoleRoute], entries: Sequence[ModelEntry]
+) -> ModelEntry:
+    listed = pinned(_claude(entries), chosen)
+    if listed is not None:
+        return listed
+    wanted = _wanted(chosen)
+    routed = next(
+        (
+            route.model
+            for route in routes
+            if route.model is not None and _names(route.model) & wanted
+        ),
+        None,
+    )
+    if routed is not None:
+        return routed
+    return ModelEntry(
+        CLAUDE, chosen, chosen, "anthropic", resolved=MODEL_ALIASES.get(chosen, chosen)
+    )
+
+
+def _same_model(reference: str, entry: ModelEntry, entries: Sequence[ModelEntry]) -> bool:
+    listed = pinned(_claude(entries), reference)
+    names = _names(listed) if listed is not None else _wanted(reference)
+    return bool(names & _names(entry))
+
+
+def pure_plan(
+    plan: RoutePlan, model: str, entries: Sequence[ModelEntry] = (), fast: bool = False
+) -> RoutePlan:
+    active = tuple(route for route in plan.routes if route.model is not None)
+    if any(route.engine != CLAUDE for route in active):
+        raise DomainFailure("pure implementation requires every role to use Claude")
+    names = {route.model.id for route in active if route.model is not None}
+    chosen = model or (next(iter(names)) if len(names) == 1 else "")
+    if not chosen:
+        raise DomainFailure("pure implementation requires one explicit model")
+    entry = _pure_entry(chosen, active, entries)
+    if any(not _same_model(pin, entry, entries) for pin in plan.policy.role_models.values()):
+        if fast:
+            reason = msg("route.fast_pin_conflict", model=entry.resolved or entry.id)
+            raise DomainFailure(english(reason), FAST_PIN_HINT)
+        raise DomainFailure("a role model conflicts with the pure implementation model")
+    return replace(
+        plan,
+        routes=tuple(
+            pure_route(route, entry) if route.model is not None else route for route in plan.routes
+        ),
+        pure=entry,
+    )
 
 
 def without_role(plan: RoutePlan, role: Role) -> RoutePlan:
@@ -89,6 +174,10 @@ def _in_place[T: (RoleRequest, RoleRoute)](items: Sequence[T], added: T) -> tupl
 def tiers_allowed(policy: RoutingPolicy, role: Role) -> tuple[str, ...]:
     ceiling = tier_rank(policy.caps.ceiling(role))
     return tuple(tier.value for tier in TIER_ORDER if tier_rank(tier) <= ceiling)
+
+
+def policy_pinned(policy: RoutingPolicy, mode: str = "") -> bool:
+    return bool(policy.role_models) and with_overrides(policy, mode).mode is not RouteMode.OFF
 
 
 def with_overrides(
@@ -124,17 +213,21 @@ class RouteAdvisor:
         self._ledger = ledger
         self._clock_iso = clock_iso
 
+    def pure(self, plan: RoutePlan, model: str, fast: bool = False) -> RoutePlan:
+        return pure_plan(plan, model, tuple(self._catalog()), fast)
+
     def scout_plan(self, plan: RoutePlan) -> RoutePlan:
         if plan.route(Role.SCOUT) is not None:
             return plan
         policy = plan.policy
         tier = policy.tier_for(Role.SCOUT)
         request = RoleRequest(Role.SCOUT, tier, policy_reason(Role.SCOUT, tier))
-        route = (
-            RoleRoute(Role.SCOUT, tier, None, None, msg("route.off"))
-            if policy.mode is RouteMode.OFF
-            else route_role(policy, tuple(self._catalog()), request)
-        )
+        if policy.mode is RouteMode.OFF:
+            route = RoleRoute(Role.SCOUT, tier, None, None, msg("route.off"))
+        else:
+            route = route_role(policy, tuple(self._catalog()), request)
+            if plan.pure is not None and route.model is not None:
+                route = pure_route(route, plan.pure)
         return replace(
             plan,
             requests=_in_place(plan.requests, request),

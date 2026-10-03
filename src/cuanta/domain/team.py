@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from cuanta.domain.guarantees import Guarantee, cap_warning, engine_guarantees
 from cuanta.domain.ledger import Run
+from cuanta.domain.limits import RunLimits
 from cuanta.domain.messages import Message, msg
 from cuanta.domain.routing import Provider, Role, RoleRoute, parse_provider
 
@@ -138,6 +139,7 @@ def team_cards(
     budget_usd: float,
     index_tools: Callable[[str], bool],
     build_blocked: frozenset[str] = frozenset(),
+    limits: RunLimits | None = None,
 ) -> tuple[RoleCard, ...]:
     cards: list[RoleCard] = []
     for route in routes:
@@ -156,7 +158,7 @@ def team_cards(
                 engine,
                 route.model.resolved or route.model.id,
                 shares.get(route.role, 0.0),
-                engine_guarantees(engine),
+                engine_guarantees(engine, limits=limits),
                 msg("team.context_index" if index_tools(engine) else "team.context_text"),
                 tuple(warnings),
                 route.reason,

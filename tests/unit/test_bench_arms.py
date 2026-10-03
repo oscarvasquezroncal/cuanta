@@ -263,6 +263,35 @@ def test_runs_that_never_launched_do_not_stop_the_bench(tmp_path: Path) -> None:
     assert result.metrics[0].cost_usd is None and result.metrics[1].cost_usd == 0.1
 
 
+def test_a_partial_cost_stops_the_proof_runner_before_the_next_group(tmp_path: Path) -> None:
+    planned = scout_runs()
+    calls: list[int] = []
+
+    def execute_group(task: BenchTask, runs: Sequence[PlannedRun]) -> tuple[RunMetrics, ...]:
+        calls.extend(run.order for run in runs)
+        found = measured(runs, {run.order: 0.1 for run in runs})
+        return tuple(replace(item, partial=True) for item in found)
+
+    sink = RecordingSink()
+    runner = BenchRunner(legacy, LocalWorkspace(tmp_path), execute_group)
+    result = runner.run_proof(meta(budget=5.0), [TASK], planned, sink)
+    assert calls == [1] and result.stopped_early
+    keys = [
+        event.message.key
+        for event in sink.events
+        if isinstance(event, Note) and event.message is not None
+    ]
+    assert keys == ["bench.cost_partial"]
+
+
+def test_only_a_partial_run_stores_its_partial_flag() -> None:
+    plain = RunMetrics("t1", Condition.CUANTA, 1, "r", True, False, 1, 2, 3, 4, 0.2, 1.0, 0, 0)
+    assert "partial" not in stored_run(plain)
+    cut = replace(plain, partial=True)
+    assert stored_run(cut)["partial"] is True
+    assert metrics_from_json(json.loads(json.dumps(stored_run(cut)))) == cut
+
+
 def test_runs_without_a_proof_store_the_legacy_document() -> None:
     plain = RunMetrics("t1", Condition.CUANTA, 1, "r", True, False, 1, 2, 3, 4, 0.2, 1.0, 0, 0)
     data = stored_run(plain)

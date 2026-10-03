@@ -2,17 +2,53 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
+from functools import lru_cache
 
+from cuanta.domain.anchors import (
+    KNOWN_EXTENSIONS,
+    RequestAnchor,
+    anchor_candidates,
+    request_anchors,
+)
 from cuanta.domain.code_index import IndexedFile, IndexRow, index_path
 from cuanta.domain.index_search import rank_files, search_terms
-from cuanta.domain.intake import READ_ONLY_AT, core_text, extract_mentions, extract_out_of_scope
-from cuanta.domain.mandate import INVESTIGATION, MandateRequest
+from cuanta.domain.intake import (
+    OUT_OF_SCOPE_AT,
+    READ_ONLY_AT,
+    core_text,
+    extract_mentions,
+    extract_out_of_scope,
+    sentences,
+)
+from cuanta.domain.mandate import (
+    INVESTIGATION,
+    MIN_PARTS,
+    MandateRequest,
+    MandateType,
+    Span,
+    in_parts,
+    numbered_parts,
+    part_spans,
+)
+from cuanta.domain.messages import Message, msg
 
 WRITERS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 EXECUTION = ("Bash", "PowerShell", "Computer", "ComputerUse")
 READ_TOOLS = ("Read", "Grep", "Glob", "Agent", "Task")
-_PATH = re.compile(r"[\w.@*?-]+(?:/[\w.@*?-]+)+|[\w@*?-]+\.[\w*?-]+(?:/\*\*)?")
+WRITING_TYPES = frozenset({MandateType.FEATURE, MandateType.BUG, MandateType.REFACTOR})
+READ_ONLY_FIELDS = ("what", "why", "where", "constraints", "out_of_scope")
+_PATH = re.compile(r"(?<![\w.@*?-])(?:[\w.@*?-]+(?:/[\w.@*?-]+)+|[\w@*?-]+\.[\w*?-]+(?:/\*\*)?)")
+ROOTED = ("/", "~", "$", "%")
+PHASE_LOCAL = re.compile(
+    r"\b(?:en|durante)\s+esta\s+fase\b|\b(?:in|during)\s+this\s+phase\b", re.IGNORECASE
+)
+THIRD_PARTY_DIRS = frozenset(
+    {"node_modules", ".venv", "venv", "site-packages", "dist-packages", "__pycache__", ".git"}
+)
+RENDERER_TERMS = frozenset({"renderer", "renderizador", "3d", "three"})
+RENDERER_PATH_TERMS = frozenset({"renderer", "3d", "three"})
 _READ_ONLY_SCOPE_SUFFIX = re.compile(
     r"\s+(?:else|outside|except|beyond|in|under|inside|within|to|en|fuera|salvo|excepto|m[aá]s)\b",
     re.IGNORECASE,
@@ -97,6 +133,7 @@ class ChangePlan:
     verify: tuple[str, ...] = ()
     read_only: bool = False
     coverage: float = 0.0
+    released: tuple[str, ...] = ()
 
 
 def path_matches(path: str, pattern: str) -> bool:
@@ -139,17 +176,78 @@ def _scope(value: str) -> str:
     return result
 
 
-def _mentions(text: str, paths: tuple[str, ...], keep_unknown: bool = False) -> tuple[str, ...]:
+def _guessable(token: str, roots: frozenset[str]) -> bool:
+    if token.startswith(ROOTED) or any(char.isspace() for char in token):
+        return False
+    parts = [part for part in token.removesuffix("/**").split("/") if part]
+    if not parts or THIRD_PARTY_DIRS.intersection(parts[:-1]):
+        return False
+    stem, dot, extension = parts[-1].rpartition(".")
+    if dot and stem and extension.lower() in KNOWN_EXTENSIONS:
+        return True
+    return len(parts) > 1 and (token.endswith("/") or parts[0] in roots)
+
+
+@lru_cache(maxsize=8)
+def _segments(
+    paths: tuple[str, ...],
+) -> tuple[Mapping[str, tuple[str, ...]], Mapping[str, tuple[str, ...]]]:
+    names: dict[str, list[str]] = {}
+    folders: dict[str, list[str]] = {}
+    for path in paths:
+        *parents, name = path.split("/")
+        names.setdefault(name, []).append(path)
+        for folder in dict.fromkeys(parents):
+            folders.setdefault(folder, []).append(path)
+    return (
+        {key: tuple(value) for key, value in names.items()},
+        {key: tuple(value) for key, value in folders.items()},
+    )
+
+
+def _candidates(token: str, plain: str, paths: tuple[str, ...]) -> tuple[str, ...]:
+    if "*" in token:
+        return paths
+    names, folders = _segments(paths)
+    last = plain.rsplit("/", 1)[-1]
+    return (*names.get(last, ()), *folders.get(last, ()))
+
+
+def _rooted_only(text: str, token: str) -> bool:
+    start = text.find(token)
+    while start != -1:
+        if text[start - 1 : start] not in ROOTED:
+            return False
+        start = text.find(token, start + 1)
+    return True
+
+
+def _admitted(token: str, roots: frozenset[str], guess: bool, relative: bool) -> bool:
+    if not guess:
+        return "/" in token or "." in token
+    return relative and _guessable(token, roots)
+
+
+def mentioned_paths(
+    text: str, paths: tuple[str, ...], keep_unknown: bool = False, guess: bool = False
+) -> tuple[str, ...]:
     found: set[str] = set()
+    roots = frozenset(path.split("/", 1)[0] for path in paths if "/" in path)
     normalized = text.replace("\\", "/")
-    tokens = (*extract_mentions(normalized), *_PATH.findall(normalized))
+    mentions = extract_mentions(normalized)
+    relative = {token for token in mentions if not _rooted_only(normalized, token)}
+    tokens = dict.fromkeys(mentions)
+    for occurrence in _PATH.finditer(normalized):
+        tokens[occurrence.group()] = None
+        if normalized[max(0, occurrence.start() - 1) : occurrence.start()] not in ROOTED:
+            relative.add(occurrence.group())
     for raw_token in tokens:
         matched = False
         token = raw_token.rstrip(".,;:").removeprefix("./")
         if ":" in token or ".." in token.split("/"):
             continue
         plain = token.removesuffix("/**").rstrip("/")
-        for path in paths:
+        for path in _candidates(token, plain, paths):
             if path == plain or path.endswith("/" + plain):
                 found.add(path)
                 matched = True
@@ -160,7 +258,9 @@ def _mentions(text: str, paths: tuple[str, ...], keep_unknown: bool = False) -> 
             elif "*" in token and path_matches(path, token):
                 found.add(token)
                 matched = True
-        if "*" in token or (keep_unknown and not matched and ("/" in token or "." in token)):
+        if "*" in token or (
+            keep_unknown and not matched and _admitted(token, roots, guess, raw_token in relative)
+        ):
             try:
                 found.add(_scope(token))
             except ValueError:
@@ -168,23 +268,94 @@ def _mentions(text: str, paths: tuple[str, ...], keep_unknown: bool = False) -> 
     return tuple(sorted(found))
 
 
-def _exclusions(request: MandateRequest, files: tuple[IndexedFile, ...]) -> tuple[str, ...]:
-    paths = tuple(file.path for file in files)
+def _guard_paths(text: str, paths: tuple[str, ...]) -> set[str]:
+    found = set(mentioned_paths(text, paths, keep_unknown=True))
+    if RENDERER_TERMS.intersection(search_terms(text)):
+        found.update(path for path in paths if RENDERER_PATH_TERMS.intersection(search_terms(path)))
+    return found
+
+
+def _kept(text: str) -> str:
+    return " ".join(
+        sentence for sentence in sentences(text) if not OUT_OF_SCOPE_AT.search(sentence)
+    )
+
+
+def _intended(request: MandateRequest, paths: tuple[str, ...]) -> tuple[str, ...]:
+    kept = replace(
+        request,
+        what=_kept(request.what),
+        why=_kept(request.why),
+        where=_kept(request.where),
+        constraints="",
+        tests=_kept(request.tests),
+    )
+    anchored, _ = _anchor_targets(request_anchors(kept), paths)
+    text = " ".join((kept.what, kept.why, kept.where, kept.tests))
+    return (*anchored, *mentioned_paths(text, paths, keep_unknown=True, guess=True))
+
+
+def _exclusions(
+    request: MandateRequest, paths: tuple[str, ...]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    outside, phases = _split_phases(request.why, _phase_spans(request, request.why))
     text = " ".join(
         (
             request.out_of_scope,
             *extract_out_of_scope(request.what),
-            *extract_out_of_scope(request.why),
+            *extract_out_of_scope(outside),
             *extract_out_of_scope(request.constraints),
         )
     )
-    found = set(_mentions(text, paths, keep_unknown=True))
-    terms = set(search_terms(text))
-    if terms & {"renderer", "renderizador", "3d", "three"}:
-        found.update(
-            path for path in paths if set(search_terms(path)) & {"renderer", "3d", "three"}
-        )
-    return tuple(sorted(found))
+    found = _guard_paths(text, paths)
+    local = " ".join(
+        sentence for sentence in extract_out_of_scope(phases) if not PHASE_LOCAL.search(sentence)
+    )
+    phased = _guard_paths(local, paths) - found if local else set()
+    intended = _intended(request, paths) if phased else ()
+    released = {
+        pattern
+        for pattern in phased
+        if any(_overlap(path, pattern) for path in intended)
+        and not any(_overlap(pattern, guard) for guard in found)
+    }
+    return tuple(sorted(found | (phased - released))), tuple(sorted(released))
+
+
+def request_query(request: MandateRequest) -> str:
+    text = " ".join(core_text(value) for value in (request.what, request.why, request.where))
+    return " ".join(term for term in search_terms(text) if term not in _GENERIC)
+
+
+def _concrete(found: tuple[str, ...], paths: tuple[str, ...]) -> tuple[str, ...]:
+    known = set(paths)
+    return tuple(path for path in found if path in known)
+
+
+def _anchored_token(
+    pattern: str, anchors: tuple[RequestAnchor, ...], paths: tuple[str, ...]
+) -> bool:
+    if "*" in pattern or pattern in paths:
+        return False
+    return any(anchor.path == pattern or anchor.path.endswith("/" + pattern) for anchor in anchors)
+
+
+def _anchor_targets(
+    anchors: tuple[RequestAnchor, ...], paths: tuple[str, ...]
+) -> tuple[dict[str, EditTarget], set[str]]:
+    targets: dict[str, EditTarget] = {}
+    context: set[str] = set()
+    for anchor in anchors:
+        found = anchor_candidates(anchor.path, paths)
+        if len(found) != 1:
+            continue
+        path = found[0]
+        if anchor.field == "constraints":
+            context.add(path)
+        elif path not in targets:
+            label = RequestAnchor(path, anchor.start, anchor.end).label
+            targets[path] = EditTarget(path, 1.0, f"explicit request anchor {label}")
+    return targets, context
 
 
 def compile_change_plan(
@@ -200,11 +371,16 @@ def compile_change_plan(
     now: str = "",
 ) -> ChangePlan:
     paths = tuple(sorted(file.path for file in files))
-    protection = _exclusions(request, files)
+    protection, released = _exclusions(request, paths)
     text = " ".join(core_text(value) for value in (request.what, request.why, request.where))
-    query = " ".join(term for term in search_terms(text) if term not in _GENERIC)
+    query = request_query(request)
     hits = rank_files(files, symbols, edges, notes, rules, history, query, request.type, now, 15)
-    explicit = _mentions(text, paths, keep_unknown=True)
+    anchors = request_anchors(request)
+    explicit = tuple(
+        pattern
+        for pattern in mentioned_paths(text, paths, keep_unknown=True, guess=True)
+        if not _anchored_token(pattern, anchors, paths)
+    )
     selected: dict[str, EditTarget] = {}
     read: set[str] = set()
     for pattern in explicit:
@@ -213,6 +389,12 @@ def compile_change_plan(
         for path in paths:
             if path_matches(path, pattern):
                 selected[path] = EditTarget(path, 1.0, "explicit request path")
+    for path in _concrete(mentioned_paths(core_text(request.tests), paths), paths):
+        selected.setdefault(path, EditTarget(path, 1.0, "explicit request path"))
+    read.update(_concrete(mentioned_paths(core_text(request.constraints), paths), paths))
+    anchored, context = _anchor_targets(anchors, paths)
+    selected.update(anchored)
+    read.update(context)
     for hit in hits:
         read.add(hit.path)
         if hit.matched_terms and len(selected) < 6:
@@ -242,16 +424,7 @@ def compile_change_plan(
                 path_matches(row.path, pattern) for pattern in protection
             ):
                 selected.setdefault(row.path, EditTarget(row.path, 0.7, "linked regression tests"))
-    readonly = request.type == INVESTIGATION or any(
-        _global_readonly(value)
-        for value in (
-            request.what,
-            request.why,
-            request.where,
-            request.constraints,
-            request.out_of_scope,
-        )
-    )
+    readonly = request.type == INVESTIGATION or bool(read_only_phrase(request))
     if readonly:
         read.update(selected)
         selected.clear()
@@ -263,14 +436,72 @@ def compile_change_plan(
         tuple(dict.fromkeys(value for value in verify if value)),
         readonly,
         sum(file.coverage != "inventory" for file in files) / len(files) if files else 0.0,
+        released,
     )
 
 
-def _global_readonly(value: str) -> bool:
-    return any(
-        not _READ_ONLY_SCOPE_SUFFIX.match(value[matched.end() :])
-        for matched in READ_ONLY_AT.finditer(value)
+def _phase_spans(request: MandateRequest, value: str) -> tuple[Span, ...]:
+    if request.type not in WRITING_TYPES or numbered_parts(value).count < MIN_PARTS:
+        return ()
+    return part_spans(value)
+
+
+def _split_phases(value: str, spans: tuple[Span, ...]) -> tuple[str, str]:
+    outside: list[str] = []
+    inside: list[str] = []
+    last = 0
+    for start, end in spans:
+        outside.append(value[last:start])
+        inside.append(value[start:end])
+        last = end
+    outside.append(value[last:])
+    return "\n".join(outside), "\n".join(inside)
+
+
+def _global_readonly(value: str, spans: tuple[Span, ...] = ()) -> str:
+    for matched in READ_ONLY_AT.finditer(value):
+        if in_parts(matched.start(), spans):
+            continue
+        if not _READ_ONLY_SCOPE_SUFFIX.match(value, matched.end()):
+            return matched.group(0)
+    return ""
+
+
+def read_only_phrase(request: MandateRequest) -> str:
+    values = {
+        "what": request.what,
+        "why": request.why,
+        "where": request.where,
+        "constraints": request.constraints,
+        "out_of_scope": request.out_of_scope,
+    }
+    for name in READ_ONLY_FIELDS:
+        phrase = _global_readonly(values[name], _phase_spans(request, values[name]))
+        if phrase:
+            return phrase
+    return ""
+
+
+def read_only_notes(request: MandateRequest, plan: ChangePlan | None) -> tuple[Message, ...]:
+    if plan is None or not plan.read_only or request.type not in WRITING_TYPES:
+        return ()
+    phrase = read_only_phrase(request)
+    return (msg("change_plan.read_only_phrase", phrase=phrase),) if phrase else ()
+
+
+def guard_notes(plan: ChangePlan | None) -> tuple[Message, ...]:
+    if plan is None or plan.read_only:
+        return ()
+    released = tuple(
+        path
+        for path in plan.released
+        if path not in plan.read and not any(_overlap(path, guard) for guard in plan.guard)
     )
+    return (msg("change_plan.guard_released", paths=", ".join(released)),) if released else ()
+
+
+def plan_notes(request: MandateRequest, plan: ChangePlan | None) -> tuple[Message, ...]:
+    return (*read_only_notes(request, plan), *guard_notes(plan))
 
 
 def move_plan(plan: ChangePlan, path: str, role: str) -> ChangePlan:

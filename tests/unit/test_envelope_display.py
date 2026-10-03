@@ -17,10 +17,12 @@ from cuanta.domain.envelope import (
     envelope_features,
     envelope_payload,
     forecast_messages,
+    parts_message,
     signed_dollars,
     warmth_message,
 )
 from cuanta.domain.ledger import LedgerEvent, Run
+from cuanta.domain.mandate import PartKind, RequestParts
 from cuanta.domain.messages import english, msg
 from cuanta.domain.pricing import Price
 from cuanta.domain.routing import Provider, Role
@@ -120,6 +122,23 @@ def test_tight_and_infeasible_verdicts_show_the_first_suggestion() -> None:
         "envelope.infeasible", p50=f"${base.p50_usd:.2f}", cap=f"${infeasible.cap_usd:.2f}"
     )
     assert Catalog("es").message(said).startswith("Inviable: el P50 ")
+
+
+def test_the_parts_line_says_the_forecast_covers_one_change_in_both_languages() -> None:
+    assert parts_message(RequestParts()) is None
+    assert parts_message(RequestParts(PartKind.PHASE, 1)) is None
+    assert parts_message(RequestParts(PartKind.STEP, 1)) is None
+    phases = parts_message(RequestParts(PartKind.PHASE, 5))
+    steps = parts_message(RequestParts(PartKind.STEP, 3))
+    assert phases is not None and steps is not None
+    assert english(phases) == "This mandate has 5 phases; the forecast covers one change"
+    assert Catalog("es").message(phases) == (
+        "Este mandato tiene 5 fases; el pronóstico cubre un cambio"
+    )
+    assert english(steps) == "This mandate has 3 steps; the forecast covers one change"
+    assert Catalog("es").message(steps) == (
+        "Este mandato tiene 3 pasos; el pronóstico cubre un cambio"
+    )
 
 
 def test_signed_dollars_puts_the_sign_before_the_symbol() -> None:

@@ -7,7 +7,13 @@ from dataclasses import dataclass, field, replace
 from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules, strict_tools
 from cuanta.domain.graph_policy import GRAPH_REFERENCE, graphless_prompt
 from cuanta.domain.routing import Role
-from cuanta.domain.scout import SCOUT_AGENT, SCOUT_DESCRIPTION, SCOUT_TOOLS, scout_agent_prompt
+from cuanta.domain.scout import (
+    DOCS_AGENT,
+    SCOUT_AGENT,
+    SCOUT_DESCRIPTION,
+    SCOUT_TOOLS,
+    scout_agent_prompt,
+)
 from cuanta.domain.stable import stable_json
 
 FENCE = "---"
@@ -34,8 +40,8 @@ PASSTHROUGH = (
 ROLE_NAMES: Mapping[str, Role] = {
     "architecture-analyst": Role.ANALYST,
     "tester": Role.TESTER,
-    "docs-updater": Role.DOCS,
-    "scout": Role.SCOUT,
+    DOCS_AGENT: Role.DOCS,
+    SCOUT_AGENT: Role.SCOUT,
 }
 SENIOR_SUFFIX = "-senior"
 READ_ONLY_ROLES = frozenset({Role.ANALYST, Role.SCOUT})
@@ -219,6 +225,12 @@ def contextual_agents(agents: AgentsPlan, contexts: Mapping[Role, str]) -> Agent
         enriched[name] = spec
         changed = True
     return AgentsPlan(enriched, agents.roles) if changed else agents
+
+
+def pure_agents(agents: AgentsPlan, model: str) -> AgentsPlan:
+    return AgentsPlan(
+        {name: {**spec, "model": model} for name, spec in agents.agents.items()}, agents.roles
+    )
 
 
 def indexed_agents(agents: AgentsPlan) -> AgentsPlan:

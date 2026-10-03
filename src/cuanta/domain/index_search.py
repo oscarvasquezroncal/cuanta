@@ -76,13 +76,13 @@ def rank_files(
         for path, document in documents.items():
             if rule_applies(row, path):
                 document.update(terms)
-    query_terms = tuple(sorted(set(search_terms(query))))
-    frequencies = Counter(term for doc in documents.values() for term in query_terms if term in doc)
+    wanted = frozenset(search_terms(query))
+    frequencies = Counter(term for doc in documents.values() for term in wanted.intersection(doc))
     average = sum(sum(doc.values()) for doc in documents.values()) / len(documents) or 1.0
     lexical: dict[str, float] = {}
     matches: dict[str, tuple[str, ...]] = {}
     for path, doc in documents.items():
-        matched = tuple(term for term in query_terms if term in doc)
+        matched = tuple(sorted(wanted.intersection(doc)))
         matches[path] = matched
         score = 0.0
         length = sum(doc.values())

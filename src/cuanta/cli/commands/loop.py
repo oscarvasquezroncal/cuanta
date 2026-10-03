@@ -15,16 +15,35 @@ def loop_command(
         int, typer.Option("--max-iterations", help="Stop after this many fixes.")
     ] = 3,
     budget_usd: Annotated[
-        float, typer.Option("--budget-usd", help="Stop once the loop's runs cost this much.")
+        float,
+        typer.Option("--budget-usd", help="Stop the loop once its fixes cost this much in total."),
     ] = 0.0,
     engine: Annotated[str, typer.Option("--engine", help="claude, codex or opencode.")] = "",
     model: Annotated[str, typer.Option("--model", help="Model for each fix.")] = "",
+    max_budget_usd: Annotated[
+        float | None,
+        typer.Option("--max-budget-usd", min=0.0, help="Spend cap for each fix; none unless set."),
+    ] = None,
+    max_turns: Annotated[
+        int | None,
+        typer.Option("--max-turns", min=0, help="Turn limit for each fix; none unless set."),
+    ] = None,
+    max_wall: Annotated[
+        float | None,
+        typer.Option("--max-wall", min=0.0, help="Minutes for each fix; none unless set."),
+    ] = None,
 ) -> None:
-    execute(ctx, lambda session: _loop(session, max_iterations, budget_usd, engine, model))
+    limits = (max_budget_usd, max_turns, max_wall)
+    execute(ctx, lambda session: _loop(session, max_iterations, budget_usd, engine, model, limits))
 
 
 def _loop(
-    session: Session, max_iterations: int, budget_usd: float, engine: str, model: str
+    session: Session,
+    max_iterations: int,
+    budget_usd: float,
+    engine: str,
+    model: str,
+    limits: tuple[float | None, int | None, float | None] = (None, None, None),
 ) -> "Document":
     from cuanta.application.loop import FixLoop, FixStep, TestStep
     from cuanta.bootstrap import Container
@@ -33,7 +52,7 @@ def _loop(
     from cuanta.domain.ledger import Run
     from cuanta.domain.loop import LOOP_OUT_OF_SCOPE, loop_gate
 
-    container = Container.for_project(session.project)
+    container = Container.for_project(session.project, verbose=session.options.verbose)
     detection = container.detector().run(with_engines=False)
     loop_text = container.workspace().read_text("docs/LOOP.md")
     gate = loop_gate(detection.verify_tier, detection.verify.evidence, loop_text)
@@ -62,6 +81,9 @@ def _loop(
             engine=engine,
             model=model,
             parent=run_id,
+            budget=limits[0],
+            max_turns=limits[1],
+            max_wall=limits[2],
         )
         report = run_mandate_core(session, container, args, verdict=False)
         return FixStep(report.run.id, report.ok, report.run.cost_usd)

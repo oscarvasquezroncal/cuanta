@@ -25,16 +25,16 @@ from textual.widgets import (
 from cuanta.application.results import ResultView
 from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
 from cuanta.domain.errors import CuantaError
-from cuanta.domain.guarantees import budget_stop_reason
 from cuanta.domain.handoff import Handoff
 from cuanta.domain.mandate import MandateRequest, MandateType
 from cuanta.domain.messages import msg
 from cuanta.domain.outcomes import CROSS_KIND, REJECTED, is_attempt
 from cuanta.domain.overhead import overhead_messages
 from cuanta.domain.report import link_file_refs
+from cuanta.domain.stop_reason import FINISHED_STATUSES, stop_message
 from cuanta.tui.anatomy_text import anatomy_content
 from cuanta.tui.cache_text import first_request_content
-from cuanta.tui.fmt import money, run_money
+from cuanta.tui.fmt import labeled_money, money, run_money
 from cuanta.tui.governor_text import governor_content
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.implementation_text import implementation_content
@@ -108,7 +108,10 @@ class ResultScreen(Screen[None]):
         yield Static(first_request_content(t, view.cache), id="result-cache")
         yield Static(self._map_summary(), id="result-map-summary")
         if view.implementation is not None:
-            yield Static(implementation_content(t, view.implementation), id="result-implementation")
+            yield Static(
+                implementation_content(t, view.implementation, view.run.status != "running"),
+                id="result-implementation",
+            )
         if view.trial is not None:
             with Vertical(id="result-trial"):
                 yield Static("", id="result-trial-line")
@@ -163,15 +166,9 @@ class ResultScreen(Screen[None]):
 
     def _notices(self) -> ComposeResult:
         t, view = self._t, self.view
-        budget_reason = budget_stop_reason(view.run.end_reason)
-        if budget_reason is not None:
-            yield Static(
-                Content.styled(t.message(budget_reason), "$warning"), id="result-budget-cut"
-            )
-        if view.run.end_reason == TURN_LIMIT_SUBTYPE:
-            yield Static(
-                Content.styled(t("result.cut_by_turns"), "$warning"), id="result-turns-cut"
-            )
+        if view.run.status not in {*FINISHED_STATUSES, "running"}:
+            stop = stop_message(view.run, view.implementation, view.governor)
+            yield Static(Content.styled(t.message(stop), "$warning"), id="result-stop")
         if view.fallback_error:
             yield Static(
                 Content.styled(
@@ -281,16 +278,25 @@ class ResultScreen(Screen[None]):
             attempt_money(view, t),
             view.run.model or t("wizard.engine_default"),
         ]
-        if view.run.max_turns > 0:
-            parts.append(t("result.turns", used=view.run.turns, limit=view.run.max_turns))
-            if view.terminal_turn:
+        turns = self._turns()
+        if turns:
+            parts.append(turns)
+            if view.terminal_turn and view.run.max_turns > 0:
                 parts.append(t("result.terminal_turn"))
-        elif view.run.end_reason == TURN_LIMIT_SUBTYPE:
-            parts.append(t("result.turns_used", used=view.run.turns))
         facts = Content.styled("  ·  ".join(parts), "$text-muted")
         if not view.verification:
             return facts
         return Content("\n").join((facts, self._verification()))
+
+    def _turns(self) -> str:
+        t, run = self._t, self.view.run
+        if run.max_turns > 0:
+            text = t("result.turns", used=run.turns, limit=run.max_turns)
+        elif run.end_reason == TURN_LIMIT_SUBTYPE or (run.partial and run.turns > 0):
+            text = t("result.turns_used", used=run.turns)
+        else:
+            return ""
+        return t.message(msg("result.partial_turns", turns=text)) if run.partial else text
 
     def _split(self) -> Content:
         t = self._t
@@ -704,9 +710,7 @@ def attempt_money(view: ResultView, t: Catalog) -> str:
     if run.kind != CROSS_KIND or run.parent_id or view.actual_usd == run.cost_usd:
         return run_money(run, t)
     value = money(view.actual_usd, t("spectrum.na"))
-    if view.actual_usd is not None and view.actual_estimated:
-        return t("cost.estimated", cost=value)
-    return value
+    return labeled_money(value, view.actual_usd, view.actual_estimated, view.actual_partial, t)
 
 
 def decision_offers(view: ResultView) -> tuple[bool, bool]:

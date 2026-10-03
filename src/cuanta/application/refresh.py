@@ -17,7 +17,8 @@ from cuanta.application.init_project import GraphStage, InitContext, StageResult
 from cuanta.domain.detection import Detection
 from cuanta.domain.errors import NotAvailable
 from cuanta.domain.messages import msg
-from cuanta.domain.progress import Status, StepFinished, started
+from cuanta.domain.progress import Status, StepFinished, note, started
+from cuanta.domain.telemetry import unreadable_note
 from cuanta.ports.forge import ForgeKit
 from cuanta.ports.progress import ProgressSink
 from cuanta.ports.workspace import Workspace
@@ -84,6 +85,8 @@ class RefreshProject:
             scope="refresh",
         )
         launch = launcher.launch(spec, watcher)
+        if launch.unreadable > 0:
+            self._progress.publish(note(Status.WARN, unreadable_note(launch.unreadable)))
         _, kept = promote_staged(self._workspace)
         context.new_files.extend(kept)
         context.run_id = launch.run.id

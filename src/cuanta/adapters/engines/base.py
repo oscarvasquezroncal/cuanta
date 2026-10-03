@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -13,6 +14,7 @@ from cuanta.domain.engine import (
     COMMAND_LINE_LIMIT,
     COST_UNKNOWN_SUBTYPE,
     GOVERNOR_STOP_SUBTYPE,
+    WALL_LIMIT_SUBTYPE,
     EngineEvent,
     EngineOutcome,
     EngineRequest,
@@ -26,7 +28,11 @@ from cuanta.domain.gateway import split_command
 from cuanta.ports.system import ProcessRunner, StreamHandle
 
 HELP_TIMEOUT_S = 30.0
-STOP_REASONS = {BUDGET_LIMIT_SUBTYPE: "max_budget_usd", GOVERNOR_STOP_SUBTYPE: "governor_stop"}
+STOP_REASONS = {
+    BUDGET_LIMIT_SUBTYPE: "max_budget_usd",
+    GOVERNOR_STOP_SUBTYPE: "governor_stop",
+    WALL_LIMIT_SUBTYPE: "max_wall",
+}
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -50,6 +56,9 @@ class LineParser:
     def finish(self, exit_code: int) -> RunResult | None:
         return None
 
+    def turn_completed(self) -> bool:
+        return False
+
 
 def final_result(
     parser: LineParser, result: RunResult | None, code: int, stopped: str
@@ -59,7 +68,7 @@ def final_result(
     if not stopped:
         return result
     return replace(
-        result or RunResult(False, stopped, None, 0, ""),
+        result or RunResult(False, stopped, None, 0, "", partial=True),
         ok=False,
         subtype=stopped,
         terminal_reason=STOP_REASONS.get(stopped, "cost_unknown"),
@@ -90,6 +99,10 @@ class StreamingEngine:
         self._sent_turns = 0
         self._continued_result = False
         self._continue_results = False
+        self._guard = threading.Lock()
+        self._holding = False
+        self._settled = False
+        self._cut = False
 
     def cancel(self) -> None:
         self.cancelled = True
@@ -98,8 +111,12 @@ class StreamingEngine:
             active.terminate()
 
     def halt(self, subtype: str) -> None:
-        self._stop_reason = subtype
-        active = self._active
+        with self._guard:
+            if self._settled:
+                return
+            self._stop_reason = subtype
+            active = None if self._holding else self._active
+            self._cut = self._cut or active is not None
         if active is not None:
             active.terminate()
 
@@ -202,6 +219,10 @@ class StreamingEngine:
         self._sent_turns = 0
         self._continued_result = False
         self._continue_results = request.continue_results
+        with self._guard:
+            self._holding = False
+            self._settled = False
+            self._cut = False
         self.prepare(request)
         self._process_start = self._monotonic()
 
@@ -217,15 +238,55 @@ class StreamingEngine:
             )
         return command
 
+    def _answered(self, submitted: int) -> bool:
+        with self._guard:
+            self._holding = False
+            if self._sent_turns == submitted and not self._cut:
+                self._settled = True
+                self._stop_reason = ""
+            return bool(self._stop_reason) and not self._cut
+
     def _deliver(
         self, event: EngineEvent, on_event: Callable[[EngineEvent], None], stream: StreamHandle
     ) -> None:
+        if not isinstance(event, RunResult):
+            on_event(event)
+            return
         submitted = self._sent_turns
-        on_event(event)
-        if self._turns and self._continue_results and isinstance(event, RunResult):
+        with self._guard:
+            self._holding = True
+        try:
+            on_event(event)
+        finally:
+            halted = self._answered(submitted)
+        if self._turns and self._continue_results:
             self._continued_result = self._sent_turns > submitted
             if not self._continued_result:
                 stream.end_input()
+        if halted:
+            with self._guard:
+                self._cut = True
+            stream.terminate()
+
+    def _cut_short(self, stopped: str) -> bool:
+        return self.cancelled or stopped == WALL_LIMIT_SUBTYPE
+
+    def _final(
+        self,
+        parser: LineParser,
+        result: RunResult | None,
+        code: int,
+        stopped: str,
+        on_event: Callable[[EngineEvent], None],
+    ) -> RunResult | None:
+        synthesized = result is None or bool(stopped)
+        unfinished = result is None and self._cut_short(stopped) and not parser.turn_completed()
+        final = final_result(parser, result, code, stopped)
+        if final is not None and (self._continued_result or unfinished):
+            final = replace(final, partial=True)
+        if synthesized and final is not None:
+            on_event(final)
+        return final
 
     def run(self, request: EngineRequest, on_event: Callable[[EngineEvent], None]) -> EngineOutcome:
         parser = self.parser(request)
@@ -249,8 +310,11 @@ class StreamingEngine:
         spent = 0.0
         stopped = ""
         closed = False
-        self._active = stream
-        if self.cancelled:
+        with self._guard:
+            self._active = stream
+            pending = bool(self._stop_reason)
+            self._cut = self._cut or pending
+        if self.cancelled or pending:
             stream.terminate()
         try:
             for line in stream.lines():
@@ -270,6 +334,7 @@ class StreamingEngine:
                         break
                 if stopped:
                     break
+            stopped = stopped or self._stop_reason
             if self.cancelled:
                 stream.terminate()
             if self.cancelled or stopped:
@@ -282,15 +347,12 @@ class StreamingEngine:
             if not closed:
                 stream.close()
             self.cleanup(request)
-        synthesized = result is None or bool(stopped)
-        result = final_result(parser, result, code, stopped)
-        if synthesized and result is not None:
-            on_event(result)
         return EngineOutcome(
             exit_code=code,
-            result=result,
+            result=self._final(parser, result, code, stopped, on_event),
             tool_calls=tool_calls,
             stderr_tail=tail,
             late_results=self._late,
             startup_seconds=self._startup_seconds,
+            cancelled=self.cancelled,
         )

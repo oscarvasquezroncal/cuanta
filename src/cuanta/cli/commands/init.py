@@ -70,7 +70,7 @@ def _run(
         from cuanta.domain.errors import NotAvailable
 
         raise NotAvailable(f"init runs Forge with claude only; got {engine}", "use --engine claude")
-    container = Container.for_project(session.project)
+    container = Container.for_project(session.project, verbose=session.options.verbose)
     if session.settings.mode is OutputMode.PRETTY:
         session.presenter.render(
             Document(blocks=(MascotBlock(Mood.WATCHING, f"init · {session.project.name}"),))

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -38,6 +38,7 @@ class Attempt:
     type: str
     mix: str
     run_ids: tuple[str, ...] = ()
+    partial: bool = False
 
     @property
     def accepted(self) -> bool:
@@ -49,6 +50,8 @@ class Attempt:
 
     @property
     def error(self) -> float | None:
+        if self.partial:
+            return None
         return estimate_error(self.run.estimate_low, self.run.estimate_high, self.cost)
 
 
@@ -187,13 +190,17 @@ def attempts(runs: Iterable[Run], now_iso: str = "") -> tuple[Attempt, ...]:
                 type_key(run.task_type),
                 mix_key(run, roles),
                 tuple(dict.fromkeys(role.id for role in roles)),
+                any(role.partial for role in roles),
             )
         )
     return tuple(found)
 
 
 def cost_row(key: str, items: Sequence[Attempt]) -> CostRow:
-    spend = total_costs((item.cost, item.estimated) for item in items)
+    spend = replace(
+        total_costs((item.cost, item.estimated) for item in items),
+        partial=sum(item.partial for item in items if item.cost is not None),
+    )
     accepted = sum(item.accepted for item in items)
     errors = [error for item in items if (error := item.error) is not None]
     return CostRow(

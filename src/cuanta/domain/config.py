@@ -9,6 +9,8 @@ from cuanta.domain.read_discipline import READ_LINE_LIMIT
 DEFAULT_PORT = 4318
 SCOUT_MODES = ("native", "launch")
 DOCS_MODES = ("auto", "on", "off")
+LIMITS_MODES = ("off", "depth")
+LIMIT_ALIASES = (("budget.usd", "limits.budget_usd"), ("runs.max_turns", "limits.max_turns"))
 IMPLEMENTATION_TOOLS = frozenset(
     {
         "Read",
@@ -47,6 +49,8 @@ class Config:
     test_runner: str = ""
     budget_usd: float = 0.0
     max_turns: int = 0
+    wall_min: float = 0.0
+    limits_mode: str = "off"
     cache_ttl_s: int = 0
     cache_auth: str = ""
     cache_engine_version: str = ""
@@ -115,6 +119,10 @@ KEY_MAP: dict[str, str] = {
     "test.runner": "test_runner",
     "budget.usd": "budget_usd",
     "runs.max_turns": "max_turns",
+    "limits.budget_usd": "budget_usd",
+    "limits.max_turns": "max_turns",
+    "limits.wall_min": "wall_min",
+    "runs.limits": "limits_mode",
     "cache.ttl_s": "cache_ttl_s",
     "cache.auth": "cache_auth",
     "cache.engine_version": "cache_engine_version",
@@ -141,7 +149,11 @@ ENV_MAP: dict[str, str] = {
 LAYOUTS = ("guided", "one_page")
 GIT_WORKFLOWS = ("branches", "trunk")
 LEGACY_LAYOUT_KEY = "ui.expert_mandate"
-REPLACED_KEYS: dict[str, str] = {"ui.mandate_layout": LEGACY_LAYOUT_KEY}
+REPLACED_KEYS: dict[str, str] = {
+    "ui.mandate_layout": LEGACY_LAYOUT_KEY,
+    **dict(LIMIT_ALIASES),
+    **{current: legacy for legacy, current in LIMIT_ALIASES},
+}
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -210,8 +222,10 @@ def layer_from_table(table: Mapping[str, object]) -> dict[str, object]:
             (key, tuple(value) if isinstance(value, list) else value)
             for key, value in flatten(routing).items()
         )
-    for dotted, value in flatten(table).items():
-        if dotted.startswith((MODEL_TIERS_PREFIX, ROUTING_PREFIX)):
+    flat = flatten(table)
+    shadowed = {legacy for legacy, current in LIMIT_ALIASES if current in flat}
+    for dotted, value in flat.items():
+        if dotted.startswith((MODEL_TIERS_PREFIX, ROUTING_PREFIX)) or dotted in shadowed:
             continue
         field_name = KEY_MAP.get(dotted)
         if field_name is None:
@@ -222,6 +236,11 @@ def layer_from_table(table: Mapping[str, object]) -> dict[str, object]:
     legacy = legacy_layout(flatten(table))
     if legacy is not None and "mandate_layout" not in layer:
         layer["mandate_layout"] = legacy
+    _drop_invalid(layer)
+    return layer
+
+
+def _drop_invalid(layer: dict[str, object]) -> None:
     if layer.get("mandate_layout") not in (None, *LAYOUTS):
         del layer["mandate_layout"]
     if layer.get("git_workflow") not in (None, *GIT_WORKFLOWS):
@@ -233,6 +252,12 @@ def layer_from_table(table: Mapping[str, object]) -> dict[str, object]:
         del layer["scout_mode"]
     if layer.get("docs_mode") not in (None, *DOCS_MODES):
         del layer["docs_mode"]
+    if layer.get("limits_mode") not in (None, *LIMITS_MODES):
+        del layer["limits_mode"]
+    for name in ("budget_usd", "max_turns", "wall_min"):
+        amount = layer.get(name)
+        if isinstance(amount, int | float) and amount < 0:
+            del layer[name]
     if layer.get("implementation_profile") not in (None, "auto", "fast", "balanced"):
         del layer["implementation_profile"]
     rounds = layer.get("repair_rounds")
@@ -249,7 +274,6 @@ def layer_from_table(table: Mapping[str, object]) -> dict[str, object]:
     threshold = layer.get("scout_threshold")
     if isinstance(threshold, float) and not 0.0 < threshold <= 1.0:
         del layer["scout_threshold"]
-    return layer
 
 
 def legacy_layout(flat: Mapping[str, object]) -> str | None:

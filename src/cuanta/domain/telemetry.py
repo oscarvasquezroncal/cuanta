@@ -4,7 +4,9 @@ import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, english, msg
+from cuanta.domain.redaction import storage_json
 
 LOCALHOST = "127.0.0.1"
 MAIN_AGENT = "main"
@@ -47,6 +49,30 @@ def claude_env(port: int, project: str, run_id: str = "", traceparent: str = "")
 
 def run_env(run_id: str, traceparent: str) -> dict[str, str]:
     return {"CUANTA_RUN_ID": run_id, "TRACEPARENT": traceparent}
+
+
+LOGS_DIR = "logs"
+LISTENER_LOG_NAME = "listener.log"
+LISTENER_LOG = f".cuanta/{LOGS_DIR}/{LISTENER_LOG_NAME}"
+UNREADABLE_KIND = "telemetry_unreadable"
+UNREADABLE_SOURCE = "cuanta"
+
+
+def unreadable_event(run_id: str, trace_id: str, ts: str, name: str, error: str) -> LedgerEvent:
+    return LedgerEvent(
+        run_id=run_id,
+        source=UNREADABLE_SOURCE,
+        trace_id=trace_id,
+        kind=UNREADABLE_KIND,
+        ts=ts,
+        raw=storage_json({"event": name, "error": error}),
+    )
+
+
+def unreadable_note(count: int) -> Message:
+    if count == 1:
+        return msg("telemetry.unreadable_one", path=LISTENER_LOG)
+    return msg("telemetry.unreadable", count=f"{count:,}", path=LISTENER_LOG)
 
 
 def codex_otel_table(port: int) -> dict[str, object]:

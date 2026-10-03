@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from cuanta.adapters.instinct.heuristic import HeuristicInstinct
@@ -33,13 +34,18 @@ AGENT = "---\nname: {name}\ndescription: d\ntools: Read\nmodel: sonnet\n---\nBod
 REQUEST = MandateRequest(type="feature", what="add export", why="users ask", out_of_scope="ui")
 
 
-def routing(root: Path, environ: dict[str, str]) -> MandateRouting:
-    ledger = MemoryLedger()
+def routing(
+    root: Path,
+    environ: dict[str, str],
+    ledger: MemoryLedger | None = None,
+    policy: Callable[[], RoutingPolicy] = RoutingPolicy,
+) -> MandateRouting:
+    ledger = ledger if ledger is not None else MemoryLedger()
     decisions = DecisionMaker(HeuristicInstinct(), ledger, lambda: NOW)
     advisor = RouteAdvisor(decisions, lambda: CATALOG, ledger, lambda: NOW)
     return MandateRouting(
         advisor=advisor,
-        policy=RoutingPolicy,
+        policy=policy,
         workspace=LocalWorkspace(root),
         ledger=ledger,
         environ=environ,
@@ -202,3 +208,38 @@ def test_native_runs_reject_pins_they_cannot_honor(tmp_path: Path) -> None:
     )
     written = json.loads(Path(honored.agents_file).read_text(encoding="utf-8"))
     assert written["python-senior"]["model"] == "claude-opus-5-5"
+
+
+def test_a_pure_team_plans_one_model_and_owns_the_subagent_variables(tmp_path: Path) -> None:
+    import pytest
+
+    from cuanta.domain.errors import DomainFailure
+
+    agents = tmp_path / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    for name in ("architecture-analyst", "python-senior", "tester"):
+        (agents / f"{name}.md").write_text(AGENT.format(name=name), encoding="utf-8")
+    subject = routing(tmp_path, {"CLAUDE_CODE_SUBAGENT_MODEL": "haiku"})
+    dropped = RouteOptions(mode="fixed", keep_env_model=False)
+    applied = subject.apply(REQUEST, dropped, "claude")
+    assert applied.unset == ("CLAUDE_CODE_SUBAGENT_MODEL",)
+    pure = subject.pure(applied, "claude-opus-5-5")
+    assert (pure.env_override, pure.unset) == ("", ())
+    assert pure.orchestrator == "claude-opus-5-5"
+    assert pure.plan.pure is not None and pure.plan.pure.id == "opus"
+    written = json.loads(Path(pure.agents_file).read_text(encoding="utf-8"))
+    assert {spec["model"] for spec in written.values()} == {"claude-opus-5-5"}
+    assert set(pure.planned().values()) == {
+        ("orchestrator", "claude-opus-5-5"),
+        ("analyst", "claude-opus-5-5"),
+        ("senior", "claude-opus-5-5"),
+        ("tester", "claude-opus-5-5"),
+    }
+    assert subject.pure(pure, "claude-opus-5-5") == pure
+    pinned = RouteOptions(mode="fixed", role_models=(("senior", "sonnet"),))
+    with pytest.raises(DomainFailure, match="conflicts with the pure implementation model"):
+        subject.pure(subject.apply(REQUEST, pinned, "claude"), "claude-opus-5-5")
+    same = RouteOptions(mode="fixed", role_models=(("senior", "opus"),))
+    assert subject.pure(subject.apply(REQUEST, same, "claude"), "claude-opus-5-5").plan.pure
+    off = subject.apply(REQUEST, RouteOptions(mode="off"), "claude")
+    assert subject.pure(off, "claude-opus-5-5") is off

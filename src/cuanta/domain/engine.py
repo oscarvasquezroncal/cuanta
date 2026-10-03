@@ -10,6 +10,8 @@ TURN_LIMIT_SUBTYPE = "error_max_turns"
 BUDGET_LIMIT_SUBTYPE = "error_max_budget_usd"
 COST_UNKNOWN_SUBTYPE = "error_cost_unknown"
 GOVERNOR_STOP_SUBTYPE = "error_governor_stop"
+WALL_LIMIT_SUBTYPE = "error_max_wall"
+CANCELLED_SUBTYPE = "cancelled"
 
 
 COMMAND_LINE_LIMIT = 30_000
@@ -98,6 +100,7 @@ class RunResult:
     denials: tuple[str, ...] = ()
     terminal_reason: str = ""
     permission_denials: tuple[PermissionDenial, ...] = ()
+    partial: bool = False
 
 
 def cut_by_turns(subtype: str, terminal_reason: str = "") -> bool:
@@ -155,6 +158,7 @@ class EngineOutcome:
     stderr_tail: str = ""
     late_results: int = 0
     startup_seconds: float | None = None
+    cancelled: bool = False
 
     @property
     def ok(self) -> bool:

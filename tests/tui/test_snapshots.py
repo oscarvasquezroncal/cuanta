@@ -609,7 +609,7 @@ def test_wizard_forge_gate(snap_compare: SnapCompare, theme: str) -> None:
 
 
 @pytest.mark.parametrize("theme", THEMES)
-def test_no_cap_confirmation(snap_compare: SnapCompare, theme: str) -> None:
+def test_confirmation_dialog(snap_compare: SnapCompare, theme: str) -> None:
     async def check(pilot: Pilot[None]) -> None:
         await loaded(pilot)
         app = pilot.app
@@ -617,10 +617,11 @@ def test_no_cap_confirmation(snap_compare: SnapCompare, theme: str) -> None:
         app.push_screen(
             ConfirmScreen(
                 app.catalog,
-                "wizard.no_cap_title",
-                "wizard.no_cap_body",
-                "wizard.no_cap_confirm",
-                "wizard.no_cap_cancel",
+                "result.apply_title",
+                "result.apply_body",
+                "result.apply_confirm",
+                "result.apply_cancel",
+                {"files": 3, "added": 12, "removed": 4},
             )
         )
         await wait_screen(pilot, ConfirmScreen)
@@ -667,3 +668,20 @@ def test_team_provider_chips_narrow(snap_compare: SnapCompare) -> None:
     assert snap_compare(
         app_for("calico-dark", services), terminal_size=(80, 24), run_before=show_chips
     )
+
+
+def test_team_limits_switched_on_narrow(snap_compare: SnapCompare) -> None:
+    async def show_limits(pilot: Pilot[None]) -> None:
+        wizard = await understood(pilot, 2)
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        fields = wizard.query_one("#run-limits-fields")
+        for _ in range(300):
+            if fields.display and fields.region.width > 0 and wizard.estimate is not None:
+                break
+            await pilot.pause(0.02)
+        await loaded(pilot)
+        await pilot.pause(0.2)
+        fields.scroll_visible(animate=False, top=True)
+        await loaded(pilot)
+
+    assert snap_compare(app_for("calico-dark"), terminal_size=(80, 24), run_before=show_limits)

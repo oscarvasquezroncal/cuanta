@@ -16,6 +16,7 @@ if __package__ in {None, ""}:
 
 from cuanta.adapters.system.sandbox_cleanup import await_cleanup
 from cuanta.application.mandate_flow import MandateOptions, per_role_run
+from cuanta.domain.depth import MAX_TURNS, parse_depth
 from dev.acceptance import verify
 from dev.results import ROOT, Report, python
 from dev.spec import Spec, Trial, load
@@ -89,6 +90,8 @@ def command(spec: Spec, trial: Trial) -> list[str]:
         "--max-budget-usd",
         str(native_cap),
     ]
+    if trial.engine == "claude":
+        arguments.extend(["--max-turns", str(MAX_TURNS[parse_depth(trial.depth)])])
     if trial.cross_engine:
         arguments.append("--cross-engine")
     if per_role(trial):
@@ -197,8 +200,11 @@ def collect(report: Report, spec: Spec, trial: Trial, launch: dict[str, Any]) ->
     show = report.run(trial.name + "-show", cli(spec, "runs", "show", run_id))
     run = launch if show.code else payload(Path(show.log))
     roles = per_role(trial)
-    if roles and any(step.get("cost_usd") is None for step in launch.get("steps", [])):
+    steps = launch.get("steps", [])
+    if roles and any(step.get("cost_usd") is None for step in steps):
         raise ValueError("Cross-engine role cost unknown; stop before another trial")
+    if any(item.get("partial") for item in (launch, run, *steps)):
+        raise ValueError("Partial cost is only a lower bound; stop before another trial")
     actual = launch.get("spent_usd") if roles else run.get("actual_usd")
     if actual is None and not roles:
         actual = run.get("cost_usd")

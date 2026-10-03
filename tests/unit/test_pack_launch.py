@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from itertools import count
 from pathlib import Path
 
@@ -17,17 +18,24 @@ from cuanta.application.engine_run import EngineLauncher
 from cuanta.application.mandate_flow import MandateFlow, MandateOptions, preview_of
 from cuanta.application.route_apply import RouteOptions
 from cuanta.domain.agents import AgentsPlan, contextual_agents, guarded_agents
+from cuanta.domain.anchors import AnchorCheck, AnchorState, RequestAnchor
 from cuanta.domain.change_plan import ChangePlan, EditTarget, apply_overrides
 from cuanta.domain.detection import Stack
 from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest
 from cuanta.domain.graph_policy import graphless_prompt
 from cuanta.domain.mandate import MandateRequest, fill_request
 from cuanta.domain.pack import ContextPack
+from cuanta.domain.progress import Note
 from cuanta.domain.routing import Role
 from tests.fakes import FakeRunner
 from tests.unit.test_cross_engine import Recorder, ScriptedEngine, plan
 from tests.unit.test_engine_profiles import flow, launcher
 from tests.unit.test_route_apply import AGENT, routing
+
+RELEASED_NOTE = (
+    "Change plan: app/routers/consult.py stays editable: a phase says not to touch it, but the "
+    "request anchors or names it elsewhere; put it in Out of scope to protect it"
+)
 
 
 def indexed_pack(role: str) -> ContextPack:
@@ -257,3 +265,100 @@ def test_cross_packs_precede_request_and_handoff_with_the_effective_role_plan(
         assert "VOLATILE" not in prompt
     assert '{"from": "model-analyst"}' in sent[1].prompt
     assert '{"from": "model-senior"}' in sent[2].prompt
+
+
+def test_the_per_role_pipeline_names_unusable_anchors_and_read_only_words_once(
+    tmp_path: Path,
+) -> None:
+    ledger = MemoryLedger()
+    ids = count(1)
+    roles: list[str] = []
+    missing = AnchorCheck(
+        RequestAnchor("app/models/legacy.py", 12, 12, "why"), "", AnchorState.MISSING
+    )
+
+    def engine_launcher(name: str) -> EngineLauncher:
+        return EngineLauncher(
+            ScriptedEngine(name, []),
+            ledger,
+            FixedClock(),
+            lambda: f"RUN{next(ids)}",
+            lambda size: b"\x01" * size,
+            "project",
+            4318,
+            None,
+        )
+
+    def context_pack(
+        request: MandateRequest, depth: str, role: str, protection: ChangePlan | None
+    ) -> ContextPack:
+        roles.append(role)
+        return replace(indexed_pack(role), anchors=(missing,))
+
+    request = MandateRequest(
+        "bug",
+        "Corregir el corte",
+        "Solo lectura: revisar app/models/legacy.py:12",
+        out_of_scope="docs",
+    )
+    pipeline = CrossEnginePipeline(
+        engine_launcher,
+        tuple,
+        FileCapsuleStore(tmp_path),
+        str(tmp_path),
+        5.0,
+        depth="deep",
+        change_plan=lambda _: ChangePlan(read_only=True),
+        context_pack=context_pack,
+    )
+    recorder = Recorder()
+    pipeline.run(request, plan(), recorder)
+    texts = [event.text for event in recorder.events if isinstance(event, Note)]
+    assert len(roles) > 1
+    assert (
+        texts.count(
+            "File:line references not found among the indexed files: app/models/legacy.py:12"
+        )
+        == 1
+    )
+    assert texts.count('Change plan: read-only, because the request says "Solo lectura"') == 1
+
+
+def test_the_per_role_pipeline_says_once_which_phase_guard_it_left_editable(
+    tmp_path: Path,
+) -> None:
+    ledger = MemoryLedger()
+    ids = count(1)
+
+    def engine_launcher(name: str) -> EngineLauncher:
+        return EngineLauncher(
+            ScriptedEngine(name, []),
+            ledger,
+            FixedClock(),
+            lambda: f"RUN{next(ids)}",
+            lambda size: b"\x01" * size,
+            "project",
+            4318,
+            None,
+        )
+
+    released = ChangePlan(
+        edit=(EditTarget("app/routers/consult.py", 1.0),),
+        guard=("app/services/interpreter.py",),
+        released=("app/routers/consult.py",),
+    )
+    pipeline = CrossEnginePipeline(
+        engine_launcher,
+        tuple,
+        FileCapsuleStore(tmp_path),
+        str(tmp_path),
+        5.0,
+        depth="deep",
+        change_plan=lambda _: released,
+        context_pack=lambda request, depth, role, protection: indexed_pack(role),
+    )
+    recorder = Recorder()
+    request = MandateRequest("bug", "Corregir el endpoint", "Fase 1 y Fase 3", out_of_scope="docs")
+    pipeline.run(request, plan(), recorder)
+    texts = [event.text for event in recorder.events if isinstance(event, Note)]
+    assert texts.count(RELEASED_NOTE) == 1

@@ -20,6 +20,7 @@ from cuanta.application.mandate_flow import (
     MandateOptions,
     per_role_run,
     resolved_profile,
+    team_requested,
 )
 from cuanta.application.route_apply import RouteOptions
 from cuanta.application.verification import Verifier
@@ -47,11 +48,15 @@ from cuanta.domain.implementation import (
     unavailable_checks,
     verification_delta,
 )
+from cuanta.domain.mandate import MandateRequest
+from cuanta.domain.messages import english, msg
 from cuanta.domain.role_handoff import VerifyResult
+from cuanta.domain.routing import Role, RoutingPolicy
 from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner, FakeStream
 from tests.unit.test_engine_profiles import REQUEST, flow
 from tests.unit.test_forecast import COLD_CLOCK, PRICES
+from tests.unit.test_route_apply import AGENT, routing
 
 COMMANDS = ("npx tsc --noEmit", "npm run lint")
 BASE_ERROR = "src/old.ts:2 error TS2322: old mismatch"
@@ -165,7 +170,6 @@ def test_repair_keeps_context_and_sends_only_introduced_errors() -> None:
         (None, 1.0, 1, 0, 0.0, "cost_unknown"),
         (0.97, 1.0, 1, 0, 0.0, "cost_limit"),
         (0.2, 1.0, 5, 5, 0.0, "turn_limit"),
-        (0.2, 1.0, 1, 0, 901.0, "time_limit"),
     ],
 )
 def test_repair_rails_stop_followups(
@@ -244,16 +248,6 @@ def test_closed_session_and_engine_failures_remain_failures() -> None:
     assert failed.report.engine_subtype == "error_max_turns"
     missing = EngineOutcome(1, None, 0)
     assert failed.settle(missing) is missing
-
-
-def test_wall_timer_cancels_a_silent_engine() -> None:
-    halted = threading.Event()
-    session = ImplementationSession(
-        COMMANDS, checks(), CheckSequence(), lambda: 0.0, timeout_s=0.01
-    )
-    with session.running(halted.set):
-        assert halted.wait(2)
-    assert session.stopped() and session.report.reason == "time_limit"
 
 
 class RepairStream(FakeStream):
@@ -777,7 +771,7 @@ def test_files_written_by_preflight_checks_are_not_charged_to_the_first_role(
 
 
 def test_pure_per_role_plan_pins_one_model_and_rejects_conflicting_role_pins() -> None:
-    from cuanta.application.cross_engine import pure_plan
+    from cuanta.application.routing import pure_plan
     from cuanta.domain.routing import Role
     from tests.unit.test_cross_engine import plan
 
@@ -795,6 +789,9 @@ def test_pure_per_role_plan_pins_one_model_and_rejects_conflicting_role_pins() -
     )
     pure = pure_plan(claude, "sonnet")
     assert {route.model.id for route in pure.routes if route.model is not None} == {"sonnet"}
+    assert {route.reason.key for route in pure.routes if route.model is not None} == {"route.pure"}
+    assert pure.pure is not None and pure.pure.resolved == "claude-sonnet-5"
+    assert pure_plan(pure, "sonnet") == pure
     with pytest.raises(DomainFailure, match="explicit"):
         pure_plan(claude, "")
     conflicting = replace(claude, policy=replace(claude.policy, role_models={Role.SENIOR: "opus"}))
@@ -804,7 +801,6 @@ def test_pure_per_role_plan_pins_one_model_and_rejects_conflicting_role_pins() -
 
 def test_actual_context_pack_contains_project_configuration_rules(tmp_path: Path) -> None:
     from cuanta.bootstrap import Container
-    from cuanta.domain.mandate import MandateRequest
 
     (tmp_path / "a.tsx").write_text("export const title = 'Hello';\n", encoding="utf-8")
     (tmp_path / "tsconfig.json").write_text('{"compilerOptions":{"strict":true}}', encoding="utf-8")
@@ -1627,6 +1623,9 @@ def test_fast_choice_follows_the_measured_winner_of_each_kind() -> None:
         (MandateOptions(shape="single"), False),
         (MandateOptions(route=RouteOptions(role_models=(("senior", "opus"),))), True),
         (MandateOptions(route=RouteOptions(preset="quality")), True),
+        (MandateOptions(docs="on"), True),
+        (MandateOptions(docs="off"), False),
+        (MandateOptions(docs="auto"), False),
     ],
 )
 def test_a_requested_team_keeps_the_auto_profile_balanced(
@@ -1732,3 +1731,84 @@ def test_auto_falls_back_to_balanced_when_the_engine_or_project_is_not_ready(
         REQUEST, 0, MandateOptions(profile=AUTO_PROFILE)
     )
     assert prepared.spec.profile == "balanced"
+
+
+def test_configured_role_pins_count_as_a_team_request() -> None:
+    assert team_requested(MandateOptions(), pinned=True)
+    assert not team_requested(MandateOptions())
+    auto = resolved_profile(MandateOptions(), AUTO_PROFILE, "claude", "feature", pinned=True)
+    assert auto is ImplementationProfile.BALANCED
+    forced = resolved_profile(
+        MandateOptions(profile="fast"), AUTO_PROFILE, "claude", "feature", pinned=True
+    )
+    assert forced is ImplementationProfile.FAST
+
+
+def pinned_flow(root: Path, pins: dict[Role, str]) -> MandateFlow:
+    folder = root / ".claude" / "agents"
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in ("architecture-analyst", "python-senior", "tester"):
+        (folder / f"{name}.md").write_text(AGENT.format(name=name), encoding="utf-8")
+    engine = ClaudeCodeEngine(FakeRunner())
+    return MandateFlow(
+        flow(root, engine).service,
+        lambda _: engine,
+        lambda chosen: EngineLauncher(
+            chosen,
+            MemoryLedger(),
+            FixedClock(),
+            lambda: "RUN1",
+            lambda size: b"\x01" * size,
+            "project",
+            4318,
+            None,
+        ),
+        Stack,
+        lambda _: ({}, None),
+        str(root),
+        "claude",
+        0.0,
+        routing=routing(root, {}, policy=lambda: RoutingPolicy(role_models=pins)),
+        default_profile=AUTO_PROFILE,
+        fast_ready=lambda name: True,
+    )
+
+
+FEATURE_REQUEST = MandateRequest(
+    "feature", "Extend checkout", "users ask", tests="totals stay right", out_of_scope="ui"
+)
+
+
+def test_a_configured_role_pin_keeps_the_auto_profile_on_the_team_that_honors_it(
+    tmp_path: Path,
+) -> None:
+    pinned = pinned_flow(tmp_path, {Role.TESTER: "claude:sonnet"})
+    prepared = pinned.prepare(FEATURE_REQUEST, 0, MandateOptions(), preview=True)
+    assert prepared.spec.profile == "balanced"
+    agents = json.loads(Path(prepared.spec.agents_file).read_text(encoding="utf-8"))
+    assert agents["tester"]["model"] == "claude-sonnet-5"
+    off = pinned.prepare(
+        FEATURE_REQUEST, 0, MandateOptions(route=RouteOptions(mode="off")), preview=True
+    )
+    assert off.spec.profile == "fast"
+    free = pinned_flow(tmp_path / "free", {})
+    assert free.prepare(FEATURE_REQUEST, 0, MandateOptions(), preview=True).spec.profile == "fast"
+
+
+def test_an_explicit_fast_profile_refuses_a_configured_pin_with_a_fast_reason(
+    tmp_path: Path,
+) -> None:
+    pinned = pinned_flow(tmp_path, {Role.TESTER: "claude:sonnet"})
+    with pytest.raises(DomainFailure) as refused:
+        pinned.prepare(FEATURE_REQUEST, 0, MandateOptions(profile="fast"), preview=True)
+    assert (
+        str(refused.value)
+        == "fast implementation runs one model (claude-opus-5-5), and a role pin names another"
+    )
+    assert str(refused.value) == english(msg("route.fast_pin_conflict", model="claude-opus-5-5"))
+    assert "pure" not in str(refused.value) and "--profile balanced" in str(refused.value.hint)
+    with pytest.raises(DomainFailure, match="conflicts with the pure implementation model"):
+        pinned.prepare(FEATURE_REQUEST, 0, MandateOptions(profile="fast", pure=True), preview=True)
+    same = pinned_flow(tmp_path / "same", {Role.SENIOR: "claude-opus-5-5"})
+    prepared = same.prepare(FEATURE_REQUEST, 0, MandateOptions(profile="fast"), preview=True)
+    assert prepared.spec.profile == "fast" and prepared.spec.model == "claude-opus-5-5"

@@ -39,11 +39,12 @@ from cuanta.application.mandate_flow import (
     MandateOptions,
     MandatePreview,
     MandateSetup,
+    effective_limits,
     fast_defaults,
     launch_turns,
+    mandate_limits,
     per_role_run,
     preview_of,
-    resolve_budget,
     resolved_profile,
 )
 from cuanta.application.map import MapFile, MapQuery, MapStatus
@@ -69,6 +70,7 @@ from cuanta.domain.handoff import Handoff, parse_workflow
 from cuanta.domain.implementation import ImplementationProfile, large_feature
 from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import Decision, Run
+from cuanta.domain.limits import limit_settings
 from cuanta.domain.loop import LOOP_OUT_OF_SCOPE, LoopGate, loop_gate
 from cuanta.domain.mandate import MandateRequest, Shape, parse_shape, single_context
 from cuanta.domain.messages import Message, english, msg
@@ -105,7 +107,7 @@ def cross_report(run: Run | None, report: CrossReport) -> MandateReport:
     if run is None:
         raise NotAvailable("the cross-engine run did not start", "check the ledger")
     return MandateReport(
-        run=replace(run, cost_usd=report.spent_usd),
+        run=replace(run, cost_usd=report.spent_usd, partial=run.partial or report.partial),
         ok=report.ok,
         changed_files=report.changed_files,
         tests=english(msg(f"completion.{report.state.value}")),
@@ -476,12 +478,12 @@ class ContainerServices:
                 tuple(engines),
                 container.config.engine,
                 container.known_models(),
-                container.config.budget_usd,
-                container.has_forge_agents(),
-                container.init_estimate(),
-                container.config.max_turns,
-                container.config.implementation_profile,
-                container.config.implementation_variant,
+                forge_ready=container.has_forge_agents(),
+                init_estimate=container.init_estimate(),
+                limits=limit_settings(container.config),
+                profile=container.config.implementation_profile,
+                variant=container.config.implementation_variant,
+                pinned=container.routing_pinned(""),
             )
         finally:
             container.close()
@@ -562,15 +564,11 @@ class ContainerServices:
         options: MandateOptions,
         sink: CallbackSink,
     ) -> CrossReport:
-        from cuanta.application.mandate_flow import resolve_max_turns
-        from cuanta.domain.depth import parse_depth, profile
-
         ledger = container.shared_ledger()
         plan = role_plan(container, request, options)
-        cap = resolve_budget(options, request.type, container.config.budget_usd)
-        turns = resolve_max_turns(
-            options, profile(parse_depth(options.depth), request.type), container.config.max_turns
-        )
+        limits = mandate_limits(options, request.type, limit_settings(container.config))
+        cap = limits.budget_usd
+        turns = launch_turns(limits, options.engine or container.config.engine)
 
         def started(pipeline: CrossEnginePipeline) -> None:
             with self._stop_lock:
@@ -580,7 +578,12 @@ class ContainerServices:
 
         if not options.sandbox:
             pipeline = container.cross_engine(
-                ledger, cap, turns, depth=options.depth, implementation=options
+                ledger,
+                cap,
+                turns,
+                depth=options.depth,
+                implementation=options,
+                wall_s=limits.wall_s,
             )
             started(pipeline)
             return pipeline.run(request, plan, sink)
@@ -595,6 +598,7 @@ class ContainerServices:
             options.depth,
             on_start=started,
             implementation=options,
+            wall_s=limits.wall_s,
         )
         if isolated.cross is None:
             raise NotAvailable("the isolated run ended without a report", "check the ledger")
@@ -951,6 +955,7 @@ class ContainerServices:
                 container.config.engine,
                 request.type,
                 ready=container.fast_ready,
+                pinned=container.routing_pinned(options.route.mode),
             )
             options = replace(
                 options,
@@ -976,7 +981,8 @@ class ContainerServices:
             )
             docs = container.docs_choice(request, options)
             plan = container.shape_plan(plan, choice, docs)
-            cap = resolve_budget(options, request.type, container.config.budget_usd)
+            limits = mandate_limits(options, request.type, limit_settings(container.config))
+            cap = limits.budget_usd
             shape = (
                 fast
                 or options.simple
@@ -1022,11 +1028,10 @@ class ContainerServices:
                     protection,
                     native=shaped == Shape.PIPELINE.value and not per_role,
                     model="" if per_role else model,
-                    max_turns=0
-                    if per_role
-                    else launch_turns(options, request.type, engine, container.config.max_turns),
+                    max_turns=0 if per_role else launch_turns(limits, engine),
                     implementation_profile=profile.value,
                     variant=options.variant,
+                    request=request,
                 )
             except (CuantaError, ValueError) as error:
                 return plan, replace(estimate, forecast_error=forecast_failure(error))
@@ -1050,12 +1055,14 @@ class ContainerServices:
             launch = estimate.shape is not None and estimate.shape.launch
             if launch or per_role_run(options, task_type, container.config.engine):
                 shares = {cost.role: cost.share for cost in estimate.roles if cost.share > 0}
+                limits = mandate_limits(options, task_type, limit_settings(container.config))
                 return team_cards(
                     plan.routes,
                     shares,
                     estimate.cap,
                     container.pipeline_index_tools,
                     container.build_blocked(),
+                    effective_limits(limits, options.engine or container.config.engine),
                 )
             config = container.config
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from textual.containers import Container
 from textual.events import Resize
+from textual.widget import Widget
 from textual.widgets import Button
 
 LABEL_PADDING = 6
@@ -9,6 +10,16 @@ FALLBACK_CELL = 12
 
 
 class FlowRow(Container):
+    def __init__(
+        self,
+        *children: Widget,
+        cell: int = FALLBACK_CELL,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        super().__init__(*children, id=id, classes=classes)
+        self.cell = cell
+
     def on_mount(self) -> None:
         self.call_after_refresh(self.reflow)
 
@@ -18,7 +29,7 @@ class FlowRow(Container):
     def reflow(self, width: int | None = None) -> None:
         available = width if width is not None else self.size.width
         cells = [
-            len(str(child.label)) + LABEL_PADDING if isinstance(child, Button) else FALLBACK_CELL
+            len(str(child.label)) + LABEL_PADDING if isinstance(child, Button) else self.cell
             for child in self.children
             if child.display
         ]

@@ -9,7 +9,7 @@ from textual.widgets import Static, TabbedContent
 
 from cuanta.domain.mandate import Shape
 from cuanta.domain.scout import DocsChoice, DocsReason, ShapeChoice
-from cuanta.domain.scout_report import ScoutSummary
+from cuanta.domain.scout_report import ScoutSummary, parse_scout
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.scout_text import scout_content
@@ -82,6 +82,39 @@ def test_a_docs_only_summary_shows_just_the_docs_line() -> None:
     assert docs.shown
     assert str(scout_content(t, docs)) == "Docs on: the request asks for docs"
     assert not ScoutSummary().shown
+
+
+@pytest.mark.parametrize(
+    ("language", "expected", "flagged"),
+    [
+        (
+            "en",
+            "Docs: on, the request names the docs-updater agent in the evidence",
+            "Docs: off (--docs off)",
+        ),
+        (
+            "es",
+            "Docs: encendido, la solicitud nombra al agente docs-updater en la evidencia",
+            "Docs: apagado (--docs off)",
+        ),
+    ],
+)
+def test_the_docs_line_names_the_rule_and_where_it_matched(
+    language: str, expected: str, flagged: str
+) -> None:
+    t = Catalog(language)
+    summary = parse_scout(
+        None, {"on": True, "reason": "agent", "field": "why", "term": "docs-updater"}
+    )
+    assert (summary.docs_field, summary.docs_term) == ("why", "docs-updater")
+    assert str(scout_content(t, summary)) == expected
+    choice = DocsChoice(True, DocsReason.AGENT, "why", "docs-updater")
+    assert t.message(choice.message) == expected
+    assert str(scout_content(t, parse_scout(None, {"on": False, "reason": "flag_off"}))) == flagged
+    legacy = parse_scout(None, {"on": False, "reason": "not_requested"})
+    reason = t("scout_panel.reason_not_requested")
+    assert str(scout_content(t, legacy)) == t("scout_panel.docs_off", reason=reason)
+    assert str(scout_content(t, parse_scout(None, {"on": True, "reason": "bogus"}))) == ""
 
 
 async def open_scout(app: CuantaApp, pilot: Pilot[None], summary: ScoutSummary) -> Static:
@@ -164,6 +197,23 @@ def test_the_team_step_shows_the_scout_card_and_the_shape_line() -> None:
         line = render(wizard.query_one("#wiz-estimate", Static))
         assert "Shape: scout and senior" in line and "42%" in line
         assert "Docs: off" in line
+
+    drive(make_app(services), scenario, size=(120, 46))
+
+
+def test_the_team_step_names_the_rule_that_turned_docs_on() -> None:
+    services = FakeServices(
+        engines=(("claude", True), ("codex", True)),
+        catalog=TEAM_CATALOG,
+        team_shape=ShapeChoice(Shape.SCOUT, False, 0.42),
+        team_docs=DocsChoice(True, DocsReason.AGENT, "why", "docs-updater"),
+    )
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        await scout_team(pilot)
+        wizard = app.query_one(MandateWizard)
+        line = render(wizard.query_one("#wiz-estimate", Static))
+        assert "Docs: on, the request names the docs-updater agent in the evidence" in line
 
     drive(make_app(services), scenario, size=(120, 46))
 

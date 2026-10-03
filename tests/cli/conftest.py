@@ -27,13 +27,14 @@ def fake_runner(monkeypatch: pytest.MonkeyPatch, isolated_user_dirs: Path) -> Fa
         },
     )
 
-    def build(cls: type[Container], project: Path) -> Container:
+    def build(cls: type[Container], project: Path, verbose: bool = False) -> Container:
         return cls(
             project=project,
             config=load_config(project),
             runner=runner,
             clock=FixedClock(),
             home=isolated_user_dirs,
+            verbose=verbose,
         )
 
     monkeypatch.setattr(Container, "for_project", classmethod(build))

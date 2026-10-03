@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
 import pytest
 from textual.pilot import Pilot
-from textual.widgets import Button, Select, Static
+from textual.widgets import Button, Checkbox, Select, Static
 
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.screens.result import ResultScreen
@@ -35,7 +36,13 @@ def test_team_updates_guarantees_and_refuses_unsafe_investigations(language: str
         warning = render(wizard.query_one("#wiz-guarantee-warning", Static))
         assert "JSONL" in guarantees
         assert ("checked after the run" if language == "en" else "comprobado después") in guarantees
-        assert ("cannot enforce" if language == "en" else "no puede aplicar") in warning
+        assert not warning.strip()
+        wizard.query_one("#wiz-limits", Checkbox).value = True
+        expected = "cannot enforce" if language == "en" else "no puede aplicar"
+        await wait_for(
+            pilot,
+            lambda: expected in render(wizard.query_one("#wiz-guarantee-warning", Static)),
+        )
         assert not wizard.query_one("#wiz-next", Button).disabled
         selector.value = "opencode"
         await wait_for(pilot, lambda: wizard.engine == "opencode")
@@ -82,19 +89,31 @@ def test_result_distinguishes_unknown_free_and_estimated_cost(language: str) -> 
 
 
 @pytest.mark.parametrize(
-    ("reason", "expected"),
+    ("reason", "expected", "spanish"),
     [
-        ("error_cost_unknown", "did not report the step cost"),
-        ("error_max_budget_usd", "spend cap"),
+        (
+            "error_cost_unknown",
+            "did not report the cost needed to enforce the $0.60 cap",
+            "no informó el costo necesario para aplicar el tope de $0.60",
+        ),
+        (
+            "error_max_budget_usd",
+            "stopped at the spend cap of $0.60",
+            "se detuvo en el tope de gasto de $0.60",
+        ),
     ],
 )
-def test_result_explains_budget_termination(reason: str, expected: str) -> None:
-    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
-        original = sample_result()
-        view = replace(original, run=replace(original.run, status="failed", end_reason=reason))
-        app.push_screen(ResultScreen(app.services, app.catalog, view))
-        await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
-        await settle(app, pilot)
-        assert expected in render(app.screen.query_one("#result-budget-cut", Static))
+def test_result_explains_budget_termination(reason: str, expected: str, spanish: str) -> None:
+    def scenario_for(text: str) -> Callable[[CuantaApp, Pilot[None]], Awaitable[None]]:
+        async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+            original = sample_result()
+            view = replace(original, run=replace(original.run, status="failed", end_reason=reason))
+            app.push_screen(ResultScreen(app.services, app.catalog, view))
+            await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
+            await settle(app, pilot)
+            assert text in render(app.screen.query_one("#result-stop", Static))
 
-    drive(make_app(), scenario, size=(120, 40))
+        return scenario
+
+    drive(make_app(), scenario_for(expected), size=(120, 40))
+    drive(make_app(language="es"), scenario_for(spanish), size=(120, 40))

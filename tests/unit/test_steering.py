@@ -182,6 +182,7 @@ class FixedForecaster(Forecaster):
         max_turns: int = 0,
         implementation_profile: str = "balanced",
         variant: str = "",
+        request: MandateRequest | None = None,
     ) -> PlannedForecast:
         return self.planned
 

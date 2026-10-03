@@ -24,6 +24,7 @@ from cuanta.application.progress import RecordingSink
 from cuanta.application.routing import RoutePlan
 from cuanta.domain.detection import Stack
 from cuanta.domain.errors import DomainFailure
+from cuanta.domain.limits import LimitSettings
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import msg
 from cuanta.domain.models import ModelEntry, Tier
@@ -49,7 +50,7 @@ def launcher(engine: Engine) -> EngineLauncher:
     )
 
 
-def flow(root: Path, engine: Engine) -> MandateFlow:
+def flow(root: Path, engine: Engine, limits: LimitSettings | None = None) -> MandateFlow:
     workspace = LocalWorkspace(root)
     workspace.write_text("docs/MANDATE_TEMPLATE.md", TEMPLATE)
     ledger = MemoryLedger()
@@ -65,6 +66,7 @@ def flow(root: Path, engine: Engine) -> MandateFlow:
         str(root),
         engine.name,
         0.0,
+        limits=limits,
     )
 
 
@@ -197,7 +199,7 @@ def test_cross_claude_readonly_roles_cannot_inherit_write_tools(tmp_path: Path, 
     assert report.ok
     assert len(runner.calls) == len(CROSS_ORDER)
     for role, command in zip(CROSS_ORDER, runner.calls, strict=True):
-        assert command[command.index("--max-turns") + 1] == "40"
+        assert "--max-turns" not in command
         allowed = command[command.index("--allowedTools") + 1].split(",")
         if kind == "investigation" or role is Role.ANALYST:
             assert "Write" not in allowed and "Edit" not in allowed

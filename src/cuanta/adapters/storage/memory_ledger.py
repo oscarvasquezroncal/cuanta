@@ -92,6 +92,7 @@ class MemoryLedger:
             if (not query.run_id or event.run_id == query.run_id)
             and (not query.session_id or event.session_id == query.session_id)
             and (not query.trace_id or event.trace_id == query.trace_id)
+            and (not query.kind or event.kind == query.kind)
             and (not query.since or event.ts >= query.since)
         ]
         selected.sort(key=lambda event: (event.ts, event.id))

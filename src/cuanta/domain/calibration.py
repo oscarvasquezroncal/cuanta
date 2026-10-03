@@ -37,7 +37,7 @@ def _finite(value: float | None) -> float | None:
 def forecast_actuals(
     forecasts: Sequence[Forecast], runs: Iterable[Run]
 ) -> tuple[ForecastActual, ...]:
-    costs = {item.run.id: _finite(item.cost) for item in attempts(runs)}
+    costs = {item.run.id: None if item.partial else _finite(item.cost) for item in attempts(runs)}
     return tuple(ForecastActual(forecast, costs.get(forecast.run_id)) for forecast in forecasts)
 
 

@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from cuanta.domain.anchors import AnchorCheck
 from cuanta.domain.capsules import Level
 from cuanta.domain.spectrum import BYTES_PER_TOKEN, estimated_tokens
 
@@ -30,6 +31,7 @@ class PackItem:
     line: int = 0
     end_line: int = 0
     write: bool = False
+    priority: int = 0
 
     def __post_init__(self) -> None:
         if not self.key.strip() or any(character in self.key for character in "\n\r\x00"):
@@ -57,6 +59,12 @@ class PackItem:
             or len(self.text.splitlines()) > self.end_line - self.line + 1
         ):
             raise ValueError("L2 excerpts require bounded path and line windows")
+        if (
+            isinstance(self.priority, bool)
+            or not isinstance(self.priority, int)
+            or self.priority < 0
+        ):
+            raise ValueError("Pack item priorities must be nonnegative integers")
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +89,7 @@ class ContextPack:
     tokens: int
     budget: int
     cache_key: str = ""
+    anchors: tuple[AnchorCheck, ...] = ()
 
     @property
     def text(self) -> str:
@@ -171,6 +180,7 @@ def compile_pack(items: tuple[PackItem, ...], budget: int, cache_key: str = "") 
     optional = sorted(
         (item for item in ordered if item.layer in {Layer.L1, Layer.L2}),
         key=lambda item: (
+            -item.priority,
             -item.value / max(1, estimated_tokens(_bytes(_render(item)) + 2)),
             _identity(item),
         ),

@@ -104,6 +104,23 @@ def test_unknown_values_read_na_never_zero(language: str) -> None:
     assert "-$0.0500" in below
 
 
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_a_run_without_a_cap_reads_no_cap_never_zero(language: str) -> None:
+    t = Catalog(language)
+    uncapped = str(metrics_content(t, replace(FULL, cap_usd=0.0)))
+    shown = t(
+        "metrics_panel.forecast",
+        p50="$0.3100",
+        p90="$0.4500",
+        actual="$0.3800",
+        cap=t("metrics_panel.no_cap"),
+    )
+    assert shown in uncapped
+    assert t("metrics_panel.no_cap") != "metrics_panel.no_cap"
+    assert "$0.0000" not in uncapped
+    assert "$0.6000" in str(metrics_content(t, FULL))
+
+
 async def open_metrics(app: CuantaApp, pilot: Pilot[None], metrics: RunMetrics) -> Static:
     view = replace(sample_result(), task_type="feature", metrics=metrics)
     app.push_screen(ResultScreen(app.services, app.catalog, view))

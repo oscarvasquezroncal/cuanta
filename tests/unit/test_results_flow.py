@@ -411,12 +411,12 @@ def test_an_investigation_runs_in_one_context_by_default(tmp_path: Path) -> None
     assert flow.prepare(REQUEST, 0, MandateOptions()).spec.effort == "medium"
 
 
-def test_depth_sets_the_cap_the_read_budget_and_the_run_labels(tmp_path: Path) -> None:
+def test_depth_sets_the_read_budget_and_the_run_labels_but_no_limit(tmp_path: Path) -> None:
     ledger = MemoryLedger()
     flow = build(tmp_path, True, ledger, ReportingEngine("## SUMMARY\nok\n"))
     prepared = flow.prepare(REQUEST, 0, MandateOptions(depth="quick"))
-    assert prepared.spec.max_budget_usd == 0.25
-    assert prepared.spec.max_turns == 20
+    assert prepared.spec.max_budget_usd == 1.0
+    assert prepared.spec.max_turns == 0
     assert prepared.spec.task_type == "investigation"
     assert prepared.spec.depth == "quick"
     assert "READ BUDGET (quick): open at most 8 files" in prepared.spec.append_system_prompt
@@ -424,9 +424,9 @@ def test_depth_sets_the_cap_the_read_budget_and_the_run_labels(tmp_path: Path) -
     assert "READ BUDGET (quick): open at most 8 files" in piped.composed.prompt
     capped = flow.prepare(REQUEST, 0, MandateOptions(depth="quick", budget_usd=0.1))
     assert capped.spec.max_budget_usd == 0.1
-    unlimited = flow.prepare(REQUEST, 0, MandateOptions(depth="deep", no_cap=True))
+    unlimited = flow.prepare(REQUEST, 0, MandateOptions(depth="deep", budget_usd=0.0))
     assert unlimited.spec.max_budget_usd == 0.0
-    assert unlimited.spec.max_turns == 80
+    assert unlimited.spec.max_turns == 0
     flow.run(flow.prepare(REQUEST, 0, MandateOptions(depth="deep")), RecordingSink())
     run = ledger.runs(kind="mandate")[0]
     assert (run.task_type, run.depth) == ("investigation", "deep")
@@ -435,15 +435,16 @@ def test_depth_sets_the_cap_the_read_budget_and_the_run_labels(tmp_path: Path) -
 def test_turn_limit_precedence_and_ledger_end_reason(tmp_path: Path) -> None:
     ledger = MemoryLedger()
     flow = build(tmp_path, True, ledger, ReportingEngine("## SUMMARY\nok\n"))
-    quick = flow.prepare(REQUEST, 0, MandateOptions(depth="quick"))
+    quick = flow.prepare(REQUEST, 0, MandateOptions(depth="quick", max_turns=20))
     assert quick.spec.max_turns == 20
+    assert flow.prepare(REQUEST, 0, MandateOptions(depth="quick")).spec.max_turns == 0
     assert flow.prepare(REQUEST, 0, MandateOptions(depth="quick", max_turns=5)).spec.max_turns == 5
     assert flow.prepare(REQUEST, 0, MandateOptions(engine="codex")).spec.max_turns == 0
     bug = MandateRequest(
         type="bug", what="fix add", why="wrong sum", tests="add test", out_of_scope="fonts"
     )
     ordinary = flow.prepare(bug, 0, MandateOptions())
-    assert ordinary.spec.max_turns == 40
+    assert ordinary.spec.max_turns == 0
     assert ordinary.spec.effort == ""
     assert ordinary.spec.max_budget_usd == 1.0
     configured = build(
@@ -464,7 +465,7 @@ def test_turn_limit_precedence_and_ledger_end_reason(tmp_path: Path) -> None:
     limited_ledger = MemoryLedger()
     limited_flow = build(tmp_path, True, limited_ledger, limited)
     stopped = limited_flow.run(
-        limited_flow.prepare(REQUEST, 0, MandateOptions(depth="deep")),
+        limited_flow.prepare(REQUEST, 0, MandateOptions(depth="deep", max_turns=80)),
         RecordingSink(),
         verdict=False,
     )

@@ -131,7 +131,7 @@ def _list(session: Session, limit: int) -> "Document":
             run.engine or "-",
             run.status,
             _outcome(run),
-            usd(run.cost_usd, run.cost_source),
+            usd(run.cost_usd, run.cost_source, run.partial),
             run.started_at[5:16].replace("T", " ") or "-",
             "yes" if run.id in stored else "-",
         )
@@ -170,6 +170,7 @@ def _list(session: Session, limit: int) -> "Document":
                 "outcome": _outcome_value(run),
                 "cost_usd": run.cost_usd,
                 "cost_source": run.cost_source,
+                "partial": run.partial,
                 "started_at": run.started_at,
                 "report": run.id in stored,
             }
@@ -236,12 +237,13 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
     from cuanta.bootstrap import Container
     from cuanta.cli.commands.mandate import scout_rows
     from cuanta.cli.document import Document, Hint, KeyValues, Line, MarkdownText, Verbatim
-    from cuanta.cli.fmt import usd
+    from cuanta.cli.fmt import turn_count, usd
     from cuanta.cli.time import time_blocks
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
     from cuanta.domain.governor_report import governor_payload
     from cuanta.domain.messages import english, msg
     from cuanta.domain.overhead import overhead_messages, overhead_payload
+    from cuanta.domain.stop_reason import stop_message, team_stop
 
     container = Container.for_project(session.project)
     try:
@@ -249,6 +251,10 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
     finally:
         container.close()
     run = view.run
+    stop = english(
+        team_stop(view.completion, view.stopped)
+        or stop_message(run, view.implementation, view.governor)
+    )
     payload: dict[str, object] = {
         "run_id": run.id,
         "kind": run.kind,
@@ -259,6 +265,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "turns": run.turns,
         "end_reason": run.end_reason,
         "status": run.status,
+        "stop_reason": stop,
         "completion": view.completion or None,
         "verification": [
             {
@@ -275,6 +282,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         "model": run.model,
         "cost_usd": run.cost_usd,
         "cost_source": run.cost_source,
+        "partial": run.partial,
         "actual_usd": view.actual_usd,
         "estimate": {
             "source": run.estimate_source or None,
@@ -313,9 +321,10 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         )
     duration = "n/a" if view.duration_s is None else f"{view.duration_s:,.0f} s"
     turn_rows: tuple[tuple[str, str], ...] = ()
-    if run.max_turns > 0 or run.end_reason == TURN_LIMIT_SUBTYPE:
-        count = f"{run.turns}/{run.max_turns}" if run.max_turns > 0 else str(run.turns)
-        cut = " · cut by turn limit" if run.end_reason == TURN_LIMIT_SUBTYPE else ""
+    cut_by_turns = run.end_reason == TURN_LIMIT_SUBTYPE
+    if run.max_turns > 0 or cut_by_turns or (run.partial and run.turns > 0):
+        count = turn_count(run.turns, run.max_turns, run.partial)
+        cut = " · cut by turn limit" if cut_by_turns else ""
         turn_rows = (("turns", f"{count}{cut}"),)
         if view.terminal_turn:
             turn_rows += (
@@ -335,6 +344,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
             else "pipeline",
         ),
         ("status", run.status),
+        ("stop reason", stop),
         *(
             (("completion", english(msg(f"completion.{view.completion}"))),)
             if view.completion
@@ -342,7 +352,7 @@ def _show(session: Session, run_id: str, markdown: bool) -> "Document":
         ),
         ("engine", f"{run.engine} · {run.model or 'default model'}"),
         ("duration", duration),
-        ("cost", usd(run.cost_usd, run.cost_source)),
+        ("cost", usd(run.cost_usd, run.cost_source, run.partial)),
         *_decision_rows(view),
         *turn_rows,
         ("files changed", str(len(view.changed_files))),
@@ -411,7 +421,7 @@ def _decision_rows(view: "ResultView") -> tuple[tuple[str, str], ...]:
     rows: list[tuple[str, str]] = []
     if run.kind == "cross" and not run.parent_id and view.actual_usd != run.cost_usd:
         source = "estimated" if view.actual_estimated else ""
-        rows.append(("pipeline cost", usd(view.actual_usd, source)))
+        rows.append(("pipeline cost", usd(view.actual_usd, source, view.actual_partial)))
     rows.append(("estimate", estimate_text(run)))
     if run.estimate_low is not None:
         rows.append(("estimate error", error_text(view.estimate_error)))

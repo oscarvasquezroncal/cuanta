@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import pytest
 from textual.pilot import Pilot
 from textual.widgets import Button, Input, Static, TextArea
 
 from cuanta.application.mandate_flow import MandateOptions
+from cuanta.domain.costs import CostSource
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.pipeline import CardState
 from cuanta.tui.app import CuantaApp
@@ -15,7 +17,14 @@ from cuanta.tui.screens.pipeline import PipelineScreen
 from cuanta.tui.screens.result import ResultScreen
 from cuanta.tui.views.mandate import MandateView
 from cuanta.tui.widgets.wizard import MandateWizard
-from tests.tui.fakes import AGENTS, RED, FakeServices, pipeline_events, single_context_events
+from tests.tui.fakes import (
+    AGENTS,
+    RED,
+    FakeServices,
+    mandate_report,
+    pipeline_events,
+    single_context_events,
+)
 from tests.tui.test_app import at, drive, make_app, settle
 from tests.tui.test_t5_screens import render, wait_for
 from tests.tui.test_wizard import current, open_wizard, tell
@@ -148,6 +157,37 @@ def test_single_context_investigation_shows_one_localized_analyst_card(
     drive(make_app(services, language), scenario)
 
 
+@pytest.mark.parametrize(
+    ("source", "partial", "label"),
+    [
+        ("estimated", False, "$0.42 (estimated)"),
+        ("reported", True, "$0.42 (partial)"),
+        ("estimated", True, "$0.42 (estimated, partial)"),
+    ],
+)
+def test_the_run_summary_labels_estimated_and_partial_costs(
+    source: CostSource, partial: bool, label: str
+) -> None:
+    run = replace(mandate_report().run, cost_source=source, partial=partial)
+    services = FakeServices(events=single_context_events(), report_run=run)
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        screen = PipelineScreen(
+            services,
+            app.catalog,
+            MandateRequest(type="investigation", what="Check the cart", why="How does it work?"),
+            0,
+            MandateOptions(),
+        )
+        app.push_screen(screen)
+        await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
+        await pilot.press("escape")
+        await wait_for(pilot, lambda: app.screen is screen)
+        assert label in render(screen.query_one("#pipeline-summary", Static))
+
+    drive(make_app(services), scenario)
+
+
 def test_delegated_investigation_shows_only_its_analyst_role() -> None:
     services = FakeServices(events=pipeline_events((AGENTS[0],)))
 
@@ -188,6 +228,8 @@ def test_stop_terminates_the_running_mandate() -> None:
         await wait_for(pilot, lambda: screen.report is not None)
         assert time.monotonic() - started < 5
         assert services.stops == 1
+        settled = [card.state for card in screen.pipeline.cards]
+        assert CardState.ACTIVE not in settled and settled[0] is CardState.FAILED
         await wait_for(
             pilot, lambda: "Stop requested; the engine process was terminated." in notes(app)
         )

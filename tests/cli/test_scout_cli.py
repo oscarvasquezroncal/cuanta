@@ -8,15 +8,20 @@ import pytest
 from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
 from cuanta.adapters.system.workspace import LocalWorkspace
 from cuanta.application.run_reports import RunReports
+from cuanta.bootstrap import Container
 from cuanta.domain.evidence_pack import EvidencePack, OutsideEdits, SeniorScope, check_pack
 from cuanta.domain.ledger import Run
+from cuanta.domain.messages import english, msg
 from cuanta.domain.role_handoff import Fact
 from cuanta.domain.scout_report import scout_payload
 from tests.cli.test_engine_guarantees import codex_ready, cross_args, forge
-from tests.fakes import FakeRunner
+from tests.fakes import FakeRunner, FakeStream, copy_repo
+from tests.real_run import MANDATES, REAL_MODEL, phased_mandate
 from tests.support import invoke
 
 SCOUT_TOOLS = ["Read", "Grep", "Glob"]
+PURE = ("--profile", "balanced", "--pure", "--model", REAL_MODEL, "--preset", "best")
+RESULT = '{"type":"result","subtype":"success","total_cost_usd":0.01,"is_error":false}'
 
 
 def configure(root: Path, text: str) -> None:
@@ -73,6 +78,7 @@ def test_a_forced_scout_shape_gives_the_claude_session_a_read_only_haiku_scout(
         "threshold": 0.35,
         "scout_mode": "native",
         "pinned": False,
+        "pure": None,
     }
     team = data["team"]
     assert isinstance(team, list)
@@ -216,6 +222,68 @@ def test_an_analyst_pin_keeps_the_pipeline_and_a_scout_pin_picks_the_scout(
     assert not fake_runner.stdins
 
 
+def route_lines(data: dict[str, object]) -> list[str]:
+    return [
+        str(line)
+        for line in listed(data["team"])
+        if str(line).startswith("team · ") and " → " in str(line)
+    ]
+
+
+def test_a_premium_pure_model_keeps_the_pipeline_unless_the_scout_is_forced(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    forge(tmp_path)
+    configure(tmp_path, "[runs]\nscout_threshold = 0.01\n")
+    auto = preview(tmp_path, *PURE)
+    assert auto["shape"] == {
+        "shape": "pipeline",
+        "forced": False,
+        "exploration_share": None,
+        "threshold": 0.01,
+        "scout_mode": None,
+        "pinned": False,
+        "pure": REAL_MODEL,
+    }
+    agents = agents_of(auto)
+    assert "scout" not in agents
+    assert {spec["model"] for spec in agents.values()} == {REAL_MODEL}
+    assert english(msg("scout.shape_pure", model=REAL_MODEL)) in listed(auto["team"])
+    routes = route_lines(auto)
+    assert routes and all(" → opus (premium) · pure: " in line for line in routes)
+    forced = preview(tmp_path, *PURE, "--shape", "scout")
+    shape = forced["shape"]
+    assert isinstance(shape, dict) and shape["shape"] == "scout"
+    assert agents_of(forced)["scout"]["model"] == REAL_MODEL
+    assert any(
+        line.startswith("team · scout → opus (premium) · pure: ") for line in route_lines(forced)
+    )
+    cross = preview(tmp_path, *PURE[:5], "--cross-engine")
+    assert set(roles_of(cross).values()) == {"opus"}
+    assert english(msg("scout.shape_pure", model=REAL_MODEL)) in listed(cross["team"])
+    assert not fake_runner.stdins
+
+
+def test_a_pure_premium_launch_card_says_the_scout_is_skipped(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    forge(tmp_path)
+    configure(tmp_path, "[runs]\nscout_threshold = 0.01\n")
+    fake_runner.streams["claude -p"] = FakeStream([RESULT])
+    result = invoke(cross_args(tmp_path, "--route", "fixed", "--max-budget-usd", "1", *PURE))
+    assert result.exit_code == 0, result.stdout
+    output = " ".join(result.stdout.split())
+    assert english(msg("scout.shape_pure", model=REAL_MODEL)) in output
+    assert "team · senior → opus (premium) · pure: --pure runs every role on" in output
+    assert "because your policy uses" not in output
+    calls = [call for call in fake_runner.calls if call[:2] == ("claude", "-p")]
+    assert len(calls) == 1
+    sent = Path(calls[0][calls[0].index("--agents") + 1]).read_text(encoding="utf-8")
+    agents = json.loads(sent)
+    assert "scout" not in agents
+    assert {spec["model"] for spec in agents.values()} == {REAL_MODEL}
+
+
 @pytest.mark.parametrize(
     ("flags", "message"),
     [
@@ -326,3 +394,155 @@ def test_runs_show_reports_the_scout_pack_the_senior_flags_and_docs(
     assert "evidence pack" in text and "scout launch · cap:0123456789abcdef" in text
     assert "edits outside the set, not named src/stray.ts" in text
     assert "docs off (not requested)" in text
+
+
+ANCHOR_NOTES = [
+    "File:line references not found among the indexed files: app/models/legacy.py:12",
+    "File:line references past the last line of their file: app/routers/consult.py:900",
+]
+
+
+BALANCED = ("--profile", "balanced")
+
+
+def backend_preview(root: Path, *flags: str) -> dict[str, object]:
+    result = invoke(
+        [
+            "mandate",
+            "--type",
+            "feature",
+            "--what",
+            "Implementar el mandato adjunto",
+            "--tests",
+            "pytest en verde",
+            "--out-of-scope",
+            "el frontend",
+            "--depth",
+            "deep",
+            "--route",
+            "fixed",
+            "--project",
+            str(root),
+            "--dry-run",
+            "--json",
+            *flags,
+        ]
+    )
+    assert result.exit_code == 0, result.stdout
+    data = json.loads(result.stdout)
+    assert isinstance(data, dict)
+    return data
+
+
+def test_a_mandate_with_anchors_only_in_its_evidence_packs_them_for_the_session_and_the_scout(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    root = copy_repo("python_backend", tmp_path)
+    forge(root)
+    data = backend_preview(
+        root, *BALANCED, "--evidence", str(MANDATES / "real_run_es.md"), "--shape", "scout"
+    )
+    prompt = str(data["prompt"])
+    assert (
+        "[L2 anchor:app/services/interpreter.py:287-289 app/services/interpreter.py:284-292]"
+        in prompt
+    )
+    assert "ANCHOR_287" in prompt
+    scout = str(agents_of(data)["scout"]["prompt"])
+    assert "anchor:app/routers/consult.py:67" in scout and "ANCHOR_67" in scout
+    assert data["pack_notes"] == ANCHOR_NOTES
+    assert [line for line in listed(data["team"]) if line in ANCHOR_NOTES] == ANCHOR_NOTES
+    assert not fake_runner.stdins
+
+
+def test_read_only_words_freeze_a_writing_mandate_only_outside_its_phases_and_it_says_why(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    root = copy_repo("python_backend", tmp_path)
+    forge(root)
+    phased = tmp_path / "phased.md"
+    phased.write_text(
+        phased_mandate().replace("## Fase 1 — Auditoría", "## Fase 1 — Auditoría (solo lectura)"),
+        encoding="utf-8",
+    )
+    writable = backend_preview(root, *BALANCED, "--evidence", str(phased))
+    assert writable["pack_notes"] == ANCHOR_NOTES
+    senior = agents_of(writable)["python-senior"]
+    assert "Write" not in listed(senior.get("disallowedTools", []))
+    frozen = backend_preview(
+        root, *BALANCED, "--why", "Solo lectura: revisar app/services/interpreter.py:287"
+    )
+    notes = [
+        'Change plan: read-only, because the request says "Solo lectura"',
+        "Referenced files the change plan protects (context only, not editable): "
+        "app/services/interpreter.py:287",
+    ]
+    assert listed(frozen["pack_notes"]) == notes
+    assert [line for line in listed(frozen["team"]) if line in notes] == notes
+    assert "Write" in listed(agents_of(frozen)["python-senior"]["disallowedTools"])
+
+
+def test_the_per_role_dry_run_names_the_anchors_that_did_not_resolve(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    codex_ready(fake_runner)
+    root = copy_repo("python_backend", tmp_path)
+    data = backend_preview(
+        root, "--engine", "codex", "--evidence", str(MANDATES / "real_run_es.md")
+    )
+    assert data["per_role"] is True
+    assert data["pack_notes"] == ANCHOR_NOTES
+    assert [line for line in listed(data["team"]) if line in ANCHOR_NOTES] == ANCHOR_NOTES
+    assert not fake_runner.stdins
+
+
+PHASED_GUARD = (
+    "Contexto del cambio.\n\n"
+    "## Fase 1 — Auditoría\n"
+    "No toques app/routers/consult.py ni app/services/interpreter.py.\n\n"
+    "## Fase 3 — Endpoint\n"
+    "Corrige app/routers/consult.py:67.\n"
+)
+
+
+def test_a_phase_guard_on_a_file_a_later_phase_anchors_stays_editable_and_the_card_says_so(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    root = copy_repo("python_backend", tmp_path)
+    forge(root)
+    evidence = tmp_path / "phased.md"
+    evidence.write_text(PHASED_GUARD, encoding="utf-8")
+    data = backend_preview(root, *BALANCED, "--evidence", str(evidence))
+    note = (
+        "Change plan: app/routers/consult.py stays editable: a phase says not to touch it, but "
+        "the request anchors or names it elsewhere; put it in Out of scope to protect it"
+    )
+    assert note in listed(data["pack_notes"]) and note in listed(data["team"])
+    denied = listed(agents_of(data)["python-senior"].get("disallowedTools", []))
+    assert "Edit(app/routers/consult.py)" not in denied
+    assert "Edit(app/services/interpreter.py)" in denied
+    assert not fake_runner.stdins
+
+
+def test_a_pin_in_the_routing_config_keeps_the_auto_profile_on_the_team(
+    tmp_path: Path, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    forge(tmp_path)
+    monkeypatch.setattr(Container, "fast_ready", lambda self, name: True)
+    assert preview(tmp_path)["agents_file"] is None
+    configure(tmp_path, '[routing.models]\ntester = "claude:sonnet"\n')
+    team = preview(tmp_path)
+    assert agents_of(team)["tester"]["model"] == "claude-sonnet-5"
+    shape = team["shape"]
+    assert isinstance(shape, dict) and shape["shape"] != "single"
+    refused = invoke(
+        cross_args(tmp_path, "--route", "fixed", "--dry-run", "--json", "--profile", "fast")
+    )
+    assert refused.exit_code == 1, refused.stdout
+    error = json.loads(refused.stdout)["error"]
+    assert isinstance(error, dict)
+    assert (
+        error["message"]
+        == "fast implementation runs one model (claude-opus-5-5), and a role pin names another"
+    )
+    assert not fake_runner.stdins

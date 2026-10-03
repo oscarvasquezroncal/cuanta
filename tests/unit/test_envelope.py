@@ -45,6 +45,7 @@ from cuanta.domain.envelope import (
     Verdict,
     claude_requests,
     envelope,
+    envelope_features,
     fixed_prefix,
     forecast_record,
     is_fix,
@@ -56,6 +57,7 @@ from cuanta.domain.envelope import (
     verdict,
     write_rate,
 )
+from cuanta.domain.mandate import PartKind, RequestParts
 from cuanta.domain.messages import msg
 from cuanta.domain.pricing import Price, dollars
 from cuanta.domain.routing import Provider, Role
@@ -626,3 +628,46 @@ def test_a_routed_scout_role_prices_the_exploration_and_the_pipeline_ignores_it(
     assert tester.role is Role.TESTER
     pipeline = envelope(inputs).roles
     assert [item.role for item in pipeline] == [Role.ANALYST, Role.SENIOR, Role.TESTER]
+
+
+REQUEST_TOKENS = 3_000
+
+
+def _grown(inputs: EnvelopeInputs) -> list[int]:
+    plain = envelope(inputs).roles
+    asked = envelope(replace(inputs, request_tokens=REQUEST_TOKENS)).roles
+    assert [(item.role, item.repair) for item in asked] == [
+        (item.role, item.repair) for item in plain
+    ]
+    return [
+        after.buckets.start - before.buckets.start
+        for before, after in zip(plain, asked, strict=True)
+    ]
+
+
+def test_the_request_joins_the_context_of_each_launch_that_receives_it() -> None:
+    assert envelope(replace(_inputs(), request_tokens=0)) == envelope(_inputs())
+    assert _grown(_inputs()) == [REQUEST_TOKENS] * 3
+    roles = (_role(Role.ORCHESTRATOR), _role(Role.ANALYST), _role(Role.SENIOR))
+    assert _grown(replace(_inputs(), roles=roles, native=True)) == [REQUEST_TOKENS, 0, 0]
+    scouted = replace(
+        _inputs(),
+        shape=SCOUT_SHAPE,
+        roles=(_role(Role.ORCHESTRATOR), _role(Role.SCOUT, CHEAP), _role(Role.SENIOR, DEAR)),
+        native=True,
+    )
+    assert _grown(scouted) == [REQUEST_TOKENS, 0, 0]
+    single = replace(_inputs(), shape="single", roles=(_role(Role.ORCHESTRATOR),))
+    assert _grown(single) == [REQUEST_TOKENS]
+    fix = replace(_inputs(), task_type="bug", repairable=True)
+    assert _grown(fix) == [REQUEST_TOKENS] * 4
+    plain = envelope(_inputs())
+    asked = replace(_inputs(), request_tokens=REQUEST_TOKENS, parts=RequestParts(PartKind.PHASE, 5))
+    priced = envelope(asked)
+    assert plain.p50_usd is not None and priced.p50_usd is not None
+    assert priced.p50_usd > plain.p50_usd
+    assert envelope(replace(_inputs(), parts=RequestParts(PartKind.PHASE, 5))) == plain
+    features = envelope_features(asked, priced)
+    assert (features["request_tokens"], features["request_parts"]) == (REQUEST_TOKENS, 5)
+    assert envelope_features(_inputs(), plain)["request_tokens"] == 0
+    assert envelope_features(_inputs(), plain)["request_parts"] == 0

@@ -22,6 +22,7 @@ from cuanta.domain.ledger import Baseline
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pricing import dollars
 from cuanta.domain.progress import Status, note
+from cuanta.domain.telemetry import unreadable_note
 from cuanta.ports.forge import ForgeKit
 from cuanta.ports.ledger import Ledger
 from cuanta.ports.progress import ProgressSink
@@ -178,6 +179,8 @@ class ForgeStage:
             max_budget_usd=self._budget,
         )
         launch = launcher.launch(spec, watcher)
+        if launch.unreadable > 0:
+            self._progress.publish(note(Status.WARN, unreadable_note(launch.unreadable)))
         outcome = launch.outcome
         context.run_id = launch.run.id
         context.cost_usd = launch.run.cost_usd
