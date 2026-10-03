@@ -163,6 +163,22 @@ cuanta mandate --type investigation \
   --depth quick
 ```
 
+A long mandate goes in a file and is never cut; on Windows cmd a `--what` value is limited by the
+shell to 8,191 characters. Short requests fit in one argument:
+
+```bash
+cuanta run mandato.md                       # the file is the whole mandate (= cuanta mandate -f)
+cuanta fix "the cart badge shows 0 after a reload"
+cuanta runs show                            # the last run you launched
+cuanta help                                 # the six things people do, in your UI language (also: cuanta ayuda)
+```
+
+In the app, **Load file** on the Tell step splits a file the same way as `--from`; so does **Next**
+with an empty story and a path in the box, and so does a pasted mandate that starts with a heading,
+states `WHAT:`/`QUÉ:` or is longer than 1,200 characters. The app
+proposes the type from the title for you to confirm, while the console runs a file without a
+`TYPE:` as a feature on the balanced team, with a Note.
+
 > [!NOTE]
 > `cuanta init` runs Forge through your engine to write the rulebook and agents. On 100–260-file projects it cost about $1.5–2.5 in our runs. `--dry-run` shows the plan first, and `--skip-forge` skips it.
 
@@ -277,22 +293,25 @@ The dependency rule is enforced by `tests/architecture/test_layers.py`.
 
 ## Commands
 
-Use `--help` on any command. Global `--plain` and `--json` control CLI output; `ui` opens the app.
+Use `--help` on any command. Global `--plain` and `--json` control CLI output and `-V`/`--verbose`
+echoes listener tracebacks; `ui` opens the app.
 
 | Command | What it does |
 |---|---|
 | `cuanta` / `cuanta ui` | Open the app. `cuanta ui --web` serves it in the browser; `cuanta ui --lang es\|en` sets the language |
-| `cuanta doctor` (`purr`) | Health check, with one fix per issue |
-| `cuanta init` | Detect, graph, telemetry, Forge, verify. `--dry-run`, `--skip-forge` |
+| `cuanta doctor` (`purr`) | Health check, with one fix per issue; the mandate template counts as part of the Forge install (missing, or present but unusable) |
+| `cuanta init` | Detect, graph, telemetry, Forge, verify. `--dry-run`, `--skip-forge`; `--template` only writes a missing mandate template, without a model |
 | `cuanta refresh` | Refresh Forge's knowledge, reindex the graph, report tier drift |
 | `cuanta index [--rebuild] [--status]` | Build a deterministic source, style and documentation index, with symbols, directed imports, freshness and coverage; no model call |
 | `cuanta find <terms>` / `card <path>` / `impact <path>` / `facts [<path>] [--stale]` | Search with ranking reasons, bounded file cards, connected files and current facts or records awaiting revalidation; local by default |
 | `cuanta index --summaries` | Preview a Claude economy summary batch and its estimate; explicit `--yes` permits the shown capped spend; unchanged hashes reuse the cache |
 | `cuanta plan --for <request>` | Compile Edit, Read only, Protected and Verify sets locally; show confidence and exact writer deny rules without a model call |
-| `cuanta mandate` (`pounce`) | Compose and run a mandate. `--type`, `--what`, `--why`, `--out-of-scope`, `--depth`, `--shape`, `--docs auto\|on\|off`, optional limits (`--max-budget-usd`, `--max-turns` for Claude, `--max-wall` in minutes), `--dry-run`, `--sandbox` to work in an isolated copy (`--keep` keeps the copy) |
+| `cuanta mandate` (`pounce`) | Compose and run a mandate. `-f`/`--from FILE` (the whole mandate from a file), `-t`/`--type`, `--what`, `--why`, `--out-of-scope`, `-m`/`--model`, `-v`/`--variant`, `-p`/`--profile`, `--depth`, `--shape`, `--docs auto\|on\|off`, optional limits (`--max-budget-usd`, `--max-turns` for Claude, `--max-wall` in minutes), `--dry-run`, `-s`/`--sandbox` to work in an isolated copy (`--keep` keeps the copy). Only the type and the what are required |
+| `cuanta run <file>` / `feat` / `fix` / `audit "<text>"` | Aliases of `cuanta mandate` with every option: `run` takes a file as the whole mandate; `feat`, `fix` and `audit` set the type |
+| `cuanta help` (`ayuda`) | One screen, in the UI language, with the six things people do |
 | `cuanta queue add \| list \| run \| clear` | Queue mandates (`add` takes the options of `cuanta mandate`) and run them back to back on a warm prefix, the same engine and model together; `run` asks first unless `--yes` and stops at the first failure unless `--keep-going`; shows "warm prefix until HH:MM" |
 | `cuanta route --dry-run` | Show the routing plan for a request |
-| `cuanta runs list \| show \| open` | Stored runs and their reports, with the estimate shown at launch, the cap, the estimate error and the outcome |
+| `cuanta runs` / `runs list \| show [id] \| open` | Stored runs and their reports, with the estimate shown at launch, the cap, the estimate error and the outcome; `cuanta runs` alone lists the last ten and `runs show` without an id shows the last run you launched |
 | `cuanta runs accept <id>` | Record that a run's change or report was useful; an isolated-copy run is only marked, never applied, and a role of a cross-engine run resolves to its pipeline |
 | `cuanta runs reject <id> [--reason TEXT]` | Record that a run was not useful; rejecting an isolated-copy run discards it |
 | `cuanta costs [--since YYYY-MM-DD]` | Real costs for the last 30 days (UTC) by type and by engine mix: runs, accepted, spend, median cost and time, cost per accepted change and the median estimate error |

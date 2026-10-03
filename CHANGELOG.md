@@ -6,7 +6,88 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
+### Added
+- **A mandate from a file.** `cuanta mandate --from FILE` (`-f`; also `cuanta queue add -f`) reads
+  the whole mandate from a file. The file is split into fields only when, outside code fences, it
+  has a `TYPE:` line naming a known type, a `WHAT:`/`QUÉ:` label, a `WHY:`/`EVIDENCE:`/`POR QUÉ:`/
+  `EVIDENCIA:` label or a REQUEST block, or it opens with a `TYPE:` line (any value; right after a
+  title, written `TYPE:`/`TIPO:` in capitals); then every label counts (`TYPE:`, `WHAT:`, `WHY:`,
+  `EVIDENCE:`, `WHERE:`, `CONSTRAINTS:`, `TEST:`/`TESTS:`, `OUT OF SCOPE:`, or `TIPO:`, `QUÉ:`,
+  `POR QUÉ:`, `EVIDENCIA:`/`EVIDENCIAS:`, `DÓNDE:`, `RESTRICCIÓN:`/`RESTRICCIONES:`,
+  `PRUEBA:`/`PRUEBAS:`, `FUERA DE ALCANCE:`/`FUERA DEL ALCANCE:`, in any case, accents optional),
+  a value other than WHY ends at a blank line unless the next line is indented, and the text around
+  the labels joins the evidence. Otherwise the first line, or a heading that stands alone, is the
+  what and the rest is the evidence, word for word, label-like lines included. A copied mandate
+  template keeps only its REQUEST block, also when a log inside it is fenced with a bare ``` and when
+  it is copied without its fences (its execution contract is dropped then); notes after its closing
+  fence, and other text above an unfenced REQUEST block, join the evidence. A file that states no type runs as a feature, with one Note
+  that says so, and under the auto profile on the balanced team, never the fast one; an unknown
+  `TYPE:` is refused with a hint to use `-t/--type`, also when it is the file's only label. `--type`, `--where`, `--constraints`, `--tests`
+  and `--out-of-scope` replace the file's values; `--what` replaces its what, which moves to the
+  top of the evidence; `--why` is added after the file's evidence under "Added on the command
+  line:". One Note names what the command line changed and another the fields taken from the
+  file's labels. `--from` with `--evidence` is refused. A file that is not UTF-8 is refused with
+  "save it as UTF-8" (a byte-order mark is honored), `~` is expanded, `-t` takes the same words as
+  a file's `TYPE:`, a mandate or evidence file inside the project is never ranked or packed as a
+  target of its own run (it stays in the change plan when the request names or anchors it), `queue
+  add` stores absolute paths, and `queue run` prints the Notes of each queued file before it
+  launches. `cuanta mandate -f
+  mandato.md` is a complete command. On Windows cmd a `--what` value is limited by the shell to
+  8,191 characters: put a long request in a file.
+- **One argument is enough.** `cuanta run FILE` runs a file as the whole mandate; `cuanta feat`,
+  `cuanta fix` and `cuanta audit` take the request as text and set the type. All four are aliases
+  of `cuanta mandate` and take every option, `--from` included; the command's type wins over a
+  file's `TYPE:` unless `--type` is given, with a Note when they differ; when the text alone is the
+  path of an existing file, a Note says that `cuanta fix -f <file>` runs it as the mandate. Words that start with `-`
+  are read as options, so quote the request and put `--` before text that starts with `-`.
+  `cuanta help` and `cuanta ayuda` print one screen in the UI language (`--lang`, `ui.language` or
+  `CUANTA_LANG`, then the system locale) with the six things people do.
+- **Short options:** `-f` (`--from`), `-t` (`--type`), `-m` (`--model`), `-v` (`--variant`), `-p`
+  (`--profile`) and `-s` (`--sandbox`) on `cuanta mandate`, its aliases and `queue add`.
+  `cuanta runs` alone lists the last ten runs, and `cuanta runs show` without an id shows the last
+  run you launched (a team or a loop, never one of its roles or fixes). `cuanta mandate --help`
+  groups its options under What to do, How to run it, Limits and Advanced, one line each; the
+  common path ends within 30 lines at 80 columns, with `--shape`, `--session`, `--keep` and
+  `--cross-budget-usd` under Advanced.
+- `cuanta init --template` writes only a missing `docs/MANDATE_TEMPLATE.md` from the vendored Forge
+  copy, with no model and no detection, and exits 1 when the template is unusable or cannot be
+  written. `cuanta doctor` gains a `template` row: a missing template warns with that fix, and one
+  that exists but cannot be used (no fenced REQUEST block, or not a plain file inside the project)
+  is named with what to do. Home and the header say `installed · template missing` or `installed ·
+  template unusable`, and Run fix runs `cuanta init --template` in place whenever Home's next step
+  or the Health view offers it.
+- In the app, the Tell step gets a path box with **Load file** / **Cargar archivo**, takes text of
+  any length, and loads a file whose path is pasted alone (`.md`, `.markdown`, `.txt`); with an
+  empty story, **Next** loads the path in the box, a `/` or `~` sentence that names no file stays
+  the story, `\ ` escapes from macOS drag and drop are undone, and a file that is not UTF-8 (a
+  byte-order mark is honored) is refused in the file note; a `~` path whose home cannot be resolved counts as missing, and a
+  file loaded or attached from inside the project is never ranked or packed as a target of its
+  own run. A loaded file, or a paste that starts with a heading, states a
+  `WHAT:`/`QUÉ:` value or has more than 1,200 characters, is a whole mandate: it is split like
+  `--from`, keeps the rest as evidence in its own box, and needs only the type and the what; the
+  app proposes the type from the title for you to confirm. The step's help says that the "more
+  than 5 KiB" dialog is Windows Terminal's and that "Paste anyway" / "Pegar de todas formas" is
+  safe. The Team step offers the main session model (which also runs the Orchestrator card), the
+  Claude variant (**Effort from depth** sends no variant unless `runs.variant` is set, then the
+  depth's effort; the fast-output variants need an explicit Opus pick, or an explicit Fast on a
+  bug fix or a feature) and **Pure** for the balanced team too; an **Auto** chip returns to the automatic profile,
+  and an explicit Fast returns to Auto when the engine leaves Claude or the kind becomes an
+  investigation.
+
 ### Changed
+- **`-V` is the global short for `--verbose` (surprising).** `-v` now means `--variant` on
+  `cuanta mandate`, `pounce`, `run`, `feat`, `fix`, `audit` and `queue add`; `cuanta -v doctor` is
+  refused with "No such option: -v". `-y` and `-V` are written on their own after a subcommand (a
+  cluster such as `-sy` is refused).
+- **Only the type and the what are required on the console (surprising).** `--why`, `--tests`,
+  `--out-of-scope`, `--constraints` and `--where` are optional everywhere and never prompted; the
+  prompt says "none stated" for them and WHERE says "unknown", in the native prompt and in the
+  prompts of a team of separate launches (a bug with evidence keeps its regression-fixture
+  default, an investigation keeps "a written report"). The app still asks "What must not change?"
+  for short stories.
+- No field is cut any more: WHY is no longer clipped at 8,000 characters into an evidence capsule,
+  and the whole request travels on stdin (OpenCode: a prompt file). The 30,000-character guard
+  covers only the command line; its hint names the system prompt and the protected paths.
 - **Limits are opt-in (surprising).** A run has no spend cap, no turn limit and no wall-time limit
   unless you set one: `--max-budget-usd`, `--max-turns` and the new `--max-wall` (minutes) on
   `cuanta mandate`, `queue add` and `loop` (each fix); `[limits] budget_usd`, `max_turns` and
@@ -112,6 +193,37 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   lands.
 - In the app, per-role model picks in the team cards survive limit, Limits and depth refreshes on
   the same engine, and the Team step follows configured role pins under `auto` (the balanced team).
+- A missing `docs/MANDATE_TEMPLATE.md` no longer stops a mandate when the four Forge agents exist
+  (`docs/MANDATE_TEMPLATE.md not found → run cuanta init first`): a native mandate (a Claude team,
+  or OpenCode's single session) writes it when it launches, after the engine checks, from the vendored Forge copy (the project
+  name from its manifest, else the folder name, and the first `*-senior` agent filled in), says so
+  in one Note and continues. Its dry run and the app's preview show the planned `write:` line and
+  write nothing, and a run in an isolated copy never writes it and uses the vendored copy. An
+  existing file, a link or a path outside the project is never written; fast, simple and
+  investigation runs and teams of separate launches never read it.
+- `Ctrl+C` prints `interrupted`, and adds the run id and `see it: cuanta runs show <id>` only when
+  the command recorded a run, also when it lands while the result prints. "nine lives: re-run to
+  resume" appears only when a re-run resumes: `cuanta init` with finished stages and `cuanta queue
+  run` with mandates still queued; a queued mandate that finished green leaves the queue even when
+  `Ctrl+C` lands right after it. `Ctrl+C` or end of input at a prompt ends the same way instead of
+  `unexpected Abort` with exit 2. The JSON error reports exit code 130. A run stopped by `Ctrl+C`
+  during its start snapshot is recorded as interrupted instead of running, and one stopped there by
+  another error is recorded as failed; a team of separate launches
+  stopped by `Ctrl+C` records completion partial (failed when no role finished) and the stop
+  reason `interrupted before the run finished`; an interrupted `cuanta init --dry-run` writes
+  nothing; an interrupted or failed `cuanta loop` is settled with the cost of its finished fixes.
+- The balanced team's main session model (`-m`, or the app's main session model) is the
+  orchestrator's model in the plan, the team lines and the cards, and an orchestrator pin on
+  another model is refused before launch; a forced main-session model never teaches the router an
+  orchestrator tier. Fast-output variants (`-v fast-*`) run on a balanced team
+  whose main session is Opus. A fast run's launch card no longer lists team role lines that say
+  `--pure`.
+- `cuanta runs` hints match `runs show`, and `runs show` inside a `--sandbox` copy shows the stored
+  report of the original project.
+- In the app, a long pasted mandate is no longer flattened into a read-only investigation (its
+  title sets the type), a `#` line after the first line of a short story no longer becomes its what, going Back to
+  tell another story no longer stays silently on the Tell step, and after **Fast** the model and
+  variant boxes show the fast choices ("By kind of change") instead of the balanced ones.
 
 ## [0.5.0] - 2026-10-01
 

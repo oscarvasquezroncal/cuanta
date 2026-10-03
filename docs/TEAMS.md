@@ -41,7 +41,17 @@ and `--profile fast` force a profile, also on `cuanta queue add`; `runs.profile`
 choice and `runs.variant` a Claude variant. The Team screen marks the profile `auto` picks for the
 engine and kind of change with its **Fast** / **Rápido** and **Balanced** / **Equilibrado** chips
 (it does not check the installed Claude Code or the project's checks); choosing a chip forces that
-profile. `cuanta loop` and the app's fix loop launch bug fixes, so they run fast under `auto`.
+profile, and **Auto** returns to the automatic one; an explicit **Fast** returns to **Auto** when
+the engine leaves Claude or the kind becomes an investigation. For the balanced team the screen
+also offers the main session model, the Claude variant and **Pure** (every role and subagent on
+that model; the per-role picks are disabled while it is on and come back when it is off). A
+chosen main session model also runs the Orchestrator card (its own pick is disabled while the
+model is chosen); **Effort from depth** sends no variant, as the console does, or the depth's
+effort when `runs.variant` is set; the fast-output variants appear only when the chosen model is
+Opus, or with an explicit **Fast** on a bug fix or a feature. `cuanta loop` and the
+app's fix loop launch bug fixes, so they run fast under `auto`. On the console (`cuanta mandate
+-f`, `cuanta run FILE`), a mandate file that states no type runs as a feature and keeps the
+balanced team under `auto`; the app proposes the type from the title instead.
 
 A fast run without `--model` takes the variant measured fastest for its kind of change, among
 those accepted on every task of that kind in the implementer trials
@@ -70,11 +80,13 @@ per-tool overhead. Fast runs have no live governor (it steers team pipelines); t
 limits you set (spend cap, turn limit, wall time) and at the repair loop's round, repair-time and
 cost limits. Balanced retains its existing behavior.
 
-Choose a single model with `--model` and a variant with `--variant`. The installed Claude Code
-2.1.283 catalog contains Opus 5.5 and Sonnet 5, each with low, medium, high, xhigh and max effort.
+Choose a single model with `--model` (`-m`) and a variant with `--variant` (`-v`). The installed
+Claude Code 2.1.283 catalog contains Opus 5.5 and Sonnet 5, each with low, medium, high, xhigh and max effort.
 `ultracode` adds dynamic workflows at xhigh effort. Opus also supports fast output: `fast-low`,
 `fast-medium`, `fast-high`, `fast-xhigh`, `fast-max` and `fast-ultracode`; `fast` uses the model's
-default effort. Fast output is separate from cuanta's fast implementation profile. Workflow and
+default effort. Fast output is separate from cuanta's fast implementation profile. It also runs on
+the balanced team when its main session is Opus (`-p balanced -m claude-opus-5-5 -v fast-low`); a
+Sonnet main session is refused. Workflow and
 fast-output availability depend on account policy; see CC-25 and CC-26 in
 [the contract registry](CONTRACTS.md).
 
@@ -118,7 +130,11 @@ Each role asks for a tier, and the provider's default model for that tier fills 
 | Docs | economy | economy |
 | Scout | economy | economy |
 
-The Claude team's main session (the orchestrator) runs on standard as well.
+The Claude team's main session (the orchestrator) runs on standard as well, unless `--model`/`-m`
+or the app's main session model names another model: the plan, the team lines and the cards then
+put the orchestrator on that model, and an orchestrator pin on a different model is refused
+before launch. A forced main session model is not recorded as an orchestrator routing decision,
+so learned tiers never move the orchestrator to it; the other roles still record.
 
 | Tier | Claude team | GPT team |
 |---|---|---|
@@ -272,7 +288,10 @@ commands before they start.
 
 A run ends in one of four states, shown in the result, `cuanta runs show` and `cuanta costs`:
 complete; complete with optional roles skipped; partial; failed. The cost per accepted change counts
-every attempt.
+every attempt. `cuanta runs show` without an id shows the last run you launched (the team, never
+one of its roles), and `Ctrl+C` names the run only when one was recorded. A team stopped with
+`Ctrl+C` records it on that run: completion partial (failed when no role finished) and the stop
+reason `interrupted before the run finished`.
 
 ## Governor
 

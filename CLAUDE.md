@@ -127,6 +127,17 @@ floor. Preserve performance assertions, measured startup work and budgets.
 - Listener tracebacks go to `.cuanta/logs/listener.log` only; `--verbose` echoes them for a listener
   the command starts (a running background listener only gets its log named). `--pure`
   plans every role on the forced model and a premium pure model skips the automatic scout.
+- `cuanta mandate -f FILE` / `cuanta run FILE` take the file as the whole mandate, cut nowhere; it
+  is split into fields only with a known TYPE, a TYPE line that opens it, a WHAT or WHY label, or a
+  REQUEST block. The console
+  requires only type and what ("none stated" fills the rest, WHERE "unknown"); a file without a
+  type runs as a feature with a Note and stays on the balanced team under auto. In the app, a
+  loaded file, or a paste that starts with a heading, states a WHAT/QUÉ value or has more than
+  1,200 characters, is a whole mandate.
+- A native mandate (a Claude team, or OpenCode's single session) writes a missing
+  `docs/MANDATE_TEMPLATE.md` from the vendored Forge copy when the four agents exist, at launch
+  after the engine checks; dry runs, the app's preview and isolated copies never write it;
+  `cuanta init --template` writes only it.
 - `cache.ttl_s` is a measured or conservative cache window tied to auth mode, engine version and
   date. Without a saved measurement, show unknown. `cuanta probe cache-ttl` previews without
   spending until `--yes` is supplied.
@@ -142,7 +153,7 @@ floor. Preserve performance assertions, measured startup work and budgets.
 
 - Snapshot tests (`pytest-textual-snapshot`) fail on any visual change; regenerate with
   `uv run pytest tests/tui --snapshot-update` only when the change is intended, and keep
-  `docs/screenshots` in sync (a test checks it) [UNVERIFIED: exact sync test path].
+  `docs/screenshots` in sync (`tests/tui/test_readme_screenshots.py` checks it).
 - `tests/fixtures/` is excluded from ruff, mypy and pytest collection — fixture repos there are
   data, not tests.
 - Windows is a first-class target: subprocess tree teardown, shell detection (`CUANTA_SHELL`
@@ -150,6 +161,8 @@ floor. Preserve performance assertions, measured startup work and budgets.
 
 - `--yes` is hoisted to a global flag (`cli/group.py` `GLOBAL_FLAGS`): a command's own `--yes`
   option never receives it, so read `session.options.yes` too.
+- `-V` is the hoisted global `--verbose`; `-v` is `--variant` on mandate-family commands and
+  must never go back into `GLOBAL_FLAGS`.
 - `cuanta bench` copies each run to the system temp dir, outside this repo, so the cuanta
   `CLAUDE.md` and pytest config never leak into a run. Real benches spend money: run them only
   with an approved budget. Public-repo tasks download pinned tarballs checked by sha256 and are
