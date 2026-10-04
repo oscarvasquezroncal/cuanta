@@ -12,7 +12,13 @@ from textual.message import Message
 from textual.widgets import Button, Checkbox, DataTable, Input, Label, Log, Static
 from textual.widgets.data_table import RowDoesNotExist
 
-from cuanta.application.init_project import STAGES, InitOptions, InitReport
+from cuanta.application.init_project import (
+    STAGES,
+    InitContext,
+    InitOptions,
+    InitReport,
+    timed,
+)
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.messages import Message as Said
 from cuanta.domain.progress import Note, ProgressEvent, Status, StepFinished, StepStarted
@@ -23,6 +29,19 @@ from cuanta.tui.services import Services
 from cuanta.tui.views.mandate import parse_budget
 
 TELEMETRY_ENGINE = "claude"
+TABLED = frozenset({"verify.suggested", "verify.suggested_note"})
+
+
+def suggestion_rows(context: InitContext) -> list[tuple[str, str, str]]:
+    found = {item.path: item for item in context.suggestions}
+    rows: list[tuple[str, str, str]] = []
+    for path in context.new_files:
+        item = found.get(path)
+        if item is None:
+            rows.append((path, path, ""))
+        else:
+            rows.append((path, item.original, f"+{item.added}/-{item.removed}"))
+    return rows
 
 
 class InitView(VerticalScroll):
@@ -76,6 +95,7 @@ class InitView(VerticalScroll):
         with suppress(NoMatches):
             table = self.query_one("#init-new-files", DataTable)
             table.add_column(self._t("init.new_files"), key="path")
+            table.add_column(self._t("init.new_files_change"), key="change")
             table.display = False
             self._paint_stages()
 
@@ -122,9 +142,13 @@ class InitView(VerticalScroll):
     @work(thread=True, exit_on_error=False)
     def ask_consent(self) -> None:
         try:
-            plans = self._services.telemetry_plan(TELEMETRY_ENGINE)
+            wired = self._services.telemetry_wired(TELEMETRY_ENGINE)
+            plans = () if wired else self._services.telemetry_plan(TELEMETRY_ENGINE)
         except Exception as error:
             self.app.call_from_thread(self._failed, str(error), "")
+            return
+        if wired:
+            self.app.call_from_thread(self.begin, True)
             return
         self.app.call_from_thread(self.post_message, self.ConsentNeeded(plans))
 
@@ -145,7 +169,9 @@ class InitView(VerticalScroll):
         button = self.query_one("#init-start", Button)
         button.label = self._t("init.running")
         button.disabled = True
-        options = InitOptions(dry_run=self.query_one("#init-dry", Checkbox).value)
+        options = InitOptions(
+            dry_run=self.query_one("#init-dry", Checkbox).value, refresh_forge=self.refresh_mode
+        )
         self.execute(options, consent, self._budget())
 
     @work(thread=True, exclusive=True, group="init", exit_on_error=False)
@@ -193,7 +219,9 @@ class InitView(VerticalScroll):
 
     def _failed(self, error: str, hint: str) -> None:
         self._reset()
-        self.app.notify(self._t("init.failed", error=error, hint=hint), severity="error")
+        self.app.notify(
+            self._t("init.failed", error=error, hint=hint), severity="error", markup=False
+        )
 
     def _finished(self, report: InitReport) -> None:
         self._reset()
@@ -202,7 +230,12 @@ class InitView(VerticalScroll):
         context = report.context
         for key, result in report.stages:
             if key in self.stage_status:
-                self.stage_status[key] = (result.status, result.message)
+                said = (
+                    result.message
+                    if result.seconds is None
+                    else timed(result.message, result.seconds)
+                )
+                self.stage_status[key] = (result.status, said)
         self._paint_stages()
         lines: list[Content] = []
         if context.dry_run:
@@ -223,25 +256,33 @@ class InitView(VerticalScroll):
             )
         if context.verify_lines:
             lines.append(Content.styled(t("init.verify"), "bold"))
-            lines.extend(
-                Content.assemble(
-                    (f"{glyph(finding.status)} ", status_style(finding.status)),
-                    t.message(finding.message),
+            for finding in context.verify_lines:
+                if finding.message.key in TABLED:
+                    continue
+                lines.append(
+                    Content.assemble(
+                        (f"{glyph(finding.status)} ", status_style(finding.status)),
+                        t.message(finding.message),
+                    )
                 )
-                for finding in context.verify_lines
-            )
+                if finding.fix is not None:
+                    fix = t("init.fix", fix=t.message(finding.fix))
+                    lines.append(Content.styled(f"  {fix}", "$text-muted"))
         self.query_one("#init-summary", Static).update(Content("\n").join(lines))
         table = self.query_one("#init-new-files", DataTable)
         table.clear()
-        for path in context.new_files:
-            table.add_row(Text(path), key=path)
+        for path, original, change in suggestion_rows(context):
+            table.add_row(Text(original), Text(change), key=path)
         has_new = bool(context.new_files)
         table.display = has_new
         self.query_one("#init-new-hint", Static).update(
             Content.styled(t("init.new_files_hint"), "$text-muted") if has_new else ""
         )
+        warned = any(finding.status is Status.WARN for finding in context.verify_lines)
         if context.dry_run:
             self.app.notify(t("init.finished_dry"))
+        elif report.ok and warned:
+            self.app.notify(t("init.finished_warnings"))
         elif report.ok:
             self.app.notify(t("init.finished_ok"))
         else:
@@ -250,8 +291,10 @@ class InitView(VerticalScroll):
     def resolved(self, path: str) -> None:
         if self.report is None:
             return
-        remaining = [item for item in self.report.context.new_files if item != path]
-        self.report.context.new_files[:] = remaining
+        context = self.report.context
+        remaining = [item for item in context.new_files if item != path]
+        context.new_files[:] = remaining
+        context.suggestions[:] = [item for item in context.suggestions if item.path != path]
         table = self.query_one("#init-new-files", DataTable)
         with suppress(RowDoesNotExist):
             table.remove_row(path)

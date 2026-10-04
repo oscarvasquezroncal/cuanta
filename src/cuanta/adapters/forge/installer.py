@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from cuanta.adapters.forge.assets import (
 )
 from cuanta.domain.errors import EnvironmentFailure
 from cuanta.domain.forge_state import InstallSummary
+from cuanta.domain.new_files import same_text, suggested_path
 
 
 @dataclass
@@ -24,12 +26,6 @@ class InstallReport:
     written: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
     new_files: list[str] = field(default_factory=list)
-
-
-def sibling_new(path: Path) -> Path:
-    if path.suffix == ".md":
-        return path.with_name(f"{path.stem}.new.md")
-    return path.with_name(f"{path.name}.new")
 
 
 class ForgeInstaller:
@@ -50,18 +46,22 @@ class ForgeInstaller:
         )
         return items
 
-    def install(self, dry_run: bool = False) -> InstallReport:
+    def install(self, dry_run: bool = False, missing_only: bool = False) -> InstallReport:
         report = InstallReport()
         for source, target in self.plan():
-            content = read_asset(source)
             label = str(target)
+            if missing_only and os.path.lexists(target):
+                report.unchanged.append(label)
+                continue
+            content = read_asset(source)
             if target.is_file():
                 existing = target.read_text(encoding="utf-8", errors="replace")
-                if existing.replace("\r\n", "\n") == content.replace("\r\n", "\n"):
+                if same_text(existing, content):
                     report.unchanged.append(label)
                     continue
-                alternate = sibling_new(target)
+                alternate = self._suggestion(target)
                 if not dry_run:
+                    alternate.parent.mkdir(parents=True, exist_ok=True)
                     alternate.write_text(content, encoding="utf-8", newline="\n")
                 report.new_files.append(str(alternate))
                 continue
@@ -70,6 +70,9 @@ class ForgeInstaller:
                 target.write_text(content, encoding="utf-8", newline="\n")
             report.written.append(label)
         return report
+
+    def _suggestion(self, target: Path) -> Path:
+        return self._root / suggested_path(target.relative_to(self._root).as_posix())
 
     def installed_skill(self) -> str | None:
         path = self._root / ".claude" / "skills" / "agent-system-init" / "SKILL.md"
@@ -84,8 +87,8 @@ class VendoredForgeKit:
         self._installer = ForgeInstaller(target_root)
         self._root = target_root
 
-    def install(self, dry_run: bool) -> InstallSummary:
-        report = self._installer.install(dry_run)
+    def install(self, dry_run: bool, missing_only: bool = False) -> InstallSummary:
+        report = self._installer.install(dry_run, missing_only)
         return InstallSummary(
             tuple(report.written), tuple(report.unchanged), tuple(report.new_files)
         )

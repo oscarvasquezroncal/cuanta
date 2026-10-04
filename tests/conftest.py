@@ -56,6 +56,7 @@ def isolated_user_dirs(
         "TYPESAFE_BASE_URL",
         "TYPESAFE_API_BASE",
         "TYPESAFE_API_KEY",
+        "XDG_CONFIG_HOME",
     ):
         monkeypatch.delenv(variable, raising=False)
     return home

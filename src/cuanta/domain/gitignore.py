@@ -6,6 +6,23 @@ from dataclasses import dataclass
 GITIGNORE = ".gitignore"
 CONFIG_ESCAPES = {"n": "\n", "t": "\t", "b": "\b"}
 ALWAYS_IGNORED = frozenset({".git"})
+NEVER = "(?!)"
+NOT_SLASH = "(?!/)"
+NEGATIONS = ("!", "^")
+POSIX_CLASSES = {
+    "alnum": "a-zA-Z0-9",
+    "alpha": "a-zA-Z",
+    "blank": " \\t",
+    "cntrl": "\\x00-\\x1f\\x7f",
+    "digit": "0-9",
+    "graph": "!-~",
+    "lower": "a-z",
+    "print": " -~",
+    "punct": "!-/:-@\\[-`{-~",
+    "space": "\\t-\\r ",
+    "upper": "A-Z",
+    "xdigit": "0-9A-Fa-f",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,21 +40,67 @@ def _strip_trailing_spaces(line: str) -> str:
     return stripped
 
 
+def _posix_class(glob: str, index: int) -> tuple[str | None, int]:
+    close = glob.find("]", index + 2)
+    if close == -1:
+        return NEVER, len(glob)
+    if close - index < 3 or glob[close - 1] != ":":
+        return None, index
+    members = POSIX_CLASSES.get(glob[index + 2 : close - 1])
+    return (members, close) if members is not None else (NEVER, len(glob))
+
+
 def _class(glob: str, start: int) -> tuple[str, int]:
     index = start + 1
-    if index < len(glob) and glob[index] in "!^":
+    negated = glob[index : index + 1] in NEGATIONS
+    if negated:
         index += 1
-    if index < len(glob) and glob[index] == "]":
-        index += 1
-    while index < len(glob) and glob[index] != "]":
+    members: list[str] = []
+    previous = ""
+    first = True
+    while index < len(glob) and (first or glob[index] != "]"):
+        first = False
+        char = glob[index]
+        if char == "\\":
+            index += 1
+            if index >= len(glob):
+                return NEVER, len(glob)
+            previous = glob[index]
+            members.append(re.escape(previous))
+        elif char == "-" and previous and glob[index + 1 : index + 2] not in ("", "]"):
+            index += 1
+            if glob[index] == "\\":
+                index += 1
+                if index >= len(glob):
+                    return NEVER, len(glob)
+            if previous <= glob[index]:
+                members.append(f"{re.escape(previous)}-{re.escape(glob[index])}")
+            previous = ""
+        elif glob.startswith("[:", index):
+            posix, index = _posix_class(glob, index)
+            if posix == NEVER:
+                return NEVER, len(glob)
+            members.append(posix if posix is not None else re.escape(char))
+            previous = "" if posix is not None else char
+        else:
+            previous = char
+            members.append(re.escape(char))
         index += 1
     if index >= len(glob):
-        return re.escape("["), start + 1
-    body = glob[start + 1 : index]
-    if body[:1] in "!^":
-        body = "^" + body[1:]
-    body = body.replace("\\", "\\\\")
-    return f"[{body}]", index + 1
+        return NEVER, len(glob)
+    return f"{NOT_SLASH}[{'^' if negated else ''}{''.join(members)}]", index + 1
+
+
+def _stars(glob: str, index: int) -> tuple[str, int]:
+    end = index
+    while end < len(glob) and glob[end] == "*":
+        end += 1
+    leading = end - index > 1 and (index == 0 or glob[index - 1] == "/")
+    if leading and end == len(glob):
+        return ".*", end
+    if leading and glob[end] == "/":
+        return "(?:.*/)?", end + 1
+    return "[^/]*", end
 
 
 def _translate(glob: str) -> str:
@@ -45,20 +108,9 @@ def _translate(glob: str) -> str:
     index = 0
     while index < len(glob):
         char = glob[index]
-        if glob.startswith("**/", index) and (index == 0 or glob[index - 1] == "/"):
-            parts.append("(?:.*/)?")
-            index += 3
-        elif (
-            glob.startswith("**", index)
-            and index + 2 == len(glob)
-            and glob[index - 1 : index] == "/"
-        ):
-            parts.append(".*")
-            index += 2
-        elif char == "*":
-            while index < len(glob) and glob[index] == "*":
-                index += 1
-            parts.append("[^/]*")
+        if char == "*":
+            translated, index = _stars(glob, index)
+            parts.append(translated)
         elif char == "?":
             parts.append("[^/]")
             index += 1
@@ -82,7 +134,7 @@ def parse_rule(base: str, line: str, ignorecase: bool = False) -> IgnoreRule | N
     if negate or text.startswith(("\\!", "\\#")):
         text = text[1:]
     directory_only = text.endswith("/")
-    text = text.rstrip("/")
+    text = text[:-1] if directory_only else text
     if not text:
         return None
     anchored = "/" in text

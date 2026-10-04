@@ -4,6 +4,7 @@ from importlib import resources
 from importlib.resources.abc import Traversable
 
 from cuanta.domain.errors import EnvironmentFailure
+from cuanta.domain.new_files import SUGGESTED_DIR
 
 SKILL_DIR = "skills/agent-system-init"
 COMMANDS_DIR = "commands"
@@ -35,7 +36,10 @@ STAGING_LINE = (
     f"{STAGING_DIR}/claude/ instead, with the same relative path and no leading dot — for "
     f"example {STAGING_DIR}/claude/agents/tester.md and "
     f"{STAGING_DIR}/claude/forge-state.json — and read your own state back from there once it "
-    "exists. cuanta moves those files into .claude/ after the run, applying the .new.md policy."
+    "exists. cuanta moves those files into .claude/ after the run. Write each regenerated file "
+    "under its own name, never as <name>.new.md, even where the .new.md policy says so, and "
+    "never write a .new.md file anywhere in the project: where the user's file differs, cuanta "
+    f"keeps the user's file and saves your version in {SUGGESTED_DIR}/ for the user to compare."
 )
 
 

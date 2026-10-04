@@ -8,6 +8,7 @@ import pytest
 from cuanta.bootstrap import Container
 from cuanta.domain.messages import ENGLISH, msg, placeholders
 from cuanta.domain.overhead import agents_md_message
+from cuanta.domain.progress import file_count, took
 from cuanta.domain.report import ContextSplit
 from cuanta.tui import theme as themes
 from cuanta.tui.app import CuantaApp
@@ -34,6 +35,19 @@ def test_catalog_translates_messages_and_falls_back_to_english() -> None:
     assert Catalog("en").message(msg("stage.port", port=47300)) == "port 47300"
     assert Catalog("es").message(msg("unknown.key")) == "unknown.key"
     assert Catalog("es").message(None) == ""
+
+
+def test_the_preparation_steps_read_in_both_languages() -> None:
+    spanish, english = Catalog("es"), Catalog("en")
+    files = took(52.0, file_count(854))
+    assert spanish.message(files) == "854 archivos · 52 s"
+    assert english.message(files) == "854 files · 52 s"
+    assert spanish.message(took(3.0, file_count(1))) == "1 archivo · 3 s"
+    assert spanish.message(took(21.0)) == "21 s"
+    assert spanish.message(file_count(20_001)) == "20,001 archivos"
+    labels = [msg("progress.index"), msg("progress.plan"), msg("progress.forecast")]
+    assert [spanish.message(label) for label in labels] == ["índice", "plan", "pronóstico"]
+    assert [english.message(label) for label in labels] == ["index", "plan", "forecast"]
 
 
 def test_agents_md_row_renders_in_spanish() -> None:

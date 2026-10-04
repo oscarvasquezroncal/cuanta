@@ -272,6 +272,8 @@ class Services(Protocol):
 
     def telemetry_plan(self, engine: str) -> tuple[WiringPlan, ...]: ...
 
+    def telemetry_wired(self, engine: str) -> bool: ...
+
     def run_init(
         self,
         options: InitOptions,
@@ -385,6 +387,7 @@ class ContainerServices:
         self._starting = False
         self._stop_requested = False
         self._stop_lock = threading.Lock()
+        self._map_lock = threading.Lock()
         self._clarity: dict[str, Clarity] = {}
         self._plan_cache: tuple[tuple[MandateRequest, tuple[Path, ...]], ChangePlan] | None = None
         self._request_files: tuple[Path, ...] = ()
@@ -548,6 +551,8 @@ class ContainerServices:
         progress: ProgressCallback,
     ) -> MandateReport:
         container = self._container()
+        sink = CallbackSink(progress)
+        container.progress = sink
         try:
             options, _ = container.shaped_options(request, options)
             if per_role_run(options, request.type, container.config.engine):
@@ -559,7 +564,7 @@ class ContainerServices:
             flow = container.mandate_flow(container.shared_ledger())
             prepared = flow.prepare(request, signatures, options)
             self._flow = flow
-            return flow.run(prepared, CallbackSink(progress), observer)
+            return flow.run(prepared, sink, observer)
         finally:
             self._flow = None
             container.close()
@@ -704,13 +709,16 @@ class ContainerServices:
         return self._results(lambda query: query.load(run_id))
 
     def _map[T](self, action: Callable[[MapQuery], T], rebuild: bool = False) -> T:
-        container = self._container()
-        query = container.map_query(rebuild)
-        try:
-            return action(query)
-        finally:
-            query.close()
-            container.close()
+        with self._map_lock:
+            container = self._container()
+            try:
+                query = container.map_query(rebuild)
+                try:
+                    return action(query)
+                finally:
+                    query.close()
+            finally:
+                container.close()
 
     def map_status(self, rebuild: bool = False) -> MapStatus:
         return self._map(lambda query: query.status(), rebuild)
@@ -805,6 +813,9 @@ class ContainerServices:
 
     def telemetry_plan(self, engine: str) -> tuple[WiringPlan, ...]:
         return self._container().telemetry().plan(engine)
+
+    def telemetry_wired(self, engine: str) -> bool:
+        return self._container().telemetry().wired_port(engine) is not None
 
     def run_init(
         self,

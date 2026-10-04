@@ -285,6 +285,9 @@ def forge(root):
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists() and not (root / relative).exists():
             path.write_text(text, encoding="utf-8")
+    rulebook = os.environ.get("FAKE_FORGE_RULEBOOK", "")
+    if rulebook:
+        (root / "CLAUDE.md").write_text(pathlib.Path(rulebook).read_text(encoding="utf-8"), encoding="utf-8")
     source = root / ".claude" / "forge-state.json"
     state = json.loads(source.read_text(encoding="utf-8")) if source.exists() else {}
     state["phases_completed"] = ["0", "0.5", "1", "2A", "2B", "2.5", "3", "4", "5", "6"]

@@ -26,11 +26,14 @@ from cuanta.adapters.system.index_inventory import LocalIndexInventory
 from cuanta.adapters.system.process_runner import SubprocessRunner
 from cuanta.domain.code_index import IndexedFile, IndexStructure
 from cuanta.domain.detection import SizeTier, is_source_file, size_tier
+from cuanta.ports.graph import GraphResult
 from cuanta.ports.system import ProcessRunner
 
 LEASE_SECONDS = 1200.0
 LOCK_FILE = "graph-refresh.lock"
 STATUS_FILE = "graph-refresh.log"
+STATUS_PATH = f".cuanta/{STATUS_FILE}"
+BOOTSTRAP = "bootstrap"
 
 
 def _state_dir(root: Path) -> Path:
@@ -208,7 +211,22 @@ class LocalIndexGraph:
             with suppress(OSError, ValueError):
                 _record(_state_dir(self._root), "", "unavailable", str(error))
 
-    def _start(self, state: Path) -> None:
+    def schedule_update(self) -> GraphResult:
+        if self._runner.which(BINARY) is None:
+            return GraphResult(False, "graphify not on PATH")
+        try:
+            state = _state_dir(self._root)
+            with _claim(state) as claimed:
+                if not claimed:
+                    return GraphResult(False, "another cuanta process is starting a graph refresh")
+                self._start(state, bootstrap=True)
+        except (OSError, ValueError) as error:
+            with suppress(OSError, ValueError):
+                _record(_state_dir(self._root), "", "unavailable", str(error))
+            return GraphResult(False, str(error))
+        return GraphResult(True, STATUS_PATH)
+
+    def _start(self, state: Path, bootstrap: bool = False) -> None:
         existing = _read_lease(state)
         if _leased(existing):
             return
@@ -222,9 +240,16 @@ class LocalIndexGraph:
             "expires": time.time() + LEASE_SECONDS,
         }
         _write_lease(state, lease)
+        command = [
+            sys.executable,
+            "-m",
+            "cuanta.adapters.graph.index_graph",
+            str(self._root),
+            token,
+        ]
         try:
             process = subprocess.Popen(
-                [sys.executable, "-m", "cuanta.adapters.graph.index_graph", str(self._root), token],
+                [*command, BOOTSTRAP] if bootstrap else command,
                 cwd=self._root,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -241,7 +266,7 @@ class LocalIndexGraph:
         _record(state, token, "scheduled")
 
 
-def run_worker(root: Path, token: str, runner: ProcessRunner) -> None:
+def run_worker(root: Path, token: str, runner: ProcessRunner, bootstrap: bool = False) -> None:
     try:
         state = _state_dir(root)
         lease = _read_lease(state)
@@ -250,8 +275,7 @@ def run_worker(root: Path, token: str, runner: ProcessRunner) -> None:
         if not _leased(lease):
             _record(state, token, "expired", "worker lease has expired")
             return
-        files = LocalIndexInventory(root).candidates()
-        if not _eligible(root, files):
+        if not bootstrap and not _eligible(root, LocalIndexInventory(root).candidates()):
             _record(state, token, "skipped", "tree is small or graph is no longer older")
             return
         if not _renew(state, token):
@@ -273,9 +297,13 @@ def run_worker(root: Path, token: str, runner: ProcessRunner) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) != 3 or not revalid_token(sys.argv[2]):
+    arguments = sys.argv[1:]
+    if len(arguments) not in {2, 3} or not revalid_token(arguments[1]):
         return 2
-    run_worker(Path(sys.argv[1]).resolve(), sys.argv[2], SubprocessRunner())
+    if len(arguments) == 3 and arguments[2] != BOOTSTRAP:
+        return 2
+    root, token = Path(arguments[0]).resolve(), arguments[1]
+    run_worker(root, token, SubprocessRunner(), bootstrap=len(arguments) == 3)
     return 0
 
 

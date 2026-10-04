@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from cuanta.domain.forge_state import FORGE_PHASES
 from cuanta.domain.messages import Message, english, msg
+from cuanta.domain.new_files import Suggestion, suggested_path
 from cuanta.domain.progress import Status
 
 ROOT_CEILING = 300
@@ -33,7 +34,8 @@ FORGE_DOCS = (
 )
 
 
-GATEWAY_FILES = ("docs/MANDATE_TEMPLATE.md", ".claude/agents/tester.md")
+TEMPLATE_FILE = "docs/MANDATE_TEMPLATE.md"
+GATEWAY_FILES = (TEMPLATE_FILE, ".claude/agents/tester.md")
 GATEWAY_RUN = "cuanta test --json"
 GATEWAY_READ = re.compile(r"cuanta cat\s+\S+\s+--level\s+L2")
 PIPED_GATEWAY = re.compile(r"cuanta test[^\n|]*\|\s*(tail|head)\b")
@@ -51,6 +53,7 @@ GAP_COMMANDS = {GAP_RUN: GATEWAY_RUN, GAP_READ: "cuanta cat <capsule> --level L2
 class Finding:
     status: Status
     message: Message
+    fix: Message | None = None
 
     @property
     def text(self) -> str:
@@ -61,8 +64,8 @@ class Finding:
         return self.message.key == ROOT_MISSING
 
 
-def finding(status: Status, key: str, **params: object) -> Finding:
-    return Finding(status, msg(key, **params))
+def finding(status: Status, key: str, fix: Message | None = None, **params: object) -> Finding:
+    return Finding(status, msg(key, **params), fix)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,9 +76,9 @@ class ForgeTree:
     per_directory: Mapping[str, str]
     graph_wired: bool
     phases_completed: tuple[str, ...]
-    new_files: tuple[str, ...]
     gateway: bool = False
     gateway_texts: Mapping[str, str] = field(default_factory=dict)
+    suggested_texts: Mapping[str, str] = field(default_factory=dict)
 
 
 def line_count(text: str) -> int:
@@ -106,15 +109,30 @@ def check_ceilings(root: str | None, per_directory: Mapping[str, str]) -> list[F
                 finding(Status.WARN, "verify.root_flagged", lines=lines, cap=ROOT_CEILING)
             )
         else:
-            findings.append(finding(Status.FAIL, "verify.root_over", lines=lines, cap=ROOT_CEILING))
+            fix = msg("verify.fix_root", cap=ROOT_CEILING)
+            findings.append(
+                finding(Status.WARN, "verify.root_over", fix, lines=lines, cap=ROOT_CEILING)
+            )
     for path, text in sorted(per_directory.items()):
         lines = line_count(text)
         if lines > DIRECTORY_CAP:
-            status = Status.WARN if OVER_CAP in text else Status.FAIL
             findings.append(
-                finding(status, "verify.directory_over", path=path, lines=lines, cap=DIRECTORY_CAP)
+                finding(
+                    Status.WARN,
+                    "verify.directory_over",
+                    _directory_fix(path, text),
+                    path=path,
+                    lines=lines,
+                    cap=DIRECTORY_CAP,
+                )
             )
     return findings
+
+
+def _directory_fix(path: str, text: str) -> Message | None:
+    if OVER_CAP in text:
+        return None
+    return msg("verify.fix_directory", path=path, cap=DIRECTORY_CAP)
 
 
 def _listed(status_ok: bool, missing: list[str], bad: str, good: str) -> Finding:
@@ -173,24 +191,48 @@ def gateway_gaps(text: str | None) -> tuple[str, ...]:
     return tuple(gaps)
 
 
-def check_gateway(tree: ForgeTree) -> list[Finding]:
-    if not tree.gateway:
-        return []
+def _adopt(path: str, suggested: Mapping[str, str]) -> Message | None:
+    if gateway_gaps(suggested.get(path)):
+        return None
+    return msg("verify.fix_adopt", suggestion=suggested_path(path), path=path)
+
+
+def _missing_fix(path: str) -> Message:
+    return msg("verify.fix_template" if path == TEMPLATE_FILE else "verify.fix_regenerate")
+
+
+def gateway_findings(
+    texts: Mapping[str, str],
+    suggested: Mapping[str, str],
+    paths: Sequence[str] = GATEWAY_FILES,
+) -> list[Finding]:
     findings: list[Finding] = []
-    for path in GATEWAY_FILES:
-        gaps = gateway_gaps(tree.gateway_texts.get(path))
+    for path in paths:
+        gaps = gateway_gaps(texts.get(path))
         if not gaps:
             findings.append(finding(Status.OK, "verify.gateway_ok", path=path))
             continue
+        adopt = _adopt(path, suggested)
         if GAP_MISSING in gaps:
-            findings.append(finding(Status.FAIL, "verify.gateway_missing", path=path))
+            fix = adopt or _missing_fix(path)
+            findings.append(finding(Status.WARN, "verify.gateway_missing", fix, path=path))
         commands = [GAP_COMMANDS[gap] for gap in gaps if gap in GAP_COMMANDS]
         if commands:
             items = ", ".join(commands)
-            findings.append(finding(Status.FAIL, "verify.gateway_lacks", path=path, items=items))
+            fix = adopt or msg("verify.fix_gateway", items=items, path=path)
+            findings.append(
+                finding(Status.WARN, "verify.gateway_lacks", fix, path=path, items=items)
+            )
         if GAP_PIPED in gaps:
-            findings.append(finding(Status.FAIL, "verify.gateway_piped", path=path))
+            fix = adopt or msg("verify.fix_unpipe", path=path)
+            findings.append(finding(Status.WARN, "verify.gateway_piped", fix, path=path))
     return findings
+
+
+def check_gateway(tree: ForgeTree) -> list[Finding]:
+    if not tree.gateway:
+        return []
+    return gateway_findings(tree.gateway_texts, tree.suggested_texts)
 
 
 def verify_tree(tree: ForgeTree, placeholder_texts: Mapping[str, str]) -> list[Finding]:
@@ -203,8 +245,49 @@ def verify_tree(tree: ForgeTree, placeholder_texts: Mapping[str, str]) -> list[F
     findings.extend(check_ceilings(tree.texts.get("CLAUDE.md"), tree.per_directory))
     findings.extend(check_artifacts(tree))
     findings.extend(check_gateway(tree))
-    findings.extend(finding(Status.WARN, "verify.kept", path=path) for path in tree.new_files)
     return findings
+
+
+def suggestion_findings(
+    suggestions: Sequence[Suggestion],
+    moved: Sequence[str],
+    beside: Sequence[str] = (),
+    elsewhere: Sequence[str] = (),
+) -> list[Finding]:
+    findings: list[Finding] = []
+    if moved:
+        key = "verify.moved_one" if len(moved) == 1 else "verify.moved"
+        findings.append(finding(Status.INFO, key, count=len(moved), paths=", ".join(moved)))
+    findings.extend(
+        finding(
+            Status.WARN,
+            "verify.sibling",
+            msg("verify.fix_sibling", path=path),
+            path=path,
+        )
+        for path in beside
+    )
+    findings.extend(
+        finding(
+            Status.INFO,
+            "verify.suggested",
+            original=item.original,
+            path=item.path,
+            added=item.added,
+            removed=item.removed,
+        )
+        for item in suggestions
+    )
+    findings.extend(
+        finding(Status.INFO, "verify.suggested_elsewhere", path=path) for path in elsewhere
+    )
+    if suggestions or elsewhere:
+        findings.append(finding(Status.INFO, "verify.suggested_note"))
+    return findings
+
+
+def checked(findings: Sequence[Finding]) -> list[Finding]:
+    return [item for item in findings if item.status in {Status.OK, Status.WARN, Status.FAIL}]
 
 
 def estimated_tokens(size_bytes: int) -> int:

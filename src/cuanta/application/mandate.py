@@ -255,7 +255,7 @@ class MandateService:
             digest = self._scanned.sha256(path)
             if digest is not None:
                 hashes[path] = digest
-                if phase == "start":
+                if phase == "start" and path not in scan.ignored:
                     self._reports.keep_blob(path, digest, self._scanned)
         self._ledger.add_snapshots(
             [Snapshot(run_id, phase, path, digest) for path, digest in hashes.items()]

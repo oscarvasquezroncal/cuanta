@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from cuanta.domain.disk_usage import DiskUsage
+
 
 @dataclass(frozen=True, slots=True)
 class ScanResult:
@@ -14,6 +16,7 @@ class ScanResult:
     entry_candidates: tuple[str, ...] = ()
     files: tuple[str, ...] = ()
     modes: Mapping[str, int] = field(default_factory=dict)
+    ignored: frozenset[str] = frozenset()
 
 
 class Workspace(Protocol):
@@ -45,6 +48,8 @@ class Workspace(Protocol):
     def sha256(self, relative: str) -> str | None: ...
 
     def size_bytes(self, relative: str) -> int: ...
+
+    def disk_usage(self, relative: str) -> DiskUsage: ...
 
     def files_under(self, relative: str) -> tuple[str, ...]: ...
 

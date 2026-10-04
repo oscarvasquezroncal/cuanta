@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from cuanta.application.init_project import InitContext, StageResult, stage
 from cuanta.domain.ledger import LedgerEvent
-from cuanta.domain.messages import msg
+from cuanta.domain.messages import english, msg
 from cuanta.domain.progress import Status
 from cuanta.domain.shells import Shell, snippet
 from cuanta.domain.telemetry import WiringPlan, WiringReport, WiringState, claude_env
@@ -14,6 +14,7 @@ from cuanta.ports.listener import ListenerControl, ListenerStatus
 from cuanta.ports.telemetry import EngineWiring
 
 ImportResult = tuple[list[LedgerEvent], object]
+WIRED_ENGINE = "claude"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,14 @@ class TelemetryService:
             engines=tuple(wiring.status(port) for wiring in self._wirings),
         )
 
+    def wired_port(self, engine: str) -> int | None:
+        listener = self._listener.status()
+        port = listener.port if listener.running else self._port
+        for wiring in self._select(engine):
+            if wiring.status(port).state is WiringState.ON:
+                return port
+        return None
+
     def env_snippet(self, shell: Shell) -> str:
         return snippet(claude_env(self._port, self._project), shell)
 
@@ -82,6 +91,10 @@ class TelemetryStage:
         self._consent = consent
 
     def __call__(self, context: InitContext) -> StageResult:
+        known = self._service.wired_port(WIRED_ENGINE)
+        if known is not None:
+            context.telemetry_line = english(msg("telemetry.already_wired", port=known))
+            return stage(Status.OK, "stage.telemetry_wired", port=known)
         if not self._consent:
             context.telemetry_line = "not wired (no consent; run cuanta telemetry on)"
             return stage(Status.SKIP, "stage.no_consent")

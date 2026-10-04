@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 from rich import box
@@ -106,12 +107,29 @@ class PrettyPresenter:
         self._console = console if console is not None else build_console(settings)
         self._checklist = _Checklist(settings)
         self._live: Live | None = None
+        self._lock = threading.RLock()
 
     @property
     def console(self) -> Console:
         return self._console
 
     def publish(self, event: ProgressEvent) -> None:
+        with self._lock:
+            self._publish(event)
+
+    def render(self, document: Document) -> None:
+        with self._lock:
+            self._render(document)
+
+    def fail(self, error: CuantaError) -> None:
+        with self._lock:
+            self._fail(error)
+
+    def close(self) -> None:
+        with self._lock:
+            self._stop_live()
+
+    def _publish(self, event: ProgressEvent) -> None:
         match event:
             case StepStarted(key=key, label=label):
                 self._checklist.steps[key] = _Step(label)
@@ -128,7 +146,7 @@ class PrettyPresenter:
             case Metric(label=label, value=value):
                 self._print(_status_line(Status.INFO, f"{label}: {value}", "", self._settings))
 
-    def render(self, document: Document) -> None:
+    def _render(self, document: Document) -> None:
         self._stop_live()
         for index, block in enumerate(document.blocks):
             if index and isinstance(
@@ -150,12 +168,13 @@ class PrettyPresenter:
                 soft_wrap=True,
             )
 
-    def fail(self, error: CuantaError) -> None:
+    def _fail(self, error: CuantaError) -> None:
         self._stop_live()
+        first, *pasted = error.hint.split("\n")
         lines: list[RenderableType] = [self._mascot(Mood.ALARMED, "")]
         lines.append(_status_line(Status.FAIL, error.message, "", self._settings))
-        if error.hint:
-            lines.append(Text(f"→ {error.hint}", style="muted"))
+        if first:
+            lines.append(Text(f"→ {first}", style="muted"))
         self._console.print(
             RichPanel(
                 Group(*lines),
@@ -167,9 +186,10 @@ class PrettyPresenter:
                 expand=False,
             )
         )
-
-    def close(self) -> None:
-        self._stop_live()
+        for line in pasted:
+            self._console.print(
+                Text(line, style="info", no_wrap=True, overflow="ignore"), soft_wrap=True
+            )
 
     def _print(self, renderable: RenderableType) -> None:
         if self._live is not None:

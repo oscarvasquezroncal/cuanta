@@ -89,6 +89,7 @@ from cuanta.domain.engine import (
     ToolCall,
 )
 from cuanta.domain.envelope import EnvelopeInputs, RoleInput, RoleModel, envelope
+from cuanta.domain.errors import CuantaError
 from cuanta.domain.fixes import Fix
 from cuanta.domain.forge_verify import Finding
 from cuanta.domain.handoff import Handoff, Workflow
@@ -101,7 +102,7 @@ from cuanta.domain.mandate import MandateRequest, parse_shape, single_context
 from cuanta.domain.mandate_file import decoded_text
 from cuanta.domain.messages import Message, msg, option_message
 from cuanta.domain.models import ModelEntry, Tier, TierSource
-from cuanta.domain.new_files import original_of, side_by_side
+from cuanta.domain.new_files import Suggestion, original_of, side_by_side
 from cuanta.domain.pricing import Price
 from cuanta.domain.progress import (
     Note,
@@ -667,6 +668,8 @@ class FakeServices:
         )
 
     def failure_evidence(self) -> tuple[str, int]:
+        if self.service_error is not None:
+            raise self.service_error
         return "AssertionError: [total] expected 10 got 12", 2
 
     def read_evidence(self, path: str) -> str:
@@ -685,6 +688,8 @@ class FakeServices:
         self, request: MandateRequest, signatures: int, options: MandateOptions
     ) -> MandatePreview:
         self.requests.append(request)
+        if self.service_error is not None:
+            raise self.service_error
         engine = options.engine or "claude"
         per_role = per_role_run(options, request.type, "claude")
         single = single_context(request.type, options.simple, parse_shape(options.shape))
@@ -715,6 +720,8 @@ class FakeServices:
         observer: Callable[[EngineEvent], None],
         progress: Callable[[ProgressEvent], None],
     ) -> MandateReport:
+        if self.service_error is not None:
+            raise self.service_error
         self.requests.append(request)
         self.launched_files.append(self.request_files[-1] if self.request_files else ())
         progress(Note(Status.INFO, "pounce started"))
@@ -780,6 +787,8 @@ class FakeServices:
     def _decide(self, run_id: str, outcome: str) -> None:
         if self.decision_error:
             raise RuntimeError(self.decision_error)
+        if self.service_error is not None:
+            raise self.service_error
         self.decisions.append((run_id, outcome))
         view = self.results.get(run_id)
         if view is not None:
@@ -824,6 +833,8 @@ class FakeServices:
 
     def map_status(self, rebuild: bool = False) -> MapStatus:
         self.calls.append("map_rebuild" if rebuild else "map_status")
+        if self.service_error is not None:
+            raise self.service_error
         return MapStatus(IndexStatus(2, coverage=0.9, updated_at=FIXED_TIME), 1)
 
     def map_search(self, query: str) -> tuple[SearchHit, ...]:
@@ -895,13 +906,14 @@ class FakeServices:
     init_calls: list[tuple[InitOptions, bool, float | None]] = field(default_factory=list)
     new_files: dict[str, tuple[str, str]] = field(
         default_factory=lambda: {
-            ".claude/agents/tester.new.md": (
+            ".cuanta/forge-suggested/claude/agents/tester.md": (
                 "# tester\nrun pytest\nkeep fixtures small\n",
                 "# tester\nrun pytest -q\nkeep fixtures small\nreport hairballs\n",
             )
         }
     )
     resolved: list[tuple[str, bool]] = field(default_factory=list)
+    init_findings: tuple[Finding, ...] = ()
     telemetry_on: set[str] = field(default_factory=set)
     listener_running: bool = False
     listener_mode: str = "auto"
@@ -931,6 +943,11 @@ class FakeServices:
     gate_open: bool = True
     loop_runs: int = 0
     preview_note: Note | None = None
+    service_error: CuantaError | None = None
+    change_plan_error: CuantaError | None = None
+
+    def telemetry_wired(self, engine: str) -> bool:
+        return engine in self.telemetry_on
 
     def telemetry_plan(self, engine: str) -> tuple[WiringPlan, ...]:
         return (
@@ -974,9 +991,28 @@ class FakeServices:
                 [
                     Finding(Status.OK, msg("verify.agents_ok")),
                     Finding(Status.OK, msg("verify.phases_ok")),
+                    *self.init_findings,
                 ]
             )
+            context.verify_lines.extend(
+                Finding(
+                    Status.INFO,
+                    msg(
+                        "verify.suggested",
+                        original=original_of(path),
+                        path=path,
+                        added=2,
+                        removed=1,
+                    ),
+                )
+                for path in self.new_files
+            )
+            if self.new_files:
+                context.verify_lines.append(Finding(Status.INFO, msg("verify.suggested_note")))
             context.new_files.extend(self.new_files)
+            context.suggestions.extend(
+                Suggestion(path, original_of(path), 2, 1) for path in self.new_files
+            )
         return InitReport(context, tuple(stages), None)
 
     def load_new_file(self, path: str) -> NewFilePair:
@@ -1225,6 +1261,8 @@ class FakeServices:
 
     def change_plan(self, request: MandateRequest) -> ChangePlan:
         self.change_plan_requests.append(request)
+        if self.change_plan_error is not None:
+            raise self.change_plan_error
         return self.change_plan_result
 
     def understand(self, story: str, whole: bool = False) -> Understanding:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from hashlib import sha256
 from pathlib import Path
@@ -16,6 +17,7 @@ from cuanta.adapters.graph.file_graph import load_index_graph
 from cuanta.adapters.graph.index_graph import LocalIndexGraph, run_worker
 from cuanta.adapters.system.index_inventory import LocalIndexInventory
 from cuanta.domain.code_index import IndexedFile
+from cuanta.ports.graph import GraphResult
 from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner
 
@@ -413,3 +415,121 @@ def test_spawn_failure_releases_owned_lock_and_keeps_index_usable(
     graph.request_refresh(files)
     assert not (tmp_path / ".cuanta/graph-refresh.lock").exists()
     assert len(graph.records(files).symbols) == 2
+
+
+STATUS_LOG = ".cuanta/graph-refresh.log"
+
+
+def test_schedule_update_spawns_a_bootstrap_worker_without_a_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _file(tmp_path, "src/app.py")
+    runner = FakeRunner(binaries={"graphify": "fake"})
+    calls = _capture_spawn(monkeypatch)
+    graph = LocalIndexGraph(tmp_path, runner)
+    assert graph.schedule_update() == GraphResult(True, STATUS_LOG)
+    assert len(calls) == 1
+    command, options = calls[0]
+    argv = cast(list[str], command)
+    assert argv[1:4] == ["-m", "cuanta.adapters.graph.index_graph", str(tmp_path.resolve())]
+    assert argv[-1] == "bootstrap"
+    assert options["stdin"] == subprocess.DEVNULL
+    assert options["stdout"] == subprocess.DEVNULL
+    assert options["stderr"] == subprocess.DEVNULL
+    assert options["start_new_session"] is True
+    assert options["creationflags"] == index_graph._detached_flags()
+    lease = json.loads((tmp_path / ".cuanta/graph-refresh.lock").read_text(encoding="utf-8"))
+    assert (lease["pid"], lease["token"]) == (999999, argv[-2])
+    status = json.loads((tmp_path / STATUS_LOG).read_text(encoding="utf-8"))
+    assert status["status"] == "scheduled"
+    assert runner.calls == []
+    assert graph.schedule_update() == GraphResult(True, STATUS_LOG)
+    assert len(calls) == 1
+
+
+def test_bootstrap_worker_updates_without_a_graph_or_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _file(tmp_path, "src/app.py")
+    state = tmp_path / ".cuanta"
+    state.mkdir()
+    token = "c" * 32
+    lock = state / "graph-refresh.lock"
+    lock.write_text(json.dumps({"token": token, "expires": time.time() + 1200}), encoding="utf-8")
+    skipped = FakeRunner(binaries={"graphify": "fake"})
+    run_worker(tmp_path, token, skipped)
+    assert skipped.calls == []
+    assert json.loads((tmp_path / STATUS_LOG).read_text(encoding="utf-8"))["status"] == "skipped"
+    lock.write_text(json.dumps({"token": token, "expires": time.time() + 1200}), encoding="utf-8")
+
+    def no_inventory(self: LocalIndexInventory) -> tuple[IndexedFile, ...]:
+        raise AssertionError("the bootstrap worker must not read the inventory")
+
+    monkeypatch.setattr(LocalIndexInventory, "candidates", no_inventory)
+    runner = FakeRunner(binaries={"graphify": "fake"})
+    run_worker(tmp_path, token, runner, bootstrap=True)
+    assert runner.calls[0] == ("graphify", "--help")
+    assert runner.calls[-1] == ("graphify", "update", ".")
+    assert json.loads((tmp_path / STATUS_LOG).read_text(encoding="utf-8"))["status"] == "updated"
+    assert not lock.exists()
+
+
+def test_schedule_update_reports_a_live_lease_without_spawning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / ".cuanta"
+    state.mkdir()
+    live = {"token": "d" * 32, "pid": 4321, "expires": time.time() + 600}
+    (state / "graph-refresh.lock").write_text(json.dumps(live), encoding="utf-8")
+    calls = _capture_spawn(monkeypatch)
+    graph = LocalIndexGraph(tmp_path, FakeRunner(binaries={"graphify": "fake"}))
+    assert graph.schedule_update() == GraphResult(True, STATUS_LOG)
+    assert calls == []
+    assert json.loads((state / "graph-refresh.lock").read_text(encoding="utf-8")) == live
+
+
+def test_schedule_update_without_graphify_is_not_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _capture_spawn(monkeypatch)
+    graph = LocalIndexGraph(tmp_path, FakeRunner())
+    assert graph.schedule_update() == GraphResult(False, "graphify not on PATH")
+    assert calls == []
+    assert not (tmp_path / ".cuanta").exists()
+
+
+def test_schedule_update_spawn_failure_is_not_ok_and_releases_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        raise OSError("process unavailable")
+
+    monkeypatch.setattr("cuanta.adapters.graph.index_graph.subprocess.Popen", fail)
+    graph = LocalIndexGraph(tmp_path, FakeRunner(binaries={"graphify": "fake"}))
+    assert graph.schedule_update() == GraphResult(False, "process unavailable")
+    assert not (tmp_path / ".cuanta/graph-refresh.lock").exists()
+    status = json.loads((tmp_path / STATUS_LOG).read_text(encoding="utf-8"))
+    assert (status["status"], status["detail"]) == ("unavailable", "process unavailable")
+
+
+@pytest.mark.parametrize(
+    ("extra", "code", "bootstrap"), [((), 0, False), (("bootstrap",), 0, True), (("x",), 2, None)]
+)
+def test_worker_main_accepts_the_bootstrap_argument(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    extra: tuple[str, ...],
+    code: int,
+    bootstrap: bool | None,
+) -> None:
+    seen: list[tuple[Path, str, bool]] = []
+
+    def worker(root: Path, token: str, runner: object, bootstrap: bool = False) -> None:
+        seen.append((root, token, bootstrap))
+
+    monkeypatch.setattr(index_graph, "run_worker", worker)
+    token = "e" * 32
+    monkeypatch.setattr(sys, "argv", ["worker", str(tmp_path), token, *extra])
+    assert index_graph.main() == code
+    expected = [] if bootstrap is None else [(tmp_path.resolve(), token, bootstrap)]
+    assert seen == expected

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import math
+import os
 import sqlite3
+import sys
 import threading
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import closing, contextmanager, suppress
 from dataclasses import replace
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
+from typing import BinaryIO
 from uuid import uuid4
 
 from cuanta.adapters.storage.readonly_snapshot import closed_snapshot_uri
@@ -18,6 +23,16 @@ from cuanta.domain.code_index import (
     IndexRow,
     IndexTable,
     index_path,
+)
+from cuanta.domain.index_rebuild import (
+    IndexBusy,
+    IndexReadOnly,
+    IndexRecoveryBusy,
+    IndexRefused,
+    carried,
+    rebuild_backup,
+    rebuild_leftover,
+    sidecars,
 )
 
 FILE_COLUMNS = ("path", "content_hash", "language", "size_bytes", "provenance", "coverage")
@@ -34,8 +49,31 @@ ROW_COLUMNS = (
     "confidence",
     "stale",
 )
+SWAP_RETRY_S = 2.0
+SWAP_PAUSE_S = 0.1
+CARRY_TIMEOUT_S = SWAP_RETRY_S
+HOLD_SUFFIX = ".hold"
 STRUCTURAL_TABLES: tuple[IndexTable, ...] = ("symbols", "edges", "rules", "test_links")
 ANCHORED_TABLES: tuple[IndexTable, ...] = ("notes", "history")
+
+
+if sys.platform == "win32":
+
+    def _hold_file(_path: Path) -> BinaryIO | None:
+        return None
+
+    def _hold(_holder: BinaryIO, _exclusive: bool) -> None:
+        return None
+
+else:
+    import fcntl
+
+    def _hold_file(path: Path) -> BinaryIO | None:
+        return path.with_name(path.name + HOLD_SUFFIX).open("ab")
+
+    def _hold(holder: BinaryIO, exclusive: bool) -> None:
+        operation = fcntl.LOCK_EX | fcntl.LOCK_NB if exclusive else fcntl.LOCK_SH
+        fcntl.flock(holder.fileno(), operation)
 
 
 def _table(table: IndexTable) -> str:
@@ -60,6 +98,128 @@ def _row(item: IndexRow) -> IndexRow:
     return replace(item, path=index_path(item.path))
 
 
+def _record(row: sqlite3.Row) -> IndexRow:
+    return IndexRow(
+        str(row["id"]),
+        str(row["path"]),
+        str(row["source_hash"]),
+        str(row["provenance"]),
+        str(row["text"]),
+        int(row["line"]),
+        int(row["end_line"]),
+        str(row["target"]),
+        str(row["relation"]),
+        float(row["confidence"]),
+        bool(row["stale"]),
+    )
+
+
+def _label(path: Path) -> str:
+    return f"{path.parent.name}/{path.name}"
+
+
+def _size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _kept(path: Path) -> tuple[IndexRow, ...]:
+    if not path.is_file():
+        return ()
+    try:
+        with closing(sqlite3.connect(path, timeout=CARRY_TIMEOUT_S)) as connection:
+            connection.row_factory = sqlite3.Row
+            columns = tuple(str(row[1]) for row in connection.execute("PRAGMA table_info(notes)"))
+            records = (
+                connection.execute("SELECT * FROM notes ORDER BY path, line, id").fetchall()
+                if columns == ROW_COLUMNS
+                else []
+            )
+    except sqlite3.OperationalError as error:
+        if getattr(error, "sqlite_errorname", "").startswith(("SQLITE_BUSY", "SQLITE_LOCKED")):
+            raise IndexBusy(_label(path)) from error
+        return ()
+    except sqlite3.DatabaseError:
+        return ()
+    kept: list[IndexRow] = []
+    for record in records:
+        with suppress(ValueError, TypeError):
+            row = _record(record)
+            if carried(row.provenance):
+                kept.append(_row(row))
+    return tuple(kept)
+
+
+def _modified(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _carried(path: Path) -> tuple[IndexRow, ...]:
+    current = _kept(path)
+    try:
+        backups = [item for item in path.parent.iterdir() if rebuild_backup(path.name, item.name)]
+    except OSError:
+        backups = []
+    rows: dict[str, IndexRow] = {}
+    for backup in sorted(backups, key=lambda item: (_modified(item), item.name)):
+        with suppress(IndexBusy):
+            rows.update((row.id, row) for row in _kept(backup))
+    rows.update((row.id, row) for row in current)
+    return tuple(rows.values())
+
+
+def _retried(
+    action: Callable[[], None],
+    refusal: Callable[[], IndexRefused],
+    retried: type[OSError] = PermissionError,
+) -> None:
+    deadline = time.monotonic() + SWAP_RETRY_S
+    while True:
+        try:
+            action()
+            return
+        except retried as error:
+            if time.monotonic() >= deadline:
+                raise refusal() from error
+            time.sleep(SWAP_PAUSE_S)
+
+
+def _replace(staged: Path, path: Path) -> None:
+    try:
+        os.replace(staged, path)
+    except PermissionError as error:
+        if path.exists() and not os.access(path, os.W_OK):
+            raise IndexReadOnly(_label(path)) from error
+        raise
+
+
+def _swap(staged: Path, path: Path) -> None:
+    _retried(partial(_replace, staged, path), partial(IndexBusy, _label(path)))
+
+
+def _sweep(path: Path) -> int:
+    try:
+        leftovers = [
+            item for item in path.parent.iterdir() if rebuild_leftover(path.name, item.name)
+        ]
+    except OSError:
+        return 0
+    removed = 0
+    for item in leftovers:
+        size = _size(item)
+        try:
+            item.unlink()
+        except OSError:
+            continue
+        removed += size
+    return removed
+
+
 class SqliteIndex:
     def __init__(self, path: Path, *, rebuild: bool = False, read_only: bool = False) -> None:
         if read_only and rebuild:
@@ -71,14 +231,39 @@ class SqliteIndex:
         self._lock = threading.RLock()
         self._closed = False
         self.recovered = False
-        if rebuild and path.exists():
-            self._preserve("rebuild")
+        self._replaced = 0
+        self._holder = None if read_only else _hold_file(path)
+        try:
+            if rebuild:
+                self._claim()
+                self._replaced = self._recreate()
+            if self._holder is not None:
+                _hold(self._holder, False)
+            self._open()
+        except BaseException:
+            self._release()
+            raise
+
+    def _claim(self) -> None:
+        if self._holder is not None:
+            _retried(
+                partial(_hold, self._holder, True),
+                partial(IndexBusy, _label(self._path)),
+                BlockingIOError,
+            )
+
+    def _release(self) -> None:
+        if self._holder is not None:
+            self._holder.close()
+            self._holder = None
+
+    def _open(self) -> None:
         self._connection = self._connect()
         try:
             self._initialize()
         except sqlite3.DatabaseError as error:
             self._connection.close()
-            if read_only:
+            if self._read_only:
                 raise
             if not any(
                 wording in str(error).lower()
@@ -92,7 +277,7 @@ class SqliteIndex:
                 )
             ):
                 raise
-            self._preserve("corrupt")
+            self._preserve()
             self.recovered = True
             self._connection = self._connect()
             self._initialize()
@@ -101,15 +286,37 @@ class SqliteIndex:
     def path(self) -> Path:
         return self._path
 
-    def _preserve(self, reason: str) -> None:
+    @property
+    def reclaimed_bytes(self) -> int:
+        return max(0, self._replaced - _size(self._path)) if self._replaced else 0
+
+    def _preserve(self) -> None:
         if not self._path.exists():
             return
-        backup = self._path.with_name(f"{self._path.name}.{reason}-{uuid4().hex}.bak")
-        self._path.rename(backup)
+        backup = self._path.with_name(f"{self._path.name}.corrupt-{uuid4().hex}.bak")
+        _retried(
+            partial(os.rename, self._path, backup),
+            partial(IndexRecoveryBusy, _label(self._path)),
+        )
         for suffix in ("-wal", "-shm", "-journal"):
             sidecar = self._path.with_name(self._path.name + suffix)
             if sidecar.exists():
                 sidecar.rename(backup.with_name(backup.name + suffix))
+
+    def _recreate(self) -> int:
+        kept = _carried(self._path)
+        before = _size(self._path)
+        staged = self._path.with_name(f"{self._path.name}.new-{uuid4().hex}")
+        try:
+            with closing(SqliteIndex(staged)) as fresh:
+                fresh.put_rows("notes", kept)
+            _swap(staged, self._path)
+        except BaseException:
+            for name in (staged.name, *sidecars(staged.name), staged.name + HOLD_SUFFIX):
+                with suppress(OSError):
+                    staged.with_name(name).unlink(missing_ok=True)
+            raise
+        return before + _sweep(self._path)
 
     def _connect(self) -> sqlite3.Connection:
         database = closed_snapshot_uri(self._path, "code index") if self._read_only else self._path
@@ -215,22 +422,7 @@ class SqliteIndex:
             records = self._connection.execute(
                 f"SELECT * FROM {selected}{where} ORDER BY path, line, id", parameters
             ).fetchall()
-        return tuple(
-            IndexRow(
-                str(row["id"]),
-                str(row["path"]),
-                str(row["source_hash"]),
-                str(row["provenance"]),
-                str(row["text"]),
-                int(row["line"]),
-                int(row["end_line"]),
-                str(row["target"]),
-                str(row["relation"]),
-                float(row["confidence"]),
-                bool(row["stale"]),
-            )
-            for row in records
-        )
+        return tuple(_record(row) for row in records)
 
     def replace_files(self, files: Sequence[IndexedFile], removed: Sequence[str]) -> None:
         self._require_write()
@@ -356,3 +548,4 @@ class SqliteIndex:
             if not self._closed:
                 self._connection.close()
                 self._closed = True
+                self._release()

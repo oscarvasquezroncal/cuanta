@@ -160,7 +160,9 @@ class LoopView(VerticalScroll):
 
     def _failed(self, error: str, hint: str) -> None:
         self._reset()
-        self.app.notify(self._t("loop.failed", error=error, hint=hint), severity="error")
+        self.app.notify(
+            self._t("loop.failed", error=error, hint=hint), severity="error", markup=False
+        )
 
     def _finished(self, report: LoopReport) -> None:
         self._reset()

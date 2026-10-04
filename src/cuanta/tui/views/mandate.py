@@ -205,7 +205,7 @@ class MandateView(Vertical):
             evidence, count = self._services.failure_evidence()
         except CuantaError as error:
             message = self._t("mandate.failure_failed", error=str(error), hint=error.hint)
-            self._call(self.app.notify, message, severity="warning")
+            self._call(self.app.notify, message, severity="warning", markup=False)
             return
         self._call(self._apply_failure, evidence, count)
 

@@ -4,12 +4,14 @@ import hashlib
 import json
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 
+from cuanta.domain import index_limit
 from cuanta.domain.code_index import INDEX_TABLES, IndexedFile, IndexRow, IndexStatus, IndexTable
 from cuanta.domain.detection import is_source_file
 from cuanta.domain.index_facts import agent_note, history_row, report_facts, revalidate_fact
+from cuanta.domain.index_limit import IndexTooLarge, oversized_index
 from cuanta.domain.index_rules import scoped_rules, test_links
 from cuanta.ports.code_index import (
     CodeIndex,
@@ -18,6 +20,18 @@ from cuanta.ports.code_index import (
     IndexInventory,
     IndexKnowledge,
 )
+
+
+def indexable_paths(
+    inventory: IndexInventory, exclusions: Sequence[str], limit: int | None = None
+) -> tuple[str, ...]:
+    paths = inventory.paths()
+    ceiling = index_limit.INDEX_FILE_LIMIT if limit is None else limit
+    oversized = oversized_index(paths, exclusions, ceiling)
+    if oversized is None:
+        return paths
+    tracked = inventory.tracked_folders(tuple(name for name, _ in oversized.largest))
+    raise IndexTooLarge(oversized_index(paths, exclusions, ceiling, tracked) or oversized)
 
 
 class IndexService:
@@ -32,6 +46,9 @@ class IndexService:
         knowledge: IndexKnowledge | None = None,
         verify_commands: Callable[[], tuple[str, ...]] | None = None,
         close_knowledge: Callable[[], None] | None = None,
+        exclusions: tuple[str, ...] = (),
+        limit: int | None = None,
+        reclaimed: Callable[[], int] | None = None,
     ) -> None:
         self.index = index
         self.inventory = inventory
@@ -42,11 +59,15 @@ class IndexService:
         self._knowledge = knowledge
         self._verify_commands = verify_commands
         self._close_knowledge = close_knowledge
+        self._exclusions = exclusions
+        self._limit = limit
+        self._reclaimed = reclaimed
 
     def update(self) -> IndexStatus:
         started = time.perf_counter()
+        paths = indexable_paths(self.inventory, self._exclusions, self._limit)
         before = {item.path: item for item in self.index.files()}
-        candidates = self.inventory.candidates()
+        candidates = self.inventory.candidates(paths)
         current = {item.path: item for item in candidates}
         changed = tuple(
             item
@@ -84,6 +105,7 @@ class IndexService:
             content_hash=meta.get("content_hash", ""),
             coverage_by_kind=tuple(sorted(Counter(item.coverage for item in files).items())),
             history_status=meta.get("history_status", ""),
+            reclaimed_bytes=self._reclaimed() if self._reclaimed is not None else 0,
         )
 
     def close(self) -> None:

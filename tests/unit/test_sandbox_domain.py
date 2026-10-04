@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from cuanta.domain.gitignore import IgnoreRules, git_config, git_true
@@ -174,10 +176,42 @@ def test_only_case_only_renames_are_renamed_away() -> None:
         ("[ab].txt\n", "b.txt", False, True),
         ("[!ab].txt\n", "b.txt", False, False),
         (".env*\n", ".env.local", False, True),
+        ("b[!x]c\n", "b/c", False, False),
+        ("b[!x]c\n", "bac", False, True),
+        ("a[/]b\n", "a/b", False, False),
+        ("1[[:digit:]]*.txt\n", "15.txt", False, True),
+        ("[[:upper:]]*.md\n", "README.md", False, True),
+        ("[[:upper:]]*.md\n", "readme.md", False, False),
+        ("[[:alpha:]0-9]_\n", "5_", False, True),
+        ("[![:alpha:]]_\n", "1_", False, True),
+        ("[![:alpha:]]_\n", "a_", False, False),
+        ("x[[:space:]]y\n", "x y", False, True),
+        ("[[:foo:]]x\n", "fx", False, False),
+        ("[[:abc]q\n", ":q", False, True),
+        ("[\\]]x\n", "]x", False, True),
+        ("[z-a]q\n", "zq", False, True),
+        ("[a-]q\n", "-q", False, True),
+        ("[ab\n", "[ab", False, False),
+        ("/**\n!/**/\n", "a/b", False, True),
+        ("/**/\n!/a/\n", "a/b", True, True),
+        ("a/***/b\n", "a/x/y/b", False, True),
+        ("a/***/b\n", "a/b", False, True),
+        ("***\n", "a/b/c", False, True),
+        ("a/**b\n", "a/x/b", False, False),
+        ("docs//\n", "docs", True, False),
+        ("docs//\n", "docs/a.md", False, False),
     ],
 )
 def test_gitignore_patterns(patterns: str, path: str, is_dir: bool, expected: bool) -> None:
     assert IgnoreRules().with_file("", patterns).ignored(path, is_dir) is expected
+
+
+@pytest.mark.parametrize("pattern", ["[[:space:]]x", "[a&&b]c", "[a~~b]c", "[a||b]c", "[[x]y"])
+def test_bracket_classes_compile_without_regex_warnings(pattern: str) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        rules = IgnoreRules().with_file("", pattern + "\n")
+    assert rules.rules
 
 
 def test_ignored_directory_hides_its_files_even_with_negation() -> None:

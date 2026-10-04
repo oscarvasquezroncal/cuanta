@@ -135,6 +135,7 @@ ENGLISH: dict[str, str] = {
     "limits.wall": "{minutes} min",
     "telemetry.unreadable": "{count} telemetry records could not be read; details in {path}",
     "telemetry.unreadable_one": "1 telemetry record could not be read; details in {path}",
+    "telemetry.already_wired": "127.0.0.1:{port} · claude on · already wired",
     "guarantee.row": "{name}: {status} ({detail})",
     "guarantee.spend": "Spend cap",
     "guarantee.turns": "Turn limit",
@@ -272,6 +273,9 @@ ENGLISH: dict[str, str] = {
     "doctor.forge_state.complete": "complete",
     "doctor.forge_state.next": "next phase {phase}",
     "doctor.cuanta_dir.size": "{megabytes} MB",
+    "doctor.cuanta_dir.large": (
+        "{megabytes} MB, over {limit} MB; largest file {path} ({file_megabytes} MB)"
+    ),
     "doctor.flags.missing": (
         "missing {flags}; upgrade {engine} — cuanta verifies these before every run"
     ),
@@ -294,6 +298,24 @@ ENGLISH: dict[str, str] = {
     "template.needs_team_hint": "run cuanta init",
     "template.write_failed": "could not write {path} ({error})",
     "template.write_failed_hint": "make sure docs is a folder you can write to",
+    "doctor.gateway.ok": "{paths} route tests through the gateway",
+    "doctor.gateway.gap": "{problem} · fix: {fix}",
+    "doctor.suggestions.beside": (
+        "{count} files an older init left beside yours in .claude/: {paths}; "
+        "cuanta init moves them to .cuanta/forge-suggested/"
+    ),
+    "doctor.suggestions.beside_one": (
+        "1 file an older init left beside yours in .claude/: {paths}; "
+        "cuanta init moves it to .cuanta/forge-suggested/"
+    ),
+    "doctor.suggestions.waiting": (
+        "{count} Forge suggestions wait in .cuanta/forge-suggested/; "
+        "compare them in the app's Init view or copy one over your file"
+    ),
+    "doctor.suggestions.waiting_one": (
+        "1 Forge suggestion waits in .cuanta/forge-suggested/; "
+        "compare it in the app's Init view or copy it over your file"
+    ),
     "doctor.placeholders.found": "{hits}",
     "doctor.placeholders.clean": "{count} agent files clean",
     "doctor.listener.on": "127.0.0.1:{port} · {written} written",
@@ -327,8 +349,42 @@ ENGLISH: dict[str, str] = {
     ),
     "verify.placeholders": "placeholders left: {items}",
     "verify.placeholders_clean": "placeholder scan clean",
-    "verify.kept": "kept yours, wrote {path}",
     "verify.nothing": "forge did not run · nothing to verify yet",
+    "verify.fix_gateway": "add {items} to the test step in {path}",
+    "verify.fix_unpipe": (
+        "remove the | tail or | head after cuanta test in {path}; its output is already bounded"
+    ),
+    "verify.fix_adopt": (
+        "Forge's version has them: copy {suggestion} over {path}, "
+        "or choose Use new in the app's Init view"
+    ),
+    "verify.fix_template": "run cuanta init --template to write it from the vendored Forge copy",
+    "verify.fix_regenerate": (
+        "run cuanta init --refresh-forge to have Forge write it (uses the model)"
+    ),
+    "verify.fix_root": (
+        "move rules out of CLAUDE.md until it fits {cap} lines, "
+        "or add a line under its title that says Over ceiling"
+    ),
+    "verify.fix_directory": (
+        "move rules out of {path} until it fits {cap} lines, "
+        "or add a line under its title that says Over cap"
+    ),
+    "verify.suggested": "{original}: Forge's version is in {path} (+{added}/-{removed} lines)",
+    "verify.suggested_elsewhere": (
+        "Forge's version of a file you changed is in {path}; yours was kept"
+    ),
+    "verify.suggested_note": (
+        "Your files were not changed. To adopt a suggestion, copy it over your file, or compare "
+        "it in the app's Init view and choose Use new; delete .cuanta/forge-suggested/ to "
+        "discard them."
+    ),
+    "verify.moved": "moved {count} files an older init left beside yours out of .claude/: {paths}",
+    "verify.moved_one": "moved 1 file an older init left beside yours out of .claude/: {paths}",
+    "verify.sibling": (
+        "{path} is still beside your file: .cuanta/forge-suggested/ already holds other versions"
+    ),
+    "verify.fix_sibling": "compare {path} with your file, keep what you need, then delete {path}",
     "wiring.none": "not wired",
     "wiring.no_backup": "no backup recorded",
     "wiring.restored": "restored from {backup}",
@@ -354,6 +410,7 @@ ENGLISH: dict[str, str] = {
     "graph.failed_detail": "FAILED — {detail}",
     "graph.updated": "updated",
     "graph.installed": "installed",
+    "graph.scheduled": "updating in the background · {log}",
     "stage.detect": "detect",
     "stage.graph": "graph bootstrap",
     "stage.telemetry": "telemetry wiring",
@@ -380,23 +437,39 @@ ENGLISH: dict[str, str] = {
     "stage.verified": "{clean}/{total} checks · {stored} baselines",
     "stage.no_consent": "no consent",
     "stage.port": "port {port}",
+    "stage.telemetry_wired": "port {port} · already wired",
+    "stage.skip_graph": "skipped (--skip-graph)",
+    "stage.forge_kept": "kept: FORGE_STATE=initialized · --refresh-forge runs Forge again",
+    "stage.forge_restored": (
+        "kept: FORGE_STATE=initialized · restored {files} · --refresh-forge runs Forge again"
+    ),
     "plan.run": "run: {command}",
     "plan.install_graph": "run: uv tool install graphifyy (fallback pip install graphifyy)",
     "plan.forge_state": "write: {path} (phases 0, 0.5; producer cuanta)",
     "plan.write": "write: {path}",
     "plan.gitignore": "edit: .gitignore (+ {entries})",
     "plan.install": "install: {path}",
-    "plan.write_differs": "write: {path} (yours differs)",
+    "plan.suggest": "suggest: {path} (yours differs, kept)",
+    "plan.move": "move: {path} → {target}",
     "plan.template": "write: {path} from the vendored Forge {version}",
     "plan.forge_run": "run: claude -p <init-agents body> --output-format stream-json …",
     "plan.verify": "verify: placeholders, ceilings, artifacts; store baselines",
     "plan.telemetry": "edit: .claude/settings.local.json env block (OTLP → 127.0.0.1)",
+    "plan.run_background": "run in the background: {command}",
+    "plan.forge_kept": (
+        "keep: Forge is initialized, no model runs (--refresh-forge runs Forge again)"
+    ),
     "registration.deferred": (
         "deferred — the Skill tool was denied; Forge read SKILL.md off disk instead"
     ),
     "registration.used": "ok · Skill tool used {calls}x",
     "registration.ok": "ok · Skill tool allowed",
     "forge.phase": "forge · Phase {phase}",
+    "forge.rulebook_rewritten": (
+        "CLAUDE.md: Forge rewrote it in place ({before} → {after} lines); "
+        "compare it with your previous version in {backup}"
+    ),
+    "forge.kept": "kept ({command} runs Forge again)",
     "loop.test": "test",
     "loop.suite_green": "green",
     "loop.suite_red": "red",
@@ -523,6 +596,8 @@ ENGLISH: dict[str, str] = {
     "check.forge_state": "forge-state",
     "check.forge": "forge",
     "check.template": "template",
+    "check.gateway": "gateway",
+    "check.suggestions": "suggestions",
     "check.placeholders": "placeholders",
     "check.ceilings": "ceilings",
     "check.listener": "listener",
@@ -1041,6 +1116,46 @@ ENGLISH: dict[str, str] = {
     "sandbox.unreadable": (
         "{count} files ignored by .gitignore could not be read and are not in the copy: {paths}"
     ),
+    "index.too_large": (
+        "the index stopped before reading any file: {files} files to index, over the limit of"
+        " {limit}. Largest folders: {folders}"
+    ),
+    "index.no_folders": "none, every file is at the top level",
+    "index.too_large_fix": (
+        "leave out what is not your code in .gitignore, or put these lines in"
+        " .cuanta/config.toml (replace an existing [detect] exclude):\n{lines}"
+    ),
+    "index.busy": (
+        "{path} is open in another process, so it was not rebuilt; the index is unchanged"
+    ),
+    "index.busy_fix": (
+        "finish or stop the cuanta run that uses it (its index tools keep it open),"
+        " then run {command} again"
+    ),
+    "index.read_only": "{path} is read-only, so it was not rebuilt; the index is unchanged",
+    "index.read_only_fix": (
+        "make it writable (clear its read-only attribute), then run {command} again"
+    ),
+    "index.recovery_busy": (
+        "{path} must be recreated (it is damaged or from another version) but is open in"
+        " another process, so it was left as it was"
+    ),
+    "index.recovery_busy_fix": (
+        "finish or stop the cuanta run that uses it (its index tools keep it open), then try again"
+    ),
+    "progress.index": "index",
+    "progress.plan": "plan",
+    "progress.forecast": "forecast",
+    "progress.files": "{files} files",
+    "progress.files_one": "1 file",
+    "progress.done": "{detail} · {seconds} s",
+    "progress.took": "{seconds} s",
+    "init.complete": "init complete",
+    "init.problems": "init finished with problems",
+    "init.warnings": "{count} warnings above, each with its fix",
+    "init.warnings_one": "1 warning above, with its fix",
+    "init.refresh_skip": "--refresh-forge runs Forge and --skip-forge skips it",
+    "init.refresh_skip_hint": "pass only one of them",
 }
 
 

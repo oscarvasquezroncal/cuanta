@@ -3,10 +3,13 @@ from __future__ import annotations
 import pytest
 
 from cuanta.domain.detection import (
+    Detection,
     DocsState,
     ForgeState,
     GraphMode,
     SizeTier,
+    Stack,
+    VerifyDecision,
     VerifySignals,
     VerifyTier,
     docs_state,
@@ -14,16 +17,19 @@ from cuanta.domain.detection import (
     is_excluded_dir,
     is_source_file,
     size_tier,
+    summary_lines,
     verify_tier,
 )
 from cuanta.domain.forge_state import (
     CorruptState,
+    forge_will_run,
     parse_state,
     run_note,
     state_to_dict,
 )
 from cuanta.domain.graph_policy import (
     GraphBranch,
+    graph_in_background,
     graph_outcome_line,
     matches_graph_server,
     plan_graph,
@@ -62,6 +68,58 @@ def test_forge_state_signals() -> None:
     assert forge_state((), True, False, False) is ForgeState.INITIALIZED
     assert forge_state((), False, True, False) is ForgeState.INITIALIZED
     assert forge_state((), False, False, True) is ForgeState.INITIALIZED
+
+
+def test_forge_will_run_matrix() -> None:
+    fresh, initialized = ForgeState.FRESH, ForgeState.INITIALIZED
+    assert forge_will_run(fresh, skip=False, refresh=False, resuming=False)
+    assert not forge_will_run(initialized, skip=False, refresh=False, resuming=False)
+    assert forge_will_run(initialized, skip=False, refresh=True, resuming=False)
+    assert forge_will_run(initialized, skip=False, refresh=False, resuming=True)
+    for state in (fresh, initialized):
+        assert not forge_will_run(state, skip=True, refresh=True, resuming=True)
+
+
+def test_graph_in_background_only_without_a_forge_run() -> None:
+    assert graph_in_background(False, GraphBranch.UPDATE)
+    assert graph_in_background(False, GraphBranch.INSTALL)
+    assert not graph_in_background(True, GraphBranch.UPDATE)
+    assert not graph_in_background(True, GraphBranch.INSTALL)
+    assert not graph_in_background(False, GraphBranch.SKIP)
+    assert not graph_in_background(False, GraphBranch.DEFER)
+
+
+def _initialized_detection(state: ForgeState = ForgeState.INITIALIZED) -> Detection:
+    return Detection(
+        root="/work/backend",
+        project_name="backend",
+        stack=Stack(language="python"),
+        file_count=738,
+        size_tier=SizeTier.LARGE,
+        docs_state=DocsState.EXISTS,
+        forge_state=state,
+        verify=VerifyDecision(VerifyTier.STRONG, "pytest"),
+        graph_mode=GraphMode.CLI,
+        graph_evidence="graphify --help succeeded",
+        vcs=True,
+        engines=(),
+        run_note="fresh run",
+    )
+
+
+def test_summary_says_kept_when_no_forge_runs() -> None:
+    rows = dict(summary_lines(_initialized_detection(), unicode=True, forge_runs=False))
+    assert rows["forge:"] == (
+        "FORGE_STATE=initialized — kept (cuanta init --refresh-forge runs Forge again)"
+    )
+    plain = dict(summary_lines(_initialized_detection(), unicode=False, forge_runs=False))
+    assert plain["forge:"] == (
+        "FORGE_STATE=initialized - kept (cuanta init --refresh-forge runs Forge again)"
+    )
+    running = dict(summary_lines(_initialized_detection(), unicode=True, forge_runs=True))
+    assert running["forge:"] == "FORGE_STATE=initialized — running refresh semantics"
+    fresh = dict(summary_lines(_initialized_detection(ForgeState.FRESH), forge_runs=False))
+    assert fresh["forge:"] == "FORGE_STATE=fresh"
 
 
 def test_verify_tier_strong_needs_runner_and_check() -> None:

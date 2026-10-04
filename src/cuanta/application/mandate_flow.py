@@ -13,6 +13,7 @@ from cuanta.application.forecast import (
 )
 from cuanta.application.instinct import DecisionScope
 from cuanta.application.mandate import Composed, MandateReport, MandateService, allowed_tools
+from cuanta.application.progress import Phase, SlowSteps
 from cuanta.application.route_apply import Applied, MandateRouting, RouteOptions
 from cuanta.application.scout import SessionWatch, session_scout, watched
 from cuanta.application.steering import GovernorSetup, observed, session_steering
@@ -69,7 +70,15 @@ from cuanta.domain.mandate import (
 )
 from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.pack import ContextPack
-from cuanta.domain.progress import Note, Status, finished, note, started
+from cuanta.domain.progress import (
+    FORECAST_STEP,
+    PLAN_STEP,
+    Note,
+    Status,
+    finished,
+    note,
+    started,
+)
 from cuanta.domain.routing import Provider, Role, RoleRoute, parse_provider
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, sandbox_launch
 from cuanta.domain.scout import (
@@ -386,7 +395,9 @@ class MandateFlow:
         implementation_tools: tuple[str, ...] = (),
         fast_ready: Callable[[str], bool] | None = None,
         limits: LimitSettings | None = None,
+        steps: SlowSteps | None = None,
     ) -> None:
+        self._steps = steps if steps is not None else SlowSteps(None)
         self._fast_ready = fast_ready or self._engine_steerable
         self._implementation_tools = implementation_tools
         self._default_profile = default_profile
@@ -453,8 +464,9 @@ class MandateFlow:
             variant=options.variant or self._default_variant,
         )
         self._validate(request, options)
-        with self._timing.measure("forecast_plan"):
-            prepared = self._prepare_validated(request, signatures, options, preview)
+        with self._timing.measure("forecast_plan"), self._steps.sequence() as phase:
+            phase(PLAN_STEP, msg("progress.plan"))
+            prepared = self._prepare_validated(request, signatures, options, preview, phase)
         return replace(prepared, preparation_seconds=self._timing.elapsed(started))
 
     def _validate(self, request: MandateRequest, options: MandateOptions) -> None:
@@ -502,6 +514,7 @@ class MandateFlow:
         signatures: int,
         options: MandateOptions,
         preview: bool,
+        phase: Phase,
     ) -> Prepared:
         run_id = "" if preview or self._new_run_id is None else self._new_run_id()
         key = decision_key(request)
@@ -662,6 +675,7 @@ class MandateFlow:
                 protection,
                 Shape.SCOUT.value if wanted and has_scout(applied) else base.shape,
                 request=request,
+                phase=phase,
             ),
             scout=wanted and has_scout(applied),
             docs=docs,
@@ -746,7 +760,10 @@ class MandateFlow:
         protection: ChangePlan | None,
         shape: str = "",
         request: MandateRequest | None = None,
+        phase: Phase | None = None,
     ) -> tuple[PlannedForecast | None, Message | None]:
+        if phase is not None:
+            phase(FORECAST_STEP, msg("progress.forecast"))
         provider = parse_provider(engine_name)
         if self._forecaster is None or applied is None or provider is None or options.simple:
             return None, None

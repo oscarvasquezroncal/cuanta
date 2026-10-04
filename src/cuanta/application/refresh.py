@@ -7,11 +7,13 @@ from cuanta.application.detect import DetectProject, read_forge_state
 from cuanta.application.engine_run import EngineLauncher, LaunchSpec
 from cuanta.application.forge import (
     FORGE_DISALLOWED_TOOLS,
+    RULEBOOK,
     ForgeProgress,
     VerifyStage,
     forge_allowed_tools,
     forge_prompt,
     promote_staged,
+    report_rulebook,
 )
 from cuanta.application.init_project import GraphStage, InitContext, StageResult, stage
 from cuanta.domain.detection import Detection
@@ -73,8 +75,8 @@ class RefreshProject:
             raise NotAvailable(
                 f"claude lacks flags cuanta needs: {', '.join(missing)}", "upgrade Claude Code"
             )
-        summary = self._kit.install(dry_run=False)
-        context.new_files.extend(summary.new_files)
+        self._kit.install(dry_run=False)
+        rulebook = self._workspace.read_text(RULEBOOK)
         watcher = ForgeProgress(self._progress)
         spec = LaunchSpec(
             kind="refresh",
@@ -89,6 +91,7 @@ class RefreshProject:
             self._progress.publish(note(Status.WARN, unreadable_note(launch.unreadable)))
         _, kept = promote_staged(self._workspace)
         context.new_files.extend(kept)
+        report_rulebook(self._workspace, self._progress, rulebook)
         context.run_id = launch.run.id
         context.forge_ran = True
         context.cost_usd = launch.run.cost_usd

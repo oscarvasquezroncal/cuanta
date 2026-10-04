@@ -31,6 +31,7 @@ from cuanta.domain.instinct import Choice
 from cuanta.domain.ledger import LedgerEvent, RouteAudit
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import english, msg
+from cuanta.domain.new_files import sibling_original
 from cuanta.domain.plugins import LEAN
 from cuanta.domain.routing import (
     Role,
@@ -155,8 +156,10 @@ class MandateRouting:
 
     def definitions(self) -> tuple[AgentDefinition, ...]:
         found: list[AgentDefinition] = []
-        for path in sorted(self._workspace.files_under(AGENTS_DIR)):
-            if not path.endswith(".md"):
+        paths = sorted(self._workspace.files_under(AGENTS_DIR))
+        present = frozenset(paths)
+        for path in paths:
+            if not path.endswith(".md") or sibling_original(path) in present:
                 continue
             text = self._workspace.read_text(path)
             parsed = parse_agent(text, path) if text is not None else None

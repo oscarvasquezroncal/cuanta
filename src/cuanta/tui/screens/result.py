@@ -563,7 +563,7 @@ class ResultScreen(Screen[None]):
         except CuantaError as error:
             failed = self._t("result.decision_failed", error=str(error))
             failed = f"{failed}\n{error.hint}" if error.hint else failed
-            self.app.call_from_thread(self.app.notify, failed, severity="error")
+            self.app.call_from_thread(self.app.notify, failed, severity="error", markup=False)
             return
         except Exception as error:
             self.app.call_from_thread(self.app.notify, str(error), severity="error")

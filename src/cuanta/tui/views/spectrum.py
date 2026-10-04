@@ -218,7 +218,7 @@ class SpectrumView(VerticalScroll):
         self._set_loaded(False)
         if "no runs recorded" not in error:
             message = self._t("spectrum.failed", error=error, hint=hint)
-            self.app.notify(message, severity="error")
+            self.app.notify(message, severity="error", markup=False)
 
     def _metric(self, key: str, value: str, note: str) -> None:
         card = self.query_one(f"#metric-{key}")

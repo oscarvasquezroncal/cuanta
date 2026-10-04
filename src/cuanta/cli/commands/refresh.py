@@ -15,6 +15,7 @@ def refresh_command(ctx: typer.Context) -> None:
 def _refresh(session: Session) -> "Document":
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Document, Hint, KeyValues, Line, MascotBlock, Panel
+    from cuanta.domain.messages import english
     from cuanta.domain.progress import Status
     from cuanta.domain.voice import Mood
 
@@ -32,7 +33,10 @@ def _refresh(session: Session) -> "Document":
             )
         ),
     ]
-    blocks.extend(Line(finding.text, finding.status) for finding in context.verify_lines)
+    for finding in context.verify_lines:
+        blocks.append(Line(finding.text, finding.status))
+        if finding.fix is not None:
+            blocks.append(Hint(f"fix: {english(finding.fix)}"))
     ok = report.ok and context.verify_ok
     blocks.append(
         Panel(
@@ -53,7 +57,11 @@ def _refresh(session: Session) -> "Document":
             for key, result in report.stages
         ],
         "verify": [
-            {"status": finding.status.value, "text": finding.text}
+            {
+                "status": finding.status.value,
+                "text": finding.text,
+                "fix": english(finding.fix) if finding.fix is not None else "",
+            }
             for finding in context.verify_lines
         ],
         "new_files": context.new_files,

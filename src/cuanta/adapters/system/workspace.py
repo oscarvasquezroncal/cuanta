@@ -10,7 +10,16 @@ from contextlib import suppress
 from functools import partial
 from pathlib import Path
 
-from cuanta.domain.detection import is_excluded_dir, is_source_file
+from cuanta.adapters.system.git_files import GitView, load_git_view, walk_visible
+from cuanta.adapters.system.platform import home_dir
+from cuanta.domain.detection import (
+    config_exclusions,
+    excluded_by_config,
+    is_excluded_dir,
+    is_source_file,
+)
+from cuanta.domain.disk_usage import INDEX_DATABASE, SQLITE_HEADER_BYTES, DiskUsage, free_bytes
+from cuanta.domain.index_rebuild import rebuild_leftover
 from cuanta.ports.workspace import ScanResult
 
 MAX_ENTRY_CANDIDATES = 12
@@ -19,6 +28,23 @@ BINARY_FLAG = getattr(os, "O_BINARY", 0)
 SNAPSHOT_EXCLUDED = frozenset(
     {".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache", "graphify-out"}
 )
+TEST_DIRS = frozenset({"tests", "test"})
+ENTRY_NAMES = frozenset({"main.go", "__main__.py"})
+RULEBOOK = "CLAUDE.md"
+STATE_DIR = ".cuanta"
+
+
+def _reclaimable(entry: os.DirEntry[str], size: int) -> int:
+    if rebuild_leftover(INDEX_DATABASE, entry.name):
+        return size
+    if entry.name != INDEX_DATABASE:
+        return 0
+    try:
+        with open(entry.path, "rb") as handle:
+            header = handle.read(SQLITE_HEADER_BYTES)
+    except OSError:
+        return 0
+    return free_bytes(header, size)
 
 
 def _unlocked(path: Path, action: Callable[[], object]) -> None:
@@ -43,7 +69,11 @@ def _unlocked(path: Path, action: Callable[[], object]) -> None:
         raise
 
 
-def _test_kind(name: str, in_tests_dir: bool) -> str | None:
+def _in_tests(relative: str) -> bool:
+    return any(part in TEST_DIRS for part in relative.split("/")[:-1])
+
+
+def _test_kind(name: str, relative: str) -> str | None:
     lowered = name.lower()
     if lowered.endswith("_test.go"):
         return "go"
@@ -51,7 +81,7 @@ def _test_kind(name: str, in_tests_dir: bool) -> str | None:
         return "python"
     if any(marker in lowered for marker in (".test.", ".spec.")):
         return "js"
-    if lowered.endswith(".rs") and in_tests_dir:
+    if lowered.endswith(".rs") and _in_tests(relative):
         return "rust"
     if lowered.endswith(("test.java", "tests.java", "test.kt")):
         return "java"
@@ -68,8 +98,14 @@ def _extension_key(name: str) -> str | None:
 
 
 class LocalWorkspace:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, git_root: Path | None = None, home: Path | None = None) -> None:
         self._root = root
+        self._git_root = git_root
+        self._home = home
+
+    def _git_view(self) -> GitView:
+        home = self._home if self._home is not None else home_dir()
+        return load_git_view(self._git_root or self._root, home, os.environ)
 
     @property
     def root(self) -> Path:
@@ -162,6 +198,43 @@ class LocalWorkspace:
                     continue
         return total
 
+    def disk_usage(self, relative: str) -> DiskUsage:
+        total = files = largest_bytes = reclaimable = 0
+        largest = largest_path = ""
+        folders = [(self._path(relative), True)]
+        while folders:
+            folder, top = folders.pop()
+            try:
+                with os.scandir(folder) as listing:
+                    entries = list(listing)
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    if entry.is_dir(follow_symlinks=False) and not entry.is_junction():
+                        folders.append((Path(entry.path), False))
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    size = entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+                total += size
+                files += 1
+                if top:
+                    reclaimable += _reclaimable(entry, size)
+                if size < largest_bytes:
+                    continue
+                name = Path(entry.path).relative_to(self._root).as_posix()
+                if size > largest_bytes or not largest or name < largest:
+                    largest, largest_bytes, largest_path = name, size, entry.path
+        if largest_path:
+            with suppress(OSError):
+                exact = os.stat(largest_path).st_size
+                total += exact - largest_bytes
+                largest_bytes = exact
+        return DiskUsage(total, files, largest, largest_bytes, reclaimable)
+
     def files_under(self, relative: str) -> tuple[str, ...]:
         base = self._path(relative)
         if not base.is_dir():
@@ -177,67 +250,53 @@ class LocalWorkspace:
     def scan(
         self, extra_exclusions: frozenset[str], collect_files: bool = False, all_files: bool = False
     ) -> ScanResult:
+        exclusions = config_exclusions(extra_exclusions)
         count = 0
         nested: list[str] = []
         tests: dict[str, int] = {}
         entries: list[str] = []
         files: list[str] = []
         modes: dict[str, int] = {}
-        stack: list[tuple[str, str, bool]] = [(str(self._root), "", False)]
-        while stack:
-            folder, prefix, in_tests = stack.pop()
-            try:
-                iterator = os.scandir(folder)
-            except OSError:
+        ignored: set[str] = set()
+
+        def skipped(name: str, relative: str) -> bool:
+            return (
+                is_excluded_dir(name)
+                or name == STATE_DIR
+                or (name.startswith(".") and not all_files)
+                or (all_files and name in SNAPSHOT_EXCLUDED)
+                or excluded_by_config(relative, exclusions)
+            )
+
+        for item in walk_visible(self._root, self._git_view(), skipped):
+            relative = item.path
+            name = item.entry.name
+            if excluded_by_config(relative, exclusions):
                 continue
-            with iterator:
-                for entry in iterator:
-                    name = entry.name
-                    relative = f"{prefix}{name}"
-                    try:
-                        is_dir = entry.is_dir(follow_symlinks=False)
-                        info = entry.stat(follow_symlinks=False) if all_files else None
-                    except OSError:
-                        continue
-                    if info is not None and (
-                        stat.S_ISLNK(info.st_mode)
-                        or getattr(info, "st_file_attributes", 0)
-                        & stat.FILE_ATTRIBUTE_REPARSE_POINT
-                    ):
-                        continue
-                    if is_dir:
-                        if (
-                            is_excluded_dir(name, extra_exclusions)
-                            or relative in extra_exclusions
-                            or name == ".cuanta"
-                            or (name.startswith(".") and not all_files)
-                            or (all_files and name in SNAPSHOT_EXCLUDED)
-                        ):
-                            continue
-                        stack.append(
-                            (entry.path, f"{relative}/", in_tests or name in {"tests", "test"})
-                        )
-                        continue
-                    if name == "CLAUDE.md" and prefix:
-                        nested.append(relative)
-                    if all_files and collect_files:
-                        if info is None:
-                            continue
-                        files.append(relative)
-                        modes[relative] = info.st_mode & 0o777
-                    if not is_source_file(name):
-                        continue
-                    count += 1
-                    if collect_files and not all_files:
-                        files.append(relative)
-                    kind = _test_kind(name, in_tests)
-                    if kind is not None:
-                        tests[kind] = tests.get(kind, 0) + 1
-                    extension = _extension_key(name)
-                    if extension is not None:
-                        tests[extension] = tests.get(extension, 0) + 1
-                    if name in {"main.go", "__main__.py"} and len(entries) < MAX_ENTRY_CANDIDATES:
-                        entries.append(relative)
+            if name == RULEBOOK and "/" in relative:
+                nested.append(relative)
+            if all_files and collect_files:
+                try:
+                    info = item.entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                files.append(relative)
+                modes[relative] = info.st_mode & 0o777
+                if item.ignored:
+                    ignored.add(relative)
+            if item.ignored or not is_source_file(name):
+                continue
+            count += 1
+            if collect_files and not all_files:
+                files.append(relative)
+            kind = _test_kind(name, relative)
+            if kind is not None:
+                tests[kind] = tests.get(kind, 0) + 1
+            extension = _extension_key(name)
+            if extension is not None:
+                tests[extension] = tests.get(extension, 0) + 1
+            if name in ENTRY_NAMES and len(entries) < MAX_ENTRY_CANDIDATES:
+                entries.append(relative)
         return ScanResult(
             file_count=count,
             nested_claude_md=tuple(sorted(nested)),
@@ -245,6 +304,7 @@ class LocalWorkspace:
             entry_candidates=tuple(sorted(entries)),
             files=tuple(sorted(files)),
             modes=modes,
+            ignored=frozenset(ignored),
         )
 
 

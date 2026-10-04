@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -135,3 +135,48 @@ class FakeGraph:
     def update(self, root: Path) -> GraphResult:
         self.calls.append("update")
         return GraphResult(self.update_ok, "" if self.update_ok else "parse error")
+
+
+@dataclass
+class FakeScheduler:
+    ok: bool = True
+    detail: str = ".cuanta/graph-refresh.log"
+    calls: int = 0
+
+    def schedule_update(self) -> GraphResult:
+        self.calls += 1
+        return GraphResult(self.ok, self.detail)
+
+
+@dataclass
+class VirtualTimer:
+    due: float
+    action: Callable[[], None]
+    cancelled: bool = False
+    fired: bool = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+@dataclass
+class VirtualTime:
+    now: float = 0.0
+    reads: int = 0
+    timers: list[VirtualTimer] = field(default_factory=list)
+
+    def monotonic(self) -> float:
+        self.reads += 1
+        return self.now
+
+    def schedule(self, seconds: float, action: Callable[[], None]) -> Callable[[], None]:
+        timer = VirtualTimer(self.now + seconds, action)
+        self.timers.append(timer)
+        return timer.cancel
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+        for timer in list(self.timers):
+            if timer.due <= self.now and not timer.cancelled and not timer.fired:
+                timer.fired = True
+                timer.action()

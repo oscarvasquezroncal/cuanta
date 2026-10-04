@@ -62,6 +62,28 @@ def test_doctor_json(tmp_path: Path, fake_runner: FakeRunner) -> None:
     assert document["healthy"] is True
 
 
+def test_doctor_names_the_file_that_makes_cuanta_large(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    root = copy_repo("python_strong", tmp_path)
+    database = root / ".cuanta" / "index.db"
+    database.parent.mkdir()
+    try:
+        with database.open("wb") as handle:
+            handle.truncate(501 * 1_048_576)
+        result = invoke(["doctor", "--json", "--project", str(root)])
+    finally:
+        database.unlink(missing_ok=True)
+    assert result.exit_code == 0, result.stdout
+    checks = json.loads(result.stdout)["checks"]
+    assert checks[-1] == {
+        "name": ".cuanta",
+        "status": "warn",
+        "detail": "501.0 MB, over 500 MB; largest file .cuanta/index.db (501.0 MB)",
+        "fix": "cuanta index --rebuild",
+    }
+
+
 def test_doctor_json_reports_home_agents_md_size(
     tmp_path: Path, isolated_user_dirs: Path, fake_runner: FakeRunner
 ) -> None:

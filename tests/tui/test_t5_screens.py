@@ -4,9 +4,12 @@ from collections.abc import Callable
 from pathlib import Path
 from types import CodeType
 
+import pytest
 from textual.pilot import Pilot
 from textual.widgets import Button, Checkbox, DataTable, Input, RadioButton, Select, Static
 
+from cuanta.domain.forge_verify import Finding
+from cuanta.domain.messages import msg
 from cuanta.domain.progress import Status
 from cuanta.tui.app import CuantaApp
 from cuanta.tui.screens.consent import ConsentScreen
@@ -16,7 +19,7 @@ from cuanta.tui.views.instinct import InstinctView
 from cuanta.tui.views.loop import LoopView
 from cuanta.tui.views.settings import SettingsView
 from cuanta.tui.widgets.telemetry import TelemetryCard
-from tests.tui.fakes import FakeServices
+from tests.tui.fakes import FakeServices, snapshot
 from tests.tui.test_app import drive, make_app, settle
 
 
@@ -86,8 +89,38 @@ def test_consent_modal_lists_files_and_backups_then_initializes() -> None:
         summary = render(view.query_one("#init-summary", Static))
         assert "ok · Skill tool allowed" in summary
         assert "four agents present" in summary
-        assert view.query_one("#init-new-files", DataTable).row_count == 1
+        assert "forge-suggested" not in summary
+        assert "To adopt a suggestion" not in summary
+        table = view.query_one("#init-new-files", DataTable)
+        assert table.row_count == 1
+        suggestion = ".cuanta/forge-suggested/claude/agents/tester.md"
+        assert [str(cell) for cell in table.get_row(suggestion)] == [
+            ".claude/agents/tester.md",
+            "+2/-1",
+        ]
         assert "Initialize finished: all verify checks passed" in notes(app)
+
+    drive(make_app(services), scenario)
+
+
+def test_a_gateway_gap_finishes_init_with_a_warning_and_its_fix() -> None:
+    gap = Finding(
+        Status.WARN,
+        msg("verify.gateway_lacks", path=".claude/agents/tester.md", items="cuanta test --json"),
+        msg("verify.fix_gateway", items="cuanta test --json", path=".claude/agents/tester.md"),
+    )
+    services = FakeServices(telemetry_on={"claude"}, init_findings=(gap,))
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        view = await open_init(app, pilot)
+        await pilot.click("#init-start")
+        await wait_for(pilot, lambda: view.report is not None)
+        await settle(app, pilot)
+        summary = render(view.query_one("#init-summary", Static))
+        assert ".claude/agents/tester.md lacks the gateway instructions" in summary
+        assert "fix: add cuanta test --json to the test step in .claude/agents/tester.md" in summary
+        assert "Initialize finished with warnings; each one names its fix" in notes(app)
+        assert "Initialize finished with problems; see the verify checks" not in notes(app)
 
     drive(make_app(services), scenario)
 
@@ -110,6 +143,20 @@ def test_denying_consent_initializes_without_telemetry_and_cancel_does_nothing()
     drive(make_app(services), scenario)
 
 
+def test_init_does_not_ask_for_consent_when_telemetry_is_already_wired() -> None:
+    services = FakeServices(telemetry_on={"claude"})
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        view = await open_init(app, pilot)
+        await pilot.click("#init-start")
+        await wait_for(pilot, lambda: view.report is not None)
+        assert not isinstance(app.screen, ConsentScreen)
+        assert services.init_calls[0][1] is True
+        assert view.stage_status["telemetry"][0] is Status.OK
+
+    drive(make_app(services), scenario)
+
+
 def test_dry_run_skips_consent_and_lists_planned_changes() -> None:
     services = FakeServices()
 
@@ -123,6 +170,22 @@ def test_dry_run_skips_consent_and_lists_planned_changes() -> None:
         summary = render(view.query_one("#init-summary", Static))
         assert "write: CLAUDE.md" in summary
         await wait_for(pilot, lambda: "Dry run finished: nothing was written" in notes(app))
+
+    drive(make_app(services), scenario)
+
+
+@pytest.mark.parametrize("initialized", [True, False])
+def test_refresh_knowledge_asks_init_to_run_forge_again(initialized: bool) -> None:
+    services = FakeServices(home_snapshot=snapshot(initialized=initialized))
+
+    async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
+        view = await open_init(app, pilot)
+        assert view.refresh_mode is initialized
+        view.query_one("#init-dry", Checkbox).value = True
+        await pilot.click("#init-start")
+        await wait_for(pilot, lambda: view.report is not None)
+        options = services.init_calls[0][0]
+        assert (options.dry_run, options.refresh_forge) == (True, initialized)
 
     drive(make_app(services), scenario)
 
@@ -147,7 +210,7 @@ def test_new_file_diff_keep_mine_and_use_new() -> None:
         await pilot.click("#diff-use")
         await wait_for(pilot, lambda: not isinstance(app.screen, DiffScreen))
         await settle(app, pilot)
-        assert services.resolved == [(".claude/agents/tester.new.md", False)]
+        assert services.resolved == [(".cuanta/forge-suggested/claude/agents/tester.md", False)]
         assert "Replaced .claude/agents/tester.md with the new version" in notes(app)
         assert not table.display
 

@@ -21,7 +21,14 @@ from cuanta.domain.engine import EngineEvent
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.mandate import MandateRequest, parse_shape, single_context
 from cuanta.domain.pipeline import STAGES, AgentCard, CardState, Pipeline
-from cuanta.domain.progress import Note, ProgressEvent, Status
+from cuanta.domain.progress import (
+    PREPARE_STEPS,
+    Note,
+    ProgressEvent,
+    Status,
+    StepFinished,
+    StepStarted,
+)
 from cuanta.tui.cells import labeled
 from cuanta.tui.fmt import compact, glyph, run_money, status_style
 from cuanta.tui.i18n import Catalog
@@ -123,6 +130,7 @@ class PipelineScreen(Screen[None]):
         self.report: MandateReport | None = None
         self.running = True
         self._started = clock()
+        self._step_labels: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         t = self._t
@@ -196,6 +204,18 @@ class PipelineScreen(Screen[None]):
     def _from_progress(self, event: ProgressEvent) -> None:
         if isinstance(event, Note):
             self.app.call_from_thread(self._log, self._t.message(event.message, event.text))
+        elif isinstance(event, StepStarted | StepFinished) and event.key in PREPARE_STEPS:
+            self.app.call_from_thread(self._prepared_step, event)
+
+    def _prepared_step(self, event: StepStarted | StepFinished) -> None:
+        if isinstance(event, StepStarted):
+            label = self._t.message(event.message, event.label)
+            self._step_labels[event.key] = label
+            self._log(f"{glyph(Status.RESUME)} {label}")
+            return
+        label = self._step_labels.pop(event.key, event.key)
+        took = self._t.message(event.message, event.detail)
+        self._log(f"{glyph(event.status)} {label} · {took}")
 
     def _log(self, line: str) -> None:
         self.query_one("#pipeline-feed", Log).write_line(line)
@@ -226,7 +246,7 @@ class PipelineScreen(Screen[None]):
         self._paint()
         message = self._t("pipeline.run_failed", error=error, hint=hint)
         self.query_one("#pipeline-summary", Static).update(Content.styled(message, "$error"))
-        self.app.notify(message, severity="error")
+        self.app.notify(message, severity="error", markup=False)
 
     def _finished(self, report: MandateReport) -> None:
         with suppress(NoMatches):

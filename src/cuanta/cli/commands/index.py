@@ -28,12 +28,15 @@ def _index(session: Session, rebuild: bool, status: bool, summaries: bool) -> Do
     from cuanta.cli.document import Document, KeyValues
 
     container = Container.for_project(session.project)
-    service = container.index_service(rebuild)
+    container.progress = session.presenter
     try:
-        report = service.status() if status and not rebuild else service.update()
-        summary = container.index_summaries(service, session.options.yes) if summaries else None
+        service = container.index_service(rebuild)
+        try:
+            report = service.status() if status and not rebuild else container.indexed(service)
+            summary = container.index_summaries(service, session.options.yes) if summaries else None
+        finally:
+            service.close()
     finally:
-        service.close()
         container.close()
     payload = asdict(report)
     if summary is not None:

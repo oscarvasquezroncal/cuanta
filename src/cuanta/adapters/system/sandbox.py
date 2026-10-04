@@ -15,15 +15,16 @@ import sys
 import tempfile
 import time
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from ctypes import wintypes
 from functools import partial
 from pathlib import Path
 from typing import Any
 
+from cuanta.adapters.system.git_files import root_rules
 from cuanta.domain.errors import EnvironmentFailure
-from cuanta.domain.gitignore import GITIGNORE, IgnoreRules, git_config, git_true
+from cuanta.domain.gitignore import GITIGNORE, IgnoreRules
 from cuanta.domain.sandbox import (
     GUARDED_TRIAL_FILES,
     LINKED_DIRS,
@@ -70,32 +71,6 @@ def default_parents() -> tuple[Path, ...]:
     cache = os.environ.get("XDG_CACHE_HOME")
     home = (Path(cache) if cache else Path.home() / ".cache") / "cuanta"
     return (home, Path(tempfile.gettempdir()))
-
-
-def _git_home() -> Path:
-    config = os.environ.get("XDG_CONFIG_HOME")
-    return (Path(config) if config else Path.home() / ".config") / "git"
-
-
-def git_settings(origin: Path) -> dict[str, str]:
-    merged: dict[str, str] = {}
-    for path in (_git_home() / "config", Path.home() / ".gitconfig", origin / ".git" / "config"):
-        try:
-            merged.update(git_config(path.read_text(encoding="utf-8", errors="replace")))
-        except OSError:
-            continue
-    return merged
-
-
-def global_excludes(origin: Path, settings: Mapping[str, str]) -> str:
-    configured = settings.get("core.excludesfile", "")
-    path = Path(os.path.expanduser(configured)) if configured else _git_home() / "ignore"
-    if not path.is_absolute():
-        path = origin / path
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
 
 
 def _long(path: Path) -> str:
@@ -631,13 +606,7 @@ def outside_dependencies(origin: Path) -> tuple[str, ...]:
 
 
 def _root_rules(origin: Path) -> IgnoreRules:
-    settings = git_settings(origin)
-    ignorecase = git_true(settings.get("core.ignorecase", ""))
-    rules = IgnoreRules(ignorecase=ignorecase).with_file("", global_excludes(origin, settings))
-    exclude = origin / ".git" / "info" / "exclude"
-    if exclude.is_file():
-        return rules.with_file("", exclude.read_text(encoding="utf-8", errors="replace"))
-    return rules
+    return root_rules(origin, Path.home(), os.environ)
 
 
 def _base_dirs(base: Sequence[str]) -> frozenset[str]:

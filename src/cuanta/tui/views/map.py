@@ -12,6 +12,9 @@ from textual.widgets import Button, DataTable, Input, Static, TabbedContent, Tab
 
 from cuanta.application.map import MapFile, MapStatus
 from cuanta.domain.code_index import HandlingCard, IndexRow, SearchHit
+from cuanta.domain.errors import CuantaError
+from cuanta.domain.index_limit import IndexTooLarge
+from cuanta.domain.index_rebuild import IndexRefused
 from cuanta.tui.i18n import Catalog
 from cuanta.tui.services import Services
 from cuanta.tui.widgets.flow import FlowRow
@@ -55,6 +58,7 @@ class MapView(VerticalScroll):
         self.details: MapFile | None = None
         self.status: MapStatus | None = None
         self._query = ""
+        self._status_run = 0
 
     def compose(self) -> ComposeResult:
         t = self._t
@@ -96,8 +100,13 @@ class MapView(VerticalScroll):
     def activate(self) -> None:
         self.refresh_status()
 
-    @work(thread=True, exclusive=True, group="map-status", exit_on_error=False)
     def refresh_status(self, rebuild: bool = False, revalidate: bool = False) -> None:
+        self._status_run += 1
+        self._enable_actions(False)
+        self._load_status(self._status_run, rebuild, revalidate)
+
+    @work(thread=True, exclusive=True, group="map-status", exit_on_error=False)
+    def _load_status(self, run: int, rebuild: bool, revalidate: bool) -> None:
         try:
             status = (
                 self._services.map_revalidate()
@@ -105,10 +114,40 @@ class MapView(VerticalScroll):
                 else self._services.map_status(rebuild)
             )
         except Exception as error:
-            self.app.call_from_thread(self.app.notify, str(error), severity="error")
+            self.app.call_from_thread(self._status_failed, run, error)
             return
-        self.app.call_from_thread(self.show_status, status)
-        self.app.call_from_thread(self._refresh_selection)
+        self.app.call_from_thread(self._status_loaded, run, status)
+
+    def _status_loaded(self, run: int, status: MapStatus) -> None:
+        self._status_done(run)
+        self.show_status(status)
+        self._refresh_selection()
+
+    def _status_failed(self, run: int, error: Exception) -> None:
+        self._status_done(run)
+        self._failed(error)
+
+    def _status_done(self, run: int) -> None:
+        if run == self._status_run:
+            self._enable_actions(True)
+
+    def _enable_actions(self, enabled: bool) -> None:
+        for name in ("#map-rebuild", "#map-revalidate"):
+            with suppress(NoMatches):
+                self.query_one(name, Button).disabled = not enabled
+
+    def _failed(self, error: Exception) -> None:
+        if isinstance(error, IndexRefused | IndexTooLarge):
+            message = self._t(
+                "map.failed",
+                error=self._t.message(error.reason),
+                hint=self._t.message(error.advice),
+            )
+        elif isinstance(error, CuantaError) and error.hint:
+            message = self._t("map.failed", error=str(error), hint=error.hint)
+        else:
+            message = str(error)
+        self.app.notify(message, severity="error", markup=False)
 
     def _refresh_selection(self) -> None:
         if self._query:
@@ -137,7 +176,7 @@ class MapView(VerticalScroll):
         try:
             hits = self._services.map_search(query)
         except Exception as error:
-            self.app.call_from_thread(self.app.notify, str(error), severity="error")
+            self.app.call_from_thread(self._failed, error)
             return
         self.app.call_from_thread(self.show_hits, hits)
 
@@ -163,7 +202,7 @@ class MapView(VerticalScroll):
         try:
             details = self._services.map_file(path)
         except Exception as error:
-            self.app.call_from_thread(self.app.notify, str(error), severity="error")
+            self.app.call_from_thread(self._failed, error)
             return
         self.app.call_from_thread(self.show_file, path, details)
 

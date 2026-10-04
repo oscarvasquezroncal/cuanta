@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from cuanta.domain.detection import Detection
+from cuanta.domain.detection import Detection, ForgeState
 
 FORGE_PHASES = ("0", "0.5", "1", "2A", "2B", "2.5", "3", "4", "5", "6")
 STATE_VERSION = "0.3"
@@ -151,6 +151,10 @@ def handoff_state(detection: Detection, started_at: str, graph_mode: str) -> For
         phases_completed=("0", "0.5"),
         producer=PRODUCER,
     )
+
+
+def forge_will_run(state: ForgeState, skip: bool, refresh: bool, resuming: bool) -> bool:
+    return not skip and (state is ForgeState.FRESH or refresh or resuming)
 
 
 def with_graph_mode(state: ForgeRunState, graph_mode: str) -> ForgeRunState:

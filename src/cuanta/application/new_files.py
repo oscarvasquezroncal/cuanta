@@ -22,7 +22,9 @@ class NewFileReview:
         try:
             original = original_of(new_path)
         except ValueError as error:
-            raise DomainFailure(str(error), "pick a file that ends in .new.md") from error
+            raise DomainFailure(
+                str(error), "pick a Forge suggestion from .cuanta/forge-suggested/"
+            ) from error
         new_text = self._workspace.read_text(new_path)
         if new_text is None:
             raise DomainFailure(f"{new_path} no longer exists", "it was resolved already")

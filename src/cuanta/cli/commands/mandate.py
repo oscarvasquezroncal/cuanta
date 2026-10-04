@@ -642,6 +642,7 @@ def run_mandate(
     args, sourced = from_source(args)
     stated = [english(message) for message in (*request_notes, *sourced)]
     container = Container.for_project(session.project, verbose=session.options.verbose)
+    container.progress = session.presenter
     container.use_request_files(request_files(args))
     try:
         options = _options(args)

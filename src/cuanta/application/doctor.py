@@ -5,9 +5,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from cuanta.application.detect import DetectProject, read_forge_state
+from cuanta.application.forge_suggestions import listed, siblings
 from cuanta.application.mandate_template import MandateTemplates
 from cuanta.application.recent_runs import latest_with_requests
 from cuanta.domain.detection import Detection, GraphMode, SizeTier, VerifyTier
+from cuanta.domain.disk_usage import CUANTA_DIR_WARN_BYTES, MEBIBYTE, megabytes, rebuild_helps
 from cuanta.domain.forge_template import (
     MANDATE_TEMPLATE,
     TEMPLATE_FIX,
@@ -15,9 +17,16 @@ from cuanta.domain.forge_template import (
     TemplateState,
     unusable_message,
 )
-from cuanta.domain.forge_verify import check_ceilings, placeholders
+from cuanta.domain.forge_verify import (
+    GATEWAY_FILES,
+    check_ceilings,
+    gateway_findings,
+    placeholders,
+)
+from cuanta.domain.index_rebuild import INDEX_REBUILD
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import Message, english, msg
+from cuanta.domain.new_files import suggested_path
 from cuanta.domain.overhead import (
     HOME_AGENTS_MD,
     agents_md_message,
@@ -151,12 +160,23 @@ def forge_state_check(workspace: Workspace) -> Check:
     return check
 
 
-def cuanta_dir_check(workspace: Workspace) -> Check:
+def cuanta_dir_check(workspace: Workspace, limit_bytes: int = CUANTA_DIR_WARN_BYTES) -> Check:
     def check(_: Detection) -> Sequence[CheckResult]:
         if not workspace.is_dir(".cuanta"):
             return [result(".cuanta", Status.WARN, msg("doctor.absent"), "cuanta init")]
-        size = f"{workspace.size_bytes('.cuanta') / 1_048_576:.1f}"
-        return [result(".cuanta", Status.OK, msg("doctor.cuanta_dir.size", megabytes=size))]
+        usage = workspace.disk_usage(".cuanta")
+        size = megabytes(usage.total_bytes)
+        if usage.total_bytes <= limit_bytes:
+            return [result(".cuanta", Status.OK, msg("doctor.cuanta_dir.size", megabytes=size))]
+        message = msg(
+            "doctor.cuanta_dir.large",
+            megabytes=size,
+            limit=f"{limit_bytes // MEBIBYTE:,}",
+            path=usage.largest,
+            file_megabytes=megabytes(usage.largest_bytes),
+        )
+        fix = INDEX_REBUILD if rebuild_helps(usage, limit_bytes) else ""
+        return [result(".cuanta", Status.WARN, message, fix)]
 
     return check
 
@@ -255,6 +275,64 @@ def rulebook_check(workspace: Workspace) -> Check:
             )
             results.append(result("ceilings", status, finding.message, fix))
         return results
+
+    return check
+
+
+GATEWAY_CHECK = "gateway"
+SUGGESTIONS_CHECK = "suggestions"
+
+
+def gateway_check(workspace: Workspace) -> Check:
+    def check(_: Detection) -> Sequence[CheckResult]:
+        if not workspace.is_dir(".cuanta"):
+            return []
+        texts = {
+            path: text for path in GATEWAY_FILES if (text := workspace.read_text(path)) is not None
+        }
+        if not texts:
+            return []
+        suggested = {
+            path: text
+            for path in texts
+            if (text := workspace.read_text(suggested_path(path))) is not None
+        }
+        gaps = [
+            finding
+            for finding in gateway_findings(texts, suggested, tuple(texts))
+            if finding.status is not Status.OK
+        ]
+        if not gaps:
+            message = msg("doctor.gateway.ok", paths=", ".join(texts))
+            return [result(GATEWAY_CHECK, Status.OK, message)]
+        return [
+            result(
+                GATEWAY_CHECK,
+                Status.WARN,
+                msg("doctor.gateway.gap", problem=finding.message, fix=finding.fix or ""),
+            )
+            for finding in gaps
+        ]
+
+    return check
+
+
+def suggestions_check(workspace: Workspace) -> Check:
+    def check(_: Detection) -> Sequence[CheckResult]:
+        beside = siblings(workspace)
+        if beside:
+            key = (
+                "doctor.suggestions.beside_one" if len(beside) == 1 else "doctor.suggestions.beside"
+            )
+            message = msg(key, count=len(beside), paths=", ".join(beside))
+            return [result(SUGGESTIONS_CHECK, Status.WARN, message)]
+        waiting = listed(workspace)
+        if not waiting:
+            return []
+        key = (
+            "doctor.suggestions.waiting_one" if len(waiting) == 1 else "doctor.suggestions.waiting"
+        )
+        return [result(SUGGESTIONS_CHECK, Status.INFO, msg(key, count=len(waiting)))]
 
     return check
 

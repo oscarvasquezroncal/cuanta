@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from fnmatch import fnmatchcase
+
+from cuanta.domain.messages import english, msg
 
 
 class SizeTier(StrEnum):
@@ -51,6 +55,8 @@ EXCLUDED_DIRS = frozenset(
     }
 )
 EXCLUDED_SUFFIX_DIRS = (".egg-info",)
+ENVIRONMENT_MARKERS = frozenset({"pyvenv.cfg", "conda-meta"})
+KNOWLEDGE_FILES = frozenset({"CLAUDE.md", "AGENTS.md"})
 EXCLUDED_FILES = frozenset({"package-lock.json", "poetry.lock", "go.sum"})
 EXCLUDED_FILE_SUFFIXES = (".lock", ".min.js", ".min.css", ".bundle.js", ".min.mjs")
 
@@ -110,6 +116,24 @@ def is_excluded_dir(name: str, extra: frozenset[str] = frozenset()) -> bool:
     return name in EXCLUDED_DIRS or name in extra or name.endswith(EXCLUDED_SUFFIX_DIRS)
 
 
+def environment_dir(names: Iterable[str]) -> bool:
+    return any(name in ENVIRONMENT_MARKERS for name in names)
+
+
+def config_exclusions(values: Iterable[str]) -> frozenset[str]:
+    cleaned = (value.strip().replace("\\", "/").rstrip("/").lower() for value in values)
+    return frozenset(value for value in cleaned if value)
+
+
+def excluded_by_config(relative: str, exclusions: frozenset[str]) -> bool:
+    if not exclusions:
+        return False
+    lowered = relative.lower()
+    return any(part in exclusions for part in lowered.split("/")) or any(
+        fnmatchcase(lowered, pattern) for pattern in exclusions
+    )
+
+
 def is_source_file(name: str) -> bool:
     lowered = name.lower()
     if lowered in EXCLUDED_FILES or lowered.endswith(EXCLUDED_FILE_SUFFIXES):
@@ -134,6 +158,7 @@ def docs_state(root_claude_md: bool, nested_claude_md: int) -> DocsState:
     return DocsState.EXISTS if nested_claude_md > 0 else DocsState.PARTIAL
 
 
+REFRESH_FORGE = "cuanta init --refresh-forge"
 FORGE_AGENT_NAMES = frozenset({"architecture-analyst.md", "docs-updater.md", "tester.md"})
 FORGE_ARTIFACTS = ("AGENTS_GUIDE.md", "docs/MANDATE_TEMPLATE.md")
 
@@ -263,12 +288,19 @@ def stack_line(stack: Stack) -> str:
     return line if stack.verified else f"{line} [UNVERIFIED]"
 
 
-def summary_lines(detection: Detection, unicode: bool = True) -> tuple[tuple[str, str], ...]:
+def summary_lines(
+    detection: Detection, unicode: bool = True, forge_runs: bool = True
+) -> tuple[tuple[str, str], ...]:
     arrow = "→" if unicode else "->"
     dash = "—" if unicode else "-"
     forge = f"FORGE_STATE={detection.forge_state}"
     if detection.forge_state is ForgeState.INITIALIZED:
-        forge = f"{forge} {dash} running refresh semantics"
+        route = (
+            "running refresh semantics"
+            if forge_runs
+            else english(msg("forge.kept", command=REFRESH_FORGE))
+        )
+        forge = f"{forge} {dash} {route}"
     engines = " · " if unicode else ", "
     engine_text = engines.join(
         f"{engine.name} {engine.version or 'present'}" for engine in detection.engines

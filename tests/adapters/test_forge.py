@@ -15,7 +15,7 @@ from cuanta.adapters.forge.assets import (
     vendored_version,
     verify_manifest,
 )
-from cuanta.adapters.forge.installer import ForgeInstaller, sibling_new
+from cuanta.adapters.forge.installer import ForgeInstaller
 from cuanta.domain.engine import (
     AssistantText,
     EngineRequest,
@@ -24,7 +24,14 @@ from cuanta.domain.engine import (
     ToolCall,
     phase_markers,
 )
-from cuanta.domain.forge_verify import ForgeTree, check_ceilings, placeholders, verify_tree
+from cuanta.domain.forge_verify import (
+    ForgeTree,
+    check_ceilings,
+    passed,
+    placeholders,
+    verify_tree,
+)
+from cuanta.domain.messages import english
 from cuanta.domain.progress import Status
 from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner
@@ -69,7 +76,7 @@ def test_prompts() -> None:
     assert strip_frontmatter("plain") == "plain"
 
 
-def test_installer_never_overwrites(tmp_path: Path) -> None:
+def test_installer_suggests_instead_of_writing_beside(tmp_path: Path) -> None:
     installer = ForgeInstaller(tmp_path)
     first = installer.install()
     assert len(first.written) == len(REQUIRED_SKILL_FILES) + len(COMMANDS)
@@ -77,10 +84,40 @@ def test_installer_never_overwrites(tmp_path: Path) -> None:
     assert again.written == [] and again.new_files == []
     tuned = tmp_path / ".claude" / "commands" / "init-agents.md"
     tuned.write_text("my tuned command", encoding="utf-8")
+    suggestion = tmp_path / ".cuanta" / "forge-suggested" / "claude" / "commands" / "init-agents.md"
+    planned = installer.install(dry_run=True)
+    assert planned.new_files == [str(suggestion)]
+    assert not suggestion.exists()
     third = installer.install()
-    assert third.new_files == [str(tuned.with_name("init-agents.new.md"))]
+    assert third.new_files == [str(suggestion)]
     assert tuned.read_text(encoding="utf-8") == "my tuned command"
-    assert sibling_new(Path("x/SKILL.md")).name == "SKILL.new.md"
+    assert suggestion.read_text(encoding="utf-8") == (
+        FORGE / "commands" / "init-agents.md"
+    ).read_text(encoding="utf-8")
+    beside = [path for path in (tmp_path / ".claude").rglob("*") if ".new" in path.name]
+    assert beside == []
+
+
+def test_installer_missing_only_never_writes_siblings(tmp_path: Path) -> None:
+    installer = ForgeInstaller(tmp_path)
+    tuned = tmp_path / ".claude" / "commands" / "init-agents.md"
+    tuned.parent.mkdir(parents=True)
+    tuned.write_text("my tuned command", encoding="utf-8")
+    planned = installer.install(dry_run=True, missing_only=True)
+    assert str(tuned) in planned.unchanged
+    assert planned.new_files == []
+    assert len(planned.written) == len(REQUIRED_SKILL_FILES) + len(COMMANDS) - 1
+    assert not (tmp_path / ".claude" / "skills").exists()
+    report = installer.install(missing_only=True)
+    assert report.new_files == []
+    assert str(tuned) in report.unchanged
+    assert tuned.read_text(encoding="utf-8") == "my tuned command"
+    assert not tuned.with_name("init-agents.new.md").exists()
+    assert len(report.written) == len(REQUIRED_SKILL_FILES) + len(COMMANDS) - 1
+    again = installer.install(missing_only=True)
+    assert again.written == [] and again.new_files == []
+    siblings = [path for path in (tmp_path / ".claude").rglob("*") if ".new." in path.name]
+    assert siblings == []
 
 
 def test_installer_dry_run_writes_nothing(tmp_path: Path) -> None:
@@ -130,9 +167,12 @@ def test_prompts_ask_for_staging_outside_protected_claude_dir() -> None:
     assert refresh_prompt().endswith(STAGING_LINE)
     assert ".cuanta/forge-out/claude/forge-state.json" in STAGING_LINE
     assert "forge-out/.claude" not in STAGING_LINE
+    assert "never as <name>.new.md" in STAGING_LINE
+    assert ".cuanta/forge-suggested/" in STAGING_LINE
+    assert "applying the .new.md policy" not in STAGING_LINE
 
 
-def test_promote_staged_applies_new_md_policy(tmp_path: Path) -> None:
+def test_promote_staged_suggests_instead_of_writing_beside(tmp_path: Path) -> None:
     from cuanta.adapters.system.workspace import LocalWorkspace
     from cuanta.application.forge import promote_staged
 
@@ -141,18 +181,39 @@ def test_promote_staged_applies_new_md_policy(tmp_path: Path) -> None:
     (staged / "agents" / "tester.md").write_text("new tester", encoding="utf-8")
     (staged / "agents" / "docs-updater.md").write_text("same", encoding="utf-8")
     (staged / "agents" / "python-senior.md").write_text("fresh", encoding="utf-8")
+    (staged / "agents" / "architecture-analyst.new.md").write_text("analyst v2", encoding="utf-8")
+    (staged / "agents" / "backend-senior.new.md").write_text("senior", encoding="utf-8")
     (staged / "forge-state.json").write_text('{"phases_completed": ["0"]}', encoding="utf-8")
     (tmp_path / ".cuanta" / "forge-out" / "stray.md").write_text("x", encoding="utf-8")
     agents = tmp_path / ".claude" / "agents"
     agents.mkdir(parents=True)
     (agents / "tester.md").write_text("tuned by hand", encoding="utf-8")
     (agents / "docs-updater.md").write_text("same", encoding="utf-8")
+    (agents / "architecture-analyst.md").write_text("my analyst", encoding="utf-8")
     (tmp_path / ".claude" / "forge-state.json").write_text("{}", encoding="utf-8")
     promoted, kept = promote_staged(LocalWorkspace(tmp_path))
-    assert sorted(promoted) == [".claude/agents/python-senior.md", ".claude/forge-state.json"]
-    assert kept == [".claude/agents/tester.new.md"]
+    assert sorted(promoted) == [
+        ".claude/agents/backend-senior.md",
+        ".claude/agents/python-senior.md",
+        ".claude/forge-state.json",
+    ]
+    suggested = tmp_path / ".cuanta" / "forge-suggested" / "claude" / "agents"
+    assert sorted(kept) == [
+        ".cuanta/forge-suggested/claude/agents/architecture-analyst.md",
+        ".cuanta/forge-suggested/claude/agents/tester.md",
+    ]
     assert (agents / "tester.md").read_text(encoding="utf-8") == "tuned by hand"
-    assert (agents / "tester.new.md").read_text(encoding="utf-8") == "new tester"
+    assert (agents / "architecture-analyst.md").read_text(encoding="utf-8") == "my analyst"
+    assert (suggested / "tester.md").read_text(encoding="utf-8") == "new tester"
+    assert (suggested / "architecture-analyst.md").read_text(encoding="utf-8") == "analyst v2"
+    assert (agents / "backend-senior.md").read_text(encoding="utf-8") == "senior"
+    assert sorted(path.name for path in agents.iterdir()) == [
+        "architecture-analyst.md",
+        "backend-senior.md",
+        "docs-updater.md",
+        "python-senior.md",
+        "tester.md",
+    ]
     assert "phases_completed" in (tmp_path / ".claude" / "forge-state.json").read_text(
         encoding="utf-8"
     )
@@ -168,7 +229,6 @@ def test_harness_heading_is_case_insensitive() -> None:
         per_directory={},
         graph_wired=True,
         phases_completed=(),
-        new_files=(),
     )
     findings = verify_tree(tree, {})
     assert not any("§Harness" in finding.text for finding in findings)
@@ -290,10 +350,6 @@ def test_missing_flags_capability_check() -> None:
 
 def test_forge_verify_rules() -> None:
     assert placeholders({"a.md": "x {{PROJECT_NAME}} y"}) == ("a.md:{{PROJECT_NAME}}",)
-    over = "\n".join(["x"] * 301)
-    assert check_ceilings(over, {})[0].status is Status.FAIL
-    assert check_ceilings("# t\n⚠ Over ceiling: 301/300\n" + over, {})[0].status is Status.WARN
-    assert check_ceilings("ok", {"src/CLAUDE.md": "\n".join(["y"] * 41)})[1].status is Status.FAIL
     tree = ForgeTree(
         texts={"CLAUDE.md": "rules"},
         agent_names=("tester.md",),
@@ -301,12 +357,27 @@ def test_forge_verify_rules() -> None:
         per_directory={},
         graph_wired=False,
         phases_completed=("0",),
-        new_files=("docs/x.new.md",),
     )
     findings = verify_tree(tree, {})
     statuses = [finding.status for finding in findings]
     assert Status.FAIL in statuses
-    assert any("kept yours" in finding.text for finding in findings)
+    assert not any("kept yours" in finding.text for finding in findings)
+
+
+def test_a_rulebook_over_its_ceiling_warns_with_its_fix() -> None:
+    over = "\n".join(["x"] * 301)
+    root = check_ceilings(over, {})[0]
+    assert (root.status, root.text) == (Status.WARN, "CLAUDE.md 301/300 lines, no warning")
+    assert root.fix is not None
+    assert "Over ceiling" in english(root.fix)
+    flagged = check_ceilings("# t\n⚠ Over ceiling: 301/300\n" + over, {})[0]
+    assert (flagged.status, flagged.fix) == (Status.WARN, None)
+    nested = check_ceilings("ok", {"src/CLAUDE.md": "\n".join(["y"] * 41)})[1]
+    assert nested.status is Status.WARN
+    assert nested.fix is not None
+    assert "src/CLAUDE.md" in english(nested.fix)
+    assert passed([root, flagged, nested])
+    assert check_ceilings(None, {})[0].status is Status.FAIL
 
 
 def test_forge_progress_ignores_phase_markers_that_go_backwards() -> None:

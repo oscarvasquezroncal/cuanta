@@ -10,6 +10,8 @@ import pytest
 from cuanta.adapters.engines.claude_code import ClaudeCodeEngine
 from cuanta.adapters.engines.codex import CodexEngine
 from cuanta.adapters.engines.opencode import OpenCodeEngine
+from cuanta.adapters.forge.installer import VendoredForgeKit
+from cuanta.adapters.graph.index_graph import LocalIndexGraph
 from cuanta.adapters.instinct.heuristic import HeuristicInstinct
 from cuanta.adapters.instinct.jev import KEY_ENV, JevInstinct
 from cuanta.adapters.instinct.llm import LlmInstinct
@@ -17,6 +19,8 @@ from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest, RunR
 from cuanta.domain.instinct import SCOPES, Choice, Noul
 from cuanta.domain.models import ModelEntry
 from cuanta.ports.engine import Engine
+from cuanta.ports.forge import ForgeKit
+from cuanta.ports.graph import GraphResult, GraphScheduler
 from cuanta.ports.instinct import Instinct
 from cuanta.ports.models import ModelCatalog
 from tests.fakes import FakeRunner, FakeStream
@@ -229,3 +233,14 @@ def test_queue_store_contract(tmp_path: Path) -> None:
     assert store.claim()
     store.release()
     assert store.lock_file()
+
+
+def test_init_ports_schedule_the_graph_and_install_only_missing_forge_files(
+    tmp_path: Path,
+) -> None:
+    scheduler: GraphScheduler = LocalIndexGraph(tmp_path, FakeRunner())
+    assert scheduler.schedule_update() == GraphResult(False, "graphify not on PATH")
+    kit: ForgeKit = VendoredForgeKit(tmp_path)
+    planned = kit.install(dry_run=True, missing_only=True)
+    assert planned.written and planned.new_files == ()
+    assert not (tmp_path / ".claude").exists()

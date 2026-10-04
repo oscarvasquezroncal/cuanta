@@ -61,6 +61,10 @@ def plan_graph(size: SizeTier, mode: GraphMode, evidence: str) -> GraphPlan:
     return GraphPlan(GraphBranch.INSTALL, msg("graph.install", size=size.value))
 
 
+def graph_in_background(forge_runs: bool, branch: GraphBranch) -> bool:
+    return not forge_runs and branch in {GraphBranch.UPDATE, GraphBranch.INSTALL}
+
+
 def matches_graph_server(candidates: Iterable[str]) -> str | None:
     for candidate in candidates:
         lowered = candidate.lower()

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import unicodedata
+from bisect import bisect_left
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 SIGNATURE = b"DIRC"
@@ -26,6 +29,33 @@ class IndexEntry:
 
     def matches(self, size: int, mtime_ns: int) -> bool:
         return self.size == size & SIZE_MASK and self.mtime_ns == mtime_ns
+
+
+def _tracked_key(path: str, ignorecase: bool) -> str:
+    text = path if path.isascii() else unicodedata.normalize("NFC", path)
+    return text.casefold() if ignorecase else text
+
+
+@dataclass(frozen=True, slots=True)
+class TrackedByGit:
+    paths: tuple[str, ...] = ()
+    members: frozenset[str] = frozenset()
+    ignorecase: bool = False
+
+    def holds(self, path: str) -> bool:
+        return bool(self.members) and _tracked_key(path, self.ignorecase) in self.members
+
+    def has_under(self, folder: str) -> bool:
+        if not self.paths:
+            return False
+        prefix = _tracked_key(folder, self.ignorecase).rstrip("/") + "/"
+        found = bisect_left(self.paths, prefix)
+        return found < len(self.paths) and self.paths[found].startswith(prefix)
+
+
+def tracked_by_git(paths: Iterable[str], ignorecase: bool = False) -> TrackedByGit:
+    keys = sorted({_tracked_key(path, ignorecase) for path in paths})
+    return TrackedByGit(tuple(keys), frozenset(keys), ignorecase)
 
 
 def blob_id(data: bytes) -> str:

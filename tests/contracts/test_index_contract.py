@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+import stat
+import sys
+import time
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
@@ -8,9 +12,29 @@ from typing import cast
 
 import pytest
 
+from cuanta.adapters.storage import sqlite_index
 from cuanta.adapters.storage.sqlite_index import SqliteIndex
 from cuanta.domain.code_index import INDEX_TABLES, INDEX_VERSION, IndexedFile, IndexRow, IndexTable
+from cuanta.domain.errors import ExitCode
+from cuanta.domain.index_rebuild import IndexBusy, IndexReadOnly, IndexRecoveryBusy
 from cuanta.ports.code_index import CodeIndex
+
+LEFTOVERS = {
+    "index.db.rebuild-0123456789abcdef0123456789abcdef.bak": 1_048_576,
+    "index.db.rebuild-0123456789abcdef0123456789abcdef.bak-journal": 512,
+    "index.db.corrupt-fedcba9876543210fedcba9876543210.bak": 2048,
+    "index.db.new-00112233445566778899aabbccddeeff": 4096,
+}
+BUSY = ".cuanta/index.db is open in another process, so it was not rebuilt; the index is unchanged"
+HOLD = "index.db.hold"
+READ_ONLY = ".cuanta/index.db is read-only, so it was not rebuilt; the index is unchanged"
+RECOVERY_BUSY = (
+    ".cuanta/index.db must be recreated (it is damaged or from another version) but is open in"
+    " another process, so it was left as it was"
+)
+RECOVERY_BUSY_FIX = (
+    "finish or stop the cuanta run that uses it (its index tools keep it open), then try again"
+)
 
 
 def _file(path: str = "src/a.py", content_hash: str = "hash-a") -> IndexedFile:
@@ -19,6 +43,42 @@ def _file(path: str = "src/a.py", content_hash: str = "hash-a") -> IndexedFile:
 
 def _record(identifier: str = "A", path: str = "src/a.py") -> IndexRow:
     return IndexRow(identifier, path, "hash-a", "ast", "def run", 2, 5, "src/b.py", "calls", 0.8)
+
+
+def _bloated(path: Path) -> tuple[IndexRow, ...]:
+    kept = (
+        IndexRow(
+            "note:kept", "src/a.py", "hash-a", "agent-note:hash-a", "keep me", 2, 3, "anchor:x"
+        ),
+        IndexRow(
+            "summary:kept",
+            "src/a.py",
+            "hash-a",
+            "economy-summary:model",
+            "a paid summary",
+            target="anchor:hash-a",
+            relation="summary",
+        ),
+    )
+    derived = IndexRow("finding:f", "src/a.py", "hash-a", "run-report:R#d", "from a report", 2, 2)
+    history = IndexRow("history:h", "src/a.py", "hash-a", "ledger:R", "{}", relation="edit")
+    with closing(SqliteIndex(path)) as index:
+        index.replace_files([_file()], [])
+        index.put_rows(
+            "symbols",
+            [
+                IndexRow(f"symbol:{number}", "src/a.py", "hash-a", "ast", "x" * 1024, 1, 1)
+                for number in range(2000)
+            ],
+        )
+        index.put_rows("notes", [*kept, derived])
+        index.put_rows("history", [history])
+        index.replace_files([_file(content_hash="hash-b")], [])
+    return kept
+
+
+def _names(directory: Path) -> list[str]:
+    return sorted(item.name for item in directory.iterdir() if item.name != HOLD)
 
 
 def test_all_index_records_roundtrip_and_order_deterministically(tmp_path: Path) -> None:
@@ -196,22 +256,344 @@ def test_incompatible_schema_is_preserved_and_recovered(
     assert len(backups) == 1 and backups[0].read_bytes() == original
 
 
-def test_rebuild_preserves_old_index_and_does_not_touch_ledger(tmp_path: Path) -> None:
+def _incompatible(path: Path) -> bytes:
+    _bloated(path)
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("UPDATE meta SET value = '999' WHERE key = 'schema_version'")
+        connection.commit()
+    return path.read_bytes()
+
+
+def test_a_held_index_that_needs_recovery_is_refused_and_left_as_it_was(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    before = _incompatible(path)
+    attempts: list[str] = []
+
+    def held(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        attempts.append(os.fspath(source))
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(sqlite_index, "SWAP_RETRY_S", 0.2)
+    monkeypatch.setattr(os, "rename", held)
+    with pytest.raises(IndexRecoveryBusy) as refused:
+        SqliteIndex(path)
+    assert refused.value.exit_code is ExitCode.ENVIRONMENT
+    assert refused.value.message == RECOVERY_BUSY
+    assert refused.value.hint == RECOVERY_BUSY_FIX
+    assert len(attempts) > 1 and set(attempts) == {os.fspath(path)}
+    assert path.read_bytes() == before
+    assert _names(directory) == ["index.db"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows cannot rename an open database")
+def test_an_open_connection_blocks_the_recovery_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = tmp_path / "index.db"
-    ledger = tmp_path / "ledger.db"
-    ledger.write_bytes(b"ledger")
-    with closing(SqliteIndex(path)) as index:
-        index.replace_files([_file()], [])
-    original = path.read_bytes()
+    before = _incompatible(path)
+    monkeypatch.setattr(sqlite_index, "SWAP_RETRY_S", 0.3)
+    with closing(sqlite3.connect(path)) as holder:
+        holder.execute("SELECT count(*) FROM files").fetchone()
+        with pytest.raises(IndexRecoveryBusy, match="open in another process"):
+            SqliteIndex(path)
+    assert path.read_bytes() == before
+    with closing(SqliteIndex(path)) as recovered:
+        assert recovered.recovered
+
+
+def test_rebuild_recreates_the_file_reclaims_its_space_and_keeps_agent_notes(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    kept = _bloated(path)
+    bloated = path.stat().st_size
+    for name, size in LEFTOVERS.items():
+        (directory / name).write_bytes(b"\0" * size)
+    (directory / "ledger.db").write_bytes(b"ledger")
+    (directory / "config.toml").write_text("[detect]\n", encoding="utf-8")
     with closing(SqliteIndex(path, rebuild=True)) as rebuilt:
+        assert _names(directory) == ["config.toml", "index.db", "ledger.db"]
+        assert path.stat().st_size * 10 < bloated
+        assert rebuilt.reclaimed_bytes == bloated + sum(LEFTOVERS.values()) - path.stat().st_size
         assert rebuilt.files() == ()
         assert not rebuilt.recovered
-    backups = list(tmp_path.glob("index.db.rebuild-*.bak"))
-    assert len(backups) == 1 and backups[0].read_bytes() == original
-    assert ledger.read_bytes() == b"ledger"
+        assert {row.id: row for row in rebuilt.rows("notes")} == {
+            row.id: replace(row, stale=True) for row in kept
+        }
+        assert rebuilt.rows("history") == ()
+        assert rebuilt.rows("symbols") == ()
+    assert (directory / "ledger.db").read_bytes() == b"ledger"
+    with closing(SqliteIndex(path)) as reopened:
+        assert not reopened.recovered
+        assert reopened.reclaimed_bytes == 0
+        assert len(reopened.rows("notes")) == 2
     path.unlink()
-    with closing(SqliteIndex(path)) as recreated:
+    with closing(SqliteIndex(path, rebuild=True)) as recreated:
         assert recreated.files() == ()
+        assert recreated.reclaimed_bytes == 0
+
+
+def test_rebuild_of_an_unreadable_index_carries_nothing_and_keeps_no_backup(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "index.db"
+    path.write_bytes(b"not a sqlite database\x00" * 100)
+    with closing(SqliteIndex(path, rebuild=True)) as rebuilt:
+        assert _names(tmp_path) == ["index.db"]
+        assert rebuilt.rows("notes") == ()
+        assert not rebuilt.recovered
+        assert rebuilt.reclaimed_bytes == max(0, 2200 - path.stat().st_size) == 0
+
+
+def test_rebuild_carries_the_notes_a_recovery_kept_only_in_its_backup(tmp_path: Path) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    kept = _bloated(path)
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("UPDATE meta SET value = '999' WHERE key = 'schema_version'")
+        connection.commit()
+    newer = replace(kept[0], text="kept after the recovery")
+    with closing(SqliteIndex(path)) as recovered:
+        assert recovered.recovered
+        assert recovered.rows("notes") == ()
+        recovered.put_rows("notes", [newer])
+    assert len(list(directory.glob("index.db.corrupt-*.bak"))) == 1
+    with closing(SqliteIndex(path, rebuild=True)) as rebuilt:
+        notes = {row.id: row.text for row in rebuilt.rows("notes")}
+    assert notes == {kept[0].id: "kept after the recovery", kept[1].id: kept[1].text}
+    assert list(directory.glob("index.db.corrupt-*")) == []
+
+
+def test_rebuild_drops_carried_rows_the_index_would_reject(tmp_path: Path) -> None:
+    path = tmp_path / "index.db"
+    kept = _bloated(path)
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executemany(
+            "INSERT INTO notes VALUES "
+            "(?, ?, 'hash-a', 'agent-note:x', 'n', ?, ?, '', 'note', 1, 0)",
+            [("note:backwards", "src/a.py", 5, 2), ("note:outside", "../outside.py", 0, 0)],
+        )
+        connection.commit()
+    with closing(SqliteIndex(path, rebuild=True)) as rebuilt:
+        assert {row.id for row in rebuilt.rows("notes")} == {row.id for row in kept}
+
+
+def test_rebuild_of_notes_it_cannot_decode_carries_nothing(tmp_path: Path) -> None:
+    path = tmp_path / "index.db"
+    _bloated(path)
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute(
+            "INSERT INTO notes VALUES ('note:binary', 'src/a.py', 'hash-a', 'agent-note:x', "
+            "CAST(x'ff' AS TEXT), 0, 0, '', 'note', 1, 0)"
+        )
+        connection.commit()
+    with closing(SqliteIndex(path, rebuild=True)) as rebuilt:
+        assert rebuilt.rows("notes") == ()
+        assert rebuilt.reclaimed_bytes > 0
+    assert _names(tmp_path) == ["index.db"]
+
+
+def test_a_held_index_is_refused_and_left_as_it_was(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    _bloated(path)
+    leftover = directory / "index.db.corrupt-fedcba9876543210fedcba9876543210.bak"
+    leftover.write_bytes(b"an earlier recovery")
+    before = path.read_bytes()
+    attempts: list[str] = []
+
+    def held(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        attempts.append(os.fspath(destination))
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(sqlite_index, "SWAP_RETRY_S", 0.2)
+    monkeypatch.setattr(os, "replace", held)
+    with pytest.raises(IndexBusy) as refused:
+        SqliteIndex(path, rebuild=True)
+    assert refused.value.exit_code is ExitCode.ENVIRONMENT
+    assert refused.value.message == BUSY
+    assert refused.value.hint.endswith("then run cuanta index --rebuild again")
+    assert len(attempts) > 1 and set(attempts) == {os.fspath(path)}
+    assert path.read_bytes() == before
+    assert _names(directory) == ["index.db", leftover.name]
+
+
+def test_a_locked_index_is_refused_instead_of_dropping_its_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    _bloated(path)
+    swapped: list[str] = []
+
+    def recorded(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        swapped.append(os.fspath(destination))
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(sqlite_index, "CARRY_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(sqlite_index, "SWAP_RETRY_S", 0.1)
+    monkeypatch.setattr(os, "replace", recorded)
+    with closing(sqlite3.connect(path, isolation_level=None)) as holder:
+        holder.execute("BEGIN EXCLUSIVE")
+        with pytest.raises(IndexBusy, match="open in another process"):
+            SqliteIndex(path, rebuild=True)
+        holder.execute("ROLLBACK")
+    assert swapped == []
+    assert _names(directory) == ["index.db"]
+    with closing(SqliteIndex(path)) as index:
+        assert len(index.rows("notes")) == 3
+
+
+def test_a_read_only_index_is_named_as_read_only_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    _bloated(path)
+    before = path.read_bytes()
+    attempts: list[str] = []
+
+    def refused(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        attempts.append(os.fspath(destination))
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(os, "replace", refused)
+    os.chmod(path, stat.S_IREAD)
+    try:
+        with pytest.raises(IndexReadOnly) as caught:
+            SqliteIndex(path, rebuild=True)
+    finally:
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+    assert caught.value.exit_code is ExitCode.ENVIRONMENT
+    assert caught.value.message == READ_ONLY
+    assert caught.value.hint == (
+        "make it writable (clear its read-only attribute), then run cuanta index --rebuild again"
+    )
+    assert attempts == [os.fspath(path)]
+    assert path.read_bytes() == before
+    assert _names(directory) == ["index.db"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="POSIX replaces a read-only file")
+def test_a_read_only_index_is_refused_without_waiting_on_windows(tmp_path: Path) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    _bloated(path)
+    os.chmod(path, stat.S_IREAD)
+    started = time.monotonic()
+    try:
+        with pytest.raises(IndexReadOnly, match="read-only"):
+            SqliteIndex(path, rebuild=True)
+    finally:
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+    assert time.monotonic() - started < sqlite_index.SWAP_RETRY_S
+    assert _names(directory) == ["index.db"]
+
+
+def test_a_writer_holding_the_index_delays_the_rebuild_only_briefly(tmp_path: Path) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    _bloated(path)
+    with closing(sqlite3.connect(path, isolation_level=None)) as holder:
+        holder.execute("BEGIN EXCLUSIVE")
+        started = time.monotonic()
+        with pytest.raises(IndexBusy, match="open in another process"):
+            SqliteIndex(path, rebuild=True)
+        elapsed = time.monotonic() - started
+        holder.execute("ROLLBACK")
+    assert elapsed < 10
+    with closing(SqliteIndex(path)) as index:
+        assert len(index.rows("notes")) == 3
+
+
+def test_a_brief_lock_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "index.db"
+    _bloated(path)
+    swap = os.replace
+    attempts: list[str] = []
+
+    def brief(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        attempts.append(os.fspath(destination))
+        if len(attempts) < 3:
+            raise PermissionError(13, "Access is denied")
+        swap(source, destination)
+
+    monkeypatch.setattr(os, "replace", brief)
+    with closing(SqliteIndex(path, rebuild=True)) as rebuilt:
+        assert rebuilt.files() == ()
+        assert len(rebuilt.rows("notes")) == 2
+    assert len(attempts) == 3
+    assert _names(tmp_path) == ["index.db"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows cannot replace an open database")
+def test_an_open_connection_blocks_the_rebuild_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    _bloated(path)
+    before = path.read_bytes()
+    monkeypatch.setattr(sqlite_index, "SWAP_RETRY_S", 0.3)
+    with closing(sqlite3.connect(path)) as holder:
+        holder.execute("SELECT count(*) FROM files").fetchone()
+        with pytest.raises(IndexBusy, match="open in another process"):
+            SqliteIndex(path, rebuild=True)
+    assert path.read_bytes() == before
+    assert _names(directory) == ["index.db"]
+    with closing(SqliteIndex(path, rebuild=True)) as rebuilt:
+        assert rebuilt.files() == ()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX replaces an open database")
+def test_an_open_connection_keeps_reading_the_old_file_on_posix(tmp_path: Path) -> None:
+    path = tmp_path / "index.db"
+    _bloated(path)
+    with closing(sqlite3.connect(path)) as holder:
+        holder.execute("SELECT count(*) FROM files").fetchone()
+        with closing(SqliteIndex(path, rebuild=True)) as rebuilt:
+            assert rebuilt.files() == ()
+        assert holder.execute("SELECT count(*) FROM files").fetchone() == (1,)
+    assert _names(tmp_path) == ["index.db"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows refuses the replace itself")
+def test_an_open_index_blocks_the_rebuild_on_posix_and_keeps_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / ".cuanta"
+    directory.mkdir()
+    path = directory / "index.db"
+    _bloated(path)
+    inode = path.stat().st_ino
+    monkeypatch.setattr(sqlite_index, "SWAP_RETRY_S", 0.3)
+    with closing(SqliteIndex(path)) as server, closing(SqliteIndex(path)) as other:
+        with pytest.raises(IndexBusy, match="open in another process"):
+            SqliteIndex(path, rebuild=True)
+        assert path.stat().st_ino == inode
+        server.set_meta({"knowledge_version": "1"})
+        other.put_rows("notes", [_record("note:after")])
+        assert len(server.rows("notes")) == 4
+    assert (directory / HOLD).is_file()
+    assert _names(directory) == ["index.db"]
+    with closing(SqliteIndex(path, rebuild=True)) as rebuilt:
+        assert rebuilt.files() == ()
+        assert path.stat().st_ino != inode
 
 
 def test_file_normalization_duplicate_paths_and_schema_version_guard(tmp_path: Path) -> None:

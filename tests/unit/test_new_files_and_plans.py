@@ -8,7 +8,14 @@ from cuanta.adapters.system.workspace import LocalWorkspace
 from cuanta.adapters.telemetry.config_editors import Backups, ClaudeSettingsWiring
 from cuanta.application.new_files import NewFileReview
 from cuanta.domain.errors import DomainFailure
-from cuanta.domain.new_files import Change, original_of, side_by_side
+from cuanta.domain.new_files import (
+    Change,
+    line_delta,
+    original_of,
+    sibling_original,
+    side_by_side,
+    suggested_path,
+)
 from cuanta.tui.views.loop import parse_iterations
 from cuanta.tui.views.settings import parse_exclusions, parse_port
 
@@ -20,6 +27,13 @@ from cuanta.tui.views.settings import parse_exclusions, parse_port
         ("CLAUDE.new.md", "CLAUDE.md"),
         ("docs/config.new.toml", "docs/config.toml"),
         ("scripts/run.new", "scripts/run"),
+        (".cuanta/forge-suggested/claude/agents/tester.md", ".claude/agents/tester.md"),
+        (
+            ".cuanta/forge-suggested/claude/commands/init-agents.md",
+            ".claude/commands/init-agents.md",
+        ),
+        (".cuanta/forge-suggested/docs/LOOP.md", "docs/LOOP.md"),
+        (".cuanta/forge-suggested/claude/agents/tester.new.md", ".claude/agents/tester.md"),
     ],
 )
 def test_original_of_reverses_the_new_naming(new: str, original: str) -> None:
@@ -27,8 +41,38 @@ def test_original_of_reverses_the_new_naming(new: str, original: str) -> None:
 
 
 def test_original_of_rejects_plain_files() -> None:
-    with pytest.raises(ValueError, match=r"not a \.new file"):
+    with pytest.raises(ValueError, match="not a Forge suggestion"):
         original_of("docs/readme.md")
+    assert sibling_original("docs/readme.md") is None
+    assert sibling_original(".claude/agents/.new") is None
+    assert sibling_original(".claude/agents/renew.md") is None
+
+
+@pytest.mark.parametrize(
+    ("original", "suggested"),
+    [
+        (".claude/agents/tester.md", ".cuanta/forge-suggested/claude/agents/tester.md"),
+        (
+            ".claude/skills/agent-system-init/SKILL.md",
+            ".cuanta/forge-suggested/claude/skills/agent-system-init/SKILL.md",
+        ),
+        ("docs/LOOP.md", ".cuanta/forge-suggested/docs/LOOP.md"),
+        ("CLAUDE.md", ".cuanta/forge-suggested/CLAUDE.md"),
+    ],
+)
+def test_a_suggestion_mirrors_its_original_outside_any_claude_folder(
+    original: str, suggested: str
+) -> None:
+    assert suggested_path(original) == suggested
+    assert ".claude" not in suggested_path(original).split("/")
+    assert original_of(suggested_path(original)) == original
+
+
+def test_line_delta_counts_added_and_removed_lines() -> None:
+    assert line_delta("a\nb\n", "a\nB\nc\n") == (2, 1)
+    assert line_delta("a\r\nb\r\n", "a\nb\n") == (0, 0)
+    assert line_delta("", "a\nb\n") == (2, 0)
+    assert line_delta("a\nb\n", "") == (0, 2)
 
 
 def test_side_by_side_marks_each_change() -> None:
@@ -58,6 +102,23 @@ def test_review_keeps_mine_or_uses_new(tmp_path: Path) -> None:
     assert not workspace.exists("CLAUDE.new.md")
     with pytest.raises(DomainFailure, match="no longer exists"):
         review.load("CLAUDE.new.md")
+
+
+def test_review_resolves_a_forge_suggestion_against_your_agent(tmp_path: Path) -> None:
+    workspace = LocalWorkspace(tmp_path)
+    suggestion = ".cuanta/forge-suggested/claude/agents/tester.md"
+    workspace.write_text(".claude/agents/tester.md", "mine\n")
+    workspace.write_text(suggestion, "forge\n")
+    review = NewFileReview(workspace)
+    assert review.load(suggestion).original_path == ".claude/agents/tester.md"
+    assert review.use_new(suggestion) == ".claude/agents/tester.md"
+    assert workspace.read_text(".claude/agents/tester.md") == "forge\n"
+    assert not workspace.exists(suggestion)
+    workspace.write_text(suggestion, "forge again\n")
+    assert review.keep_mine(suggestion) == ".claude/agents/tester.md"
+    assert workspace.read_text(".claude/agents/tester.md") == "forge\n"
+    assert not workspace.exists(suggestion)
+    assert not workspace.exists(".claude/agents/tester.new.md")
 
 
 def test_wiring_plan_names_the_file_and_backup(tmp_path: Path) -> None:

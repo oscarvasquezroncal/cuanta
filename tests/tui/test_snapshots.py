@@ -406,7 +406,7 @@ def test_diff_screen(snap_compare: SnapCompare, theme: str) -> None:
     async def diff(pilot: Pilot[None]) -> None:
         await init_finished(pilot)
         view = pilot.app.query_one(InitView)
-        view.post_message(InitView.OpenNewFile(".claude/agents/tester.new.md"))
+        view.post_message(InitView.OpenNewFile(".cuanta/forge-suggested/claude/agents/tester.md"))
         for _ in range(200):
             screen = pilot.app.screen
             if isinstance(screen, DiffScreen) and screen.pair is not None:

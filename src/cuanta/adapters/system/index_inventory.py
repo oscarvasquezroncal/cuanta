@@ -3,11 +3,20 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
-from fnmatch import fnmatchcase
-from pathlib import Path
+from collections.abc import Callable, Sequence
+from functools import partial
+from pathlib import Path, PurePath, PurePosixPath
 
+from cuanta.adapters.system.git_files import GitView, load_git_view, walk_visible
+from cuanta.adapters.system.platform import home_dir
 from cuanta.domain.code_index import IndexedFile, index_path
-from cuanta.domain.detection import is_excluded_dir, is_source_file
+from cuanta.domain.detection import (
+    KNOWLEDGE_FILES,
+    config_exclusions,
+    excluded_by_config,
+    is_excluded_dir,
+    is_source_file,
+)
 
 _EXCLUDED = frozenset(
     {
@@ -86,7 +95,7 @@ def _linked(path: Path) -> bool:
     )
 
 
-def _relevant(path: Path) -> bool:
+def _relevant(path: PurePath) -> bool:
     name = path.name.lower()
     if name.startswith(".env") or path.stem.lower() in _SECRET_NAMES:
         return False
@@ -100,16 +109,25 @@ def _relevant(path: Path) -> bool:
 
 
 class LocalIndexInventory:
-    def __init__(self, root: Path, exclusions: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        root: Path,
+        exclusions: frozenset[str] = frozenset(),
+        view: Callable[[], GitView] | None = None,
+    ) -> None:
         self._root = root.resolve()
-        self._exclusions = frozenset(value.replace("\\", "/").lower() for value in exclusions)
+        self._exclusions = config_exclusions(exclusions)
+        self._view = view or partial(load_git_view, self._root, home_dir(), os.environ)
 
     def _excluded(self, relative: str) -> bool:
-        lowered = relative.lower()
         return any(
-            is_excluded_dir(part, _EXCLUDED) or part in self._exclusions
-            for part in Path(lowered).parts
-        ) or any(fnmatchcase(lowered, pattern) for pattern in self._exclusions)
+            is_excluded_dir(part, _EXCLUDED) for part in relative.lower().split("/")
+        ) or excluded_by_config(relative, self._exclusions)
+
+    def _skipped(self, name: str, relative: str) -> bool:
+        return is_excluded_dir(name.lower(), _EXCLUDED) or excluded_by_config(
+            relative, self._exclusions
+        )
 
     def _path(self, relative: str) -> Path:
         normalized = index_path(relative)
@@ -137,46 +155,42 @@ class LocalIndexInventory:
             return None
         return None if b"\x00" in payload else payload
 
-    def candidates(self) -> tuple[IndexedFile, ...]:
+    def paths(self) -> tuple[str, ...]:
+        found: list[str] = []
+        for item in walk_visible(self._root, self._view(), self._skipped):
+            if item.ignored and item.entry.name not in KNOWLEDGE_FILES:
+                continue
+            if _relevant(PurePosixPath(item.path)) and not self._excluded(item.path):
+                found.append(item.path)
+        return tuple(sorted(found))
+
+    def tracked_folders(self, folders: Sequence[str]) -> frozenset[str]:
+        tracked = self._view().tracked
+        return frozenset(name for name in folders if tracked.holds(name) or tracked.has_under(name))
+
+    def candidates(self, paths: Sequence[str] | None = None) -> tuple[IndexedFile, ...]:
         result: list[IndexedFile] = []
-        for folder, directories, files in os.walk(self._root, followlinks=False):
-            base = Path(folder)
-            kept: list[str] = []
-            for name in sorted(directories):
-                path = base / name
-                relative = path.relative_to(self._root).as_posix()
-                try:
-                    if not self._excluded(relative) and not _linked(path):
-                        kept.append(name)
-                except OSError:
-                    continue
-            directories[:] = kept
-            for name in sorted(files):
-                path = base / name
-                relative_path = path.relative_to(self._root)
-                if not _relevant(relative_path):
-                    continue
-                normalized = relative_path.as_posix()
-                try:
-                    payload = self._bytes(normalized)
-                except (OSError, ValueError):
-                    continue
-                if payload is None:
-                    continue
-                suffix = path.suffix.lower()
-                result.append(
-                    IndexedFile(
-                        normalized,
-                        hashlib.sha256(payload).hexdigest(),
-                        _LANGUAGES.get(suffix, suffix.lstrip(".") or "text"),
-                        len(payload),
-                    )
+        for normalized in self.paths() if paths is None else paths:
+            try:
+                payload = self._bytes(normalized)
+            except (OSError, ValueError):
+                continue
+            if payload is None:
+                continue
+            suffix = PurePosixPath(normalized).suffix.lower()
+            result.append(
+                IndexedFile(
+                    normalized,
+                    hashlib.sha256(payload).hexdigest(),
+                    _LANGUAGES.get(suffix, suffix.lstrip(".") or "text"),
+                    len(payload),
                 )
+            )
         return tuple(sorted(result, key=lambda item: item.path))
 
     def read(self, path: str) -> str | None:
         normalized = index_path(path)
-        if not _relevant(Path(normalized)):
+        if not _relevant(PurePosixPath(normalized)):
             self._path(normalized)
             return None
         payload = self._bytes(normalized)

@@ -64,6 +64,7 @@ class IndexStatus:
     content_hash: str = ""
     coverage_by_kind: tuple[tuple[str, int], ...] = ()
     history_status: str = ""
+    reclaimed_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)

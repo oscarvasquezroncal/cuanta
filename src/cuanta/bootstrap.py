@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from cuanta.adapters.forge.installer import VendoredForgeKit
     from cuanta.adapters.storage.capsule_store import FileCapsuleStore
     from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
+    from cuanta.adapters.system.git_files import GitView
     from cuanta.application.affected import AffectedGateway
     from cuanta.application.assistant import Improvement, PromptAssistant
     from cuanta.application.bench import Attempt, BenchResult, BenchRunner
@@ -109,6 +110,7 @@ if TYPE_CHECKING:
     from cuanta.application.models import ModelService, ProbeOutcome
     from cuanta.application.new_files import NewFileReview
     from cuanta.application.outcomes import RunOutcomes
+    from cuanta.application.progress import SlowSteps
     from cuanta.application.queue import MandateQueue
     from cuanta.application.refresh import RefreshProject
     from cuanta.application.results import ResultQuery
@@ -127,7 +129,7 @@ if TYPE_CHECKING:
     from cuanta.domain.bench import BenchTask, Condition, PlannedRun, ProofRecord
     from cuanta.domain.bench_proof import Arm
     from cuanta.domain.change_plan import ChangePlan
-    from cuanta.domain.code_index import IndexRow
+    from cuanta.domain.code_index import IndexRow, IndexStatus
     from cuanta.domain.engine import EngineEvent
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.governor_report import BlockedCalls
@@ -181,6 +183,8 @@ class Container:
     _pack_cache: dict[str, ContextPack] = field(default_factory=dict, repr=False)
     _fast_ready: dict[str, bool] = field(default_factory=dict, repr=False)
     _issued: list[str] = field(default_factory=list, repr=False)
+    progress: ProgressSink | None = field(default=None, repr=False)
+    _index_reported: bool = field(default=False, init=False, repr=False)
 
     @classmethod
     def for_project(cls, project: Path, verbose: bool = False) -> Container:
@@ -212,7 +216,12 @@ class Container:
         return ""
 
     def workspace(self) -> LocalWorkspace:
-        return LocalWorkspace(self.project)
+        return LocalWorkspace(self.project, self.state_project(), self.home)
+
+    def git_view(self) -> GitView:
+        from cuanta.adapters.system.git_files import load_git_view
+
+        return load_git_view(self.state_project(), self.home, os.environ)
 
     def use_request_files(self, paths: Sequence[Path]) -> None:
         root = self.project.resolve()
@@ -232,10 +241,19 @@ class Container:
         from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
         from cuanta.adapters.system.index_inventory import LocalIndexInventory
         from cuanta.adapters.system.index_knowledge import LocalIndexKnowledge
-        from cuanta.application.code_index import IndexService
+        from cuanta.application.code_index import IndexService, indexable_paths
+        from cuanta.domain.messages import msg
+        from cuanta.domain.progress import INDEX_STEP, file_count
 
-        index = SqliteIndex(self.project / ".cuanta" / "index.db", rebuild=rebuild)
-        inventory = LocalIndexInventory(self.project, frozenset(self.config.exclusions))
+        database = self.project / ".cuanta" / "index.db"
+        inventory = LocalIndexInventory(
+            self.project, frozenset(self.config.exclusions), self.git_view
+        )
+        if rebuild or not database.exists():
+            with self.slow_steps().step(INDEX_STEP, msg("progress.index")) as done:
+                paths = indexable_paths(inventory, self.config.exclusions)
+                done(file_count(len(paths)))
+        index = SqliteIndex(database, rebuild=rebuild)
         ledger = None
         state = self.state_project()
         ledger_path = graph_path(state, ".cuanta/ledger.db")
@@ -293,6 +311,8 @@ class Container:
             knowledge=LocalIndexKnowledge(self.project, self.state_project(), ledger),
             verify_commands=commands,
             close_knowledge=ledger.close if ledger else None,
+            exclusions=self.config.exclusions,
+            reclaimed=lambda: index.reclaimed_bytes,
         )
 
     def refresh_index(self) -> None:
@@ -300,9 +320,26 @@ class Container:
             return
         service = self.index_service()
         try:
-            service.update()
+            self.indexed(service)
         finally:
             service.close()
+
+    def slow_steps(self) -> SlowSteps:
+        from cuanta.application.progress import SlowSteps
+
+        return SlowSteps(self.progress)
+
+    def indexed(self, service: IndexService) -> IndexStatus:
+        from cuanta.domain.messages import msg
+        from cuanta.domain.progress import INDEX_STEP, file_count
+
+        if self._index_reported:
+            return service.update()
+        self._index_reported = True
+        with self.slow_steps().step(INDEX_STEP, msg("progress.index")) as done:
+            status = service.update()
+            done(file_count(status.files))
+        return status
 
     def index_reader(self) -> IndexRead:
         from cuanta.application.index_read import IndexRead
@@ -323,6 +360,7 @@ class Container:
         from cuanta.application.index_learning import IndexLearning
         from cuanta.application.run_reports import RunReports
         from cuanta.domain.index_facts import revalidate_fact
+        from cuanta.domain.index_limit import IndexTooLarge
 
         state = self.state_project()
         path = graph_path(state, ".cuanta/ledger.db")
@@ -368,7 +406,7 @@ class Container:
                 IndexLearning(service, self.state_workspace()).run(run_id, notes, report_ids)
             finally:
                 service.close()
-        except (OSError, ValueError, sqlite3.Error) as error:
+        except (OSError, ValueError, sqlite3.Error, IndexTooLarge) as error:
             if not known:
                 return
             reports = RunReports(self.state_workspace())
@@ -382,14 +420,16 @@ class Container:
 
         excluded = frozenset(self.request_files)
         if not self.config.index_enabled:
-            inventory = LocalIndexInventory(self.project, frozenset(self.config.exclusions))
+            inventory = LocalIndexInventory(
+                self.project, frozenset(self.config.exclusions), self.git_view
+            )
             candidates = inventory.candidates()
             return compile_change_plan(
                 request, candidates, (), (), (), (), (), (), excluded=excluded
             )
         reader = self.index_reader()
         try:
-            reader.update()
+            self.indexed(reader.service)
             return IndexChangePlan(reader.service.index, self.clock.now_iso, excluded).compile(
                 request
             )
@@ -407,7 +447,7 @@ class Container:
 
         reader = self.index_reader()
         try:
-            reader.update()
+            self.indexed(reader.service)
             return IndexContextPack(
                 reader, self._pack_cache, frozenset(self.request_files)
             ).compile(request, depth, role, plan)
@@ -485,7 +525,7 @@ class Container:
         return self.state_root or self.project
 
     def state_workspace(self) -> LocalWorkspace:
-        return LocalWorkspace(self.state_project())
+        return LocalWorkspace(self.state_project(), home=self.home)
 
     def sandbox_container(
         self, copy_root: Path, env: tuple[tuple[str, str], ...] = ()
@@ -519,8 +559,10 @@ class Container:
         budget_usd: float | None = None,
     ) -> InitProject:
         from cuanta.adapters.graph.graphify import GraphifyTool
+        from cuanta.adapters.graph.index_graph import LocalIndexGraph
         from cuanta.application.forge import ForgeStage, VerifyStage
         from cuanta.application.init_project import GraphStage, HandoffWriter, InitProject
+        from cuanta.application.mandate_template import MandateTemplates
         from cuanta.application.telemetry import TelemetryStage
 
         workspace = self.workspace()
@@ -535,7 +577,9 @@ class Container:
         return InitProject(
             workspace=workspace,
             detector=self.detector(),
-            graph_stage=GraphStage(workspace, GraphifyTool(self.runner)),
+            graph_stage=GraphStage(
+                workspace, GraphifyTool(self.runner), LocalIndexGraph(self.project, self.runner)
+            ),
             handoff=HandoffWriter(workspace, self.clock),
             progress=progress,
             telemetry_stage=TelemetryStage(self.telemetry(), telemetry_consent),
@@ -546,9 +590,11 @@ class Container:
                 str(self.project),
                 workspace,
                 self.config.budget_usd if budget_usd is None else budget_usd,
+                templates=MandateTemplates(workspace, kit),
             ),
             verify_stage=VerifyStage(workspace, self.ledger, self.clock),
             run_id_factory=self.new_run_id,
+            monotonic=self.clock.monotonic,
         )
 
     def refresh_project(self, progress: ProgressSink) -> RefreshProject:
@@ -1465,7 +1511,9 @@ class Container:
         from cuanta.application.forecast import plan_sizes
 
         if not self.config.index_enabled:
-            inventory = LocalIndexInventory(self.project, frozenset(self.config.exclusions))
+            inventory = LocalIndexInventory(
+                self.project, frozenset(self.config.exclusions), self.git_view
+            )
             return plan_sizes(plan, inventory.candidates())
         path = self.project / ".cuanta" / "index.db"
         if not path.is_file():
@@ -2230,6 +2278,7 @@ class Container:
             default_variant=self.config.implementation_variant,
             implementation_tools=self.config.implementation_tools,
             fast_ready=self.fast_ready,
+            steps=self.slow_steps(),
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -2788,6 +2837,8 @@ class Container:
                     (self.cuanta_dir() / "ledger.db").is_file,
                 ),
                 doctor.rulebook_check(workspace),
+                doctor.gateway_check(workspace),
+                doctor.suggestions_check(workspace),
                 doctor.listener_check(self.listener()),
                 doctor.telemetry_check(lambda: self.telemetry().status().engines),
                 doctor.terminal_check(self.terminal_report),

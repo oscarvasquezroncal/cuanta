@@ -107,7 +107,9 @@ class TestsView(Vertical):
 
     def _failed(self, error: str, hint: str) -> None:
         self._reset_button()
-        self.app.notify(self._t("tests.failed", error=error, hint=hint), severity="error")
+        self.app.notify(
+            self._t("tests.failed", error=error, hint=hint), severity="error", markup=False
+        )
 
     def _finished(self, summary: TestsSummary) -> None:
         self._reset_button()

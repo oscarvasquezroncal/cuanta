@@ -28,7 +28,7 @@ from cuanta.domain.change_plan import ChangePlan, apply_overrides, move_plan, pa
 from cuanta.domain.claude_variants import VARIANTS, resolve_variant
 from cuanta.domain.depth import DEFAULT_DEPTH, DEPTHS, parse_depth, profile
 from cuanta.domain.drafts import Draft
-from cuanta.domain.errors import DomainFailure
+from cuanta.domain.errors import CuantaError, DomainFailure
 from cuanta.domain.guarantees import (
     Guarantee,
     GuaranteeStatus,
@@ -1046,7 +1046,7 @@ class MandateWizard(Vertical):
         try:
             plan = self._services.change_plan(request)
         except Exception as error:
-            self._call(self.app.notify, str(error), severity="error")
+            self._call(self._failed, error)
             return
         self._call(self.show_change_plan, plan, request, revision)
 
@@ -1376,6 +1376,14 @@ class MandateWizard(Vertical):
         with suppress(RuntimeError):
             self.app.call_from_thread(callback, *args, **kwargs)
 
+    def _failed(self, error: Exception, key: str = "mandate.failure_failed") -> None:
+        message = (
+            self._t(key, error=str(error), hint=error.hint)
+            if isinstance(error, CuantaError) and error.hint
+            else str(error)
+        )
+        self.app.notify(message, severity="error", markup=False)
+
     @work(thread=True, exclusive=True, group="understand", exit_on_error=False)
     def understand(self) -> None:
         told = self._told(self.story)
@@ -1559,7 +1567,7 @@ class MandateWizard(Vertical):
             advice = self._services.team_advice(request.type)
             view = self._services.models_view(False)
         except Exception as error:
-            self._call(self.app.notify, str(error), severity="error")
+            self._call(self._failed, error)
             return
         models: dict[str, tuple[ModelEntry, ...]] = {}
         for entry in view.entries:
@@ -2189,7 +2197,7 @@ class MandateWizard(Vertical):
                 self.request(), 0, self.decided(self.options())
             )
         except Exception as error:
-            self._call(self.app.notify, str(error), severity="error")
+            self._call(self._failed, error, "mandate.preview_failed")
             return
         self._call(self.show_preview, preview)
 

@@ -71,6 +71,29 @@ def test_claude_routes_write_an_agents_file(tmp_path: Path) -> None:
     assert planned["main"] == ("orchestrator", "claude-sonnet-5")
 
 
+def test_a_new_md_file_never_replaces_your_agent(tmp_path: Path) -> None:
+    agents = tmp_path / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    for name in ("architecture-analyst", "python-senior", "tester", "docs-updater"):
+        (agents / f"{name}.md").write_text(AGENT.format(name=name), encoding="utf-8")
+    suggested = AGENT.format(name="tester").replace("Body of tester.", "Suggested tester.")
+    (agents / "tester.new.md").write_text(suggested, encoding="utf-8")
+    lone = AGENT.format(name="helper").replace("Body of helper.", "Only helper.")
+    (agents / "helper.new.md").write_text(lone, encoding="utf-8")
+    service = routing(tmp_path, {})
+    names = sorted(definition.name for definition in service.definitions())
+    assert names == [
+        "architecture-analyst",
+        "docs-updater",
+        "helper",
+        "python-senior",
+        "tester",
+    ]
+    applied = service.apply(REQUEST, RouteOptions(mode="fixed"), "claude")
+    written = json.loads(Path(applied.agents_file).read_text(encoding="utf-8"))
+    assert written["tester"]["prompt"] == "Body of tester."
+
+
 def test_the_claude_team_agents_file_takes_each_role_model_from_the_defaults(
     tmp_path: Path,
 ) -> None:
