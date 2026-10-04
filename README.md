@@ -180,6 +180,30 @@ states `WHAT:`/`QUÉ:` or is longer than 1,200 characters. The app
 proposes the type from the title for you to confirm, while the console runs a file without a
 `TYPE:` as a feature on the balanced team, with a Note.
 
+The console follows `[ui] language = "es"` or `"en"` in `.cuanta/config.toml`; `--lang es`
+overrides it for one command. Before a run, the short launch card names the request type and
+scope, the team or single model, the forecast, whether docs run and why, and the effective limits.
+Limits are off by default. To opt in for one run:
+
+```bash
+cuanta run mandato.md --lang es --max-budget-usd 5 --max-turns 80 --max-wall 45
+```
+
+The app's **Limits / Límites** switch enables the same controls. Persistent values belong in
+`[limits]` as `budget_usd`, `max_turns` and `wall_min`; an explicit command-line `0` removes that
+limit for this run. `--depth` chooses effort, model tiers and read budget. Limits depend on the
+engine: Claude enforces its spend and turn caps; Codex's spend control is an estimate and it has
+no native turn cap. A requested wall limit stops the run and is shared across team roles. Fast
+implementation also has repair-round and repair-time rails; repair time counts repair work,
+not the whole mandate. See [Teams](docs/TEAMS.md#reading-a-run) for the stop reasons.
+
+During a run, a status line shows elapsed time, streamed tokens, the active role, and the last
+tool and file, at most twice per second (`--plain`: once per minute). Results lead with status,
+stop reason, cost and tokens (labelled partial when interrupted), changed files and roles that
+ran. Use `--verbose` or `cuanta spectrum RUN_ID` for engine guarantees, route audits and context
+pack details. In the app, open **Details / Detalles** on Result. Failures say what happened, why,
+and what to do; tracebacks stay in `.cuanta/logs/YYYY-MM-DD.log` unless `--verbose` is set.
+
 > [!NOTE]
 > The first `cuanta init` runs Forge through your engine to write the rulebook and agents. On 100–260-file projects it cost about $1.5–2.5 in our runs. On a project Forge already initialized, init runs no model unless `--refresh-forge`. `--dry-run` shows the plan first, and `--skip-forge` skips it.
 >
@@ -202,7 +226,7 @@ flowchart LR
 ```
 
 1. **Intake.** A deterministic extractor pulls questions, error lines, file mentions and out-of-scope phrases from your text, at zero tokens. Instinct classifies the task type, the depth and what's missing, in one batched call.
-2. **Mandate.** cuanta fills your project's mandate template, picks the shape (single context or pipeline), plans a model tier per role and shows the engine's spend guarantees. You can preview the exact prompt and command before launching.
+2. **Mandate.** cuanta fills your project's mandate template, picks the shape (single context or pipeline), plans a model tier per role and shows the effective limits. Engine guarantees are available with `--verbose`. You can preview the exact prompt and command before launching.
 3. **Lean launch.** The engine CLI runs headless:
    - on Claude Code, with lean settings, per-agent models (`--agents`) for pipelines, effort (`--effort`) and the analyst's instructions (`--append-system-prompt`) for single investigations;
    - on Codex, with one model and an explicit read-only or workspace-write sandbox;

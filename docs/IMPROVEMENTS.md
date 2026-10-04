@@ -48,4 +48,7 @@ come from the M0 verification pass.
 - [ ] IMP-027 — only the mandate preparation and `cuanta index` report slow index steps (`map`, the index MCP tools, post-run learning and summaries do not), and a dry run still makes several index updates and inventory walks (no preparation-scoped memo) — src/cuanta/bootstrap.py, src/cuanta/application/code_index.py — found 2026-10-03 in H3 — severity: low
 - [ ] IMP-028 — a first build or rebuild whose inventory preflight and parsing both take over two seconds can show two index progress steps; combine their elapsed time without delaying the ceiling refusal — src/cuanta/bootstrap.py — found 2026-10-04 in H3 — severity: low
 
+- [ ] IMP-029 — cache the read-only console Catalog per Session instead of loading its TOML on each catalog property access — src/cuanta/cli/runtime.py — found 2026-10-04 in H4 — severity: low
+- [ ] IMP-030 — give the three-line FailureScreen dialog the centered layout of the existing confirmation dialogs — src/cuanta/tui/screens/failure.py, src/cuanta/tui/cuanta.tcss — found 2026-10-04 in H4 — severity: low
+
 ## Deferred

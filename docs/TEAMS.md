@@ -5,6 +5,68 @@ A pipeline mandate runs as a team of roles: analyst, senior, tester and docs, or
 provider, Claude or GPT (Codex), and each role can use a different, current model from that
 provider. Teams that mix providers were retired after the unpublished 0.4.0 development version; see [Retired: mixed teams](#retired-mixed-teams).
 
+## Reading a run
+
+Put a long request, its numbered phases, documentation work and `path:line` anchors in a UTF-8
+file. The full file enters the mandate; avoid pasting it into Windows cmd's `--what`.
+
+```bash
+cuanta run mandato.md --lang es
+cuanta mandate --from mandato.md --profile balanced --pure -m claude-opus-5-5 -v ultracode
+cuanta run mandato.md --dry-run
+```
+
+In the app, open **Mandates / Mandatos**, enter the file path in **Load file / Cargar archivo**
+on the Tell step and load it (or press Next with the story empty). Confirm the inferred type,
+then the team, model, variant and Pure choices. A documentation phase in the file participates
+in the automatic docs decision; `--docs on` forces it on from the console.
+
+The launch card has six rows: request type, scope (a shortened preview; the actual request stays
+whole), team or single model, forecast, docs with its reason, and limits. A forecast without
+prices or history says so. `--verbose` adds engine guarantees, model routes and diagnostic notes.
+The console uses `ui.language` in `.cuanta/config.toml`, with `--lang` taking precedence; the app
+uses the same es/en catalogs.
+
+No spend cap, turn cap or wall limit applies until configured. For one run:
+
+```bash
+cuanta run mandato.md --max-budget-usd 5 --max-turns 80 --max-wall 45
+```
+
+For persistent limits:
+
+```toml
+[limits]
+budget_usd = 5.0
+max_turns = 80
+wall_min = 45.0
+```
+
+Turn on **Limits / Límites** in the app to edit them. An explicit `0` on the command line removes
+that limit for the run. `[runs] limits = "depth"` restores depth-based spend and turn caps,
+without adding a wall limit; depth alone changes effort, tiers and read budget. The card shows
+what the selected engine can apply: native Claude spend and turn caps, estimated Codex spend,
+and a cuanta wall timer shared by the roles. Unsupported turn limits are described in verbose
+engine guarantees.
+
+A run can finish because the agent finished, because the user stopped it, because the engine
+ended without a result, or because a selected spend, turn or wall limit stopped it. Fast
+implementation also stops further repairs at its round count or repair-time window. That
+window counts time inside repair rounds and lets the current round finish. These repair rails
+do not impose a fifteen-minute limit on an ordinary balanced mandate.
+
+The live line shows elapsed time, received tokens, active role, last tool and last file. It
+updates at most twice per second; plain output prints at most once per minute. Tokens are from
+the stream, not a prediction. The result begins with status and the stop reason, cost and tokens
+(partial for an early stop), changed files, then one row per role that ran. Technical detail
+stays in Spectrum and `--verbose`; Result in the app puts it under **Details / Detalles**.
+An unexplained model change still appears in the short result. The app keeps its role cards and
+Stop button. Cosmetic doctor findings do not send Home to rerun Forge.
+
+Every failure has three logical lines: what happened, why, what now. The console keeps Michi's
+hiss box and the app uses the same form. Daily logs hold tracebacks; listener tracebacks also
+remain in the listener log. Only `--verbose` echoes tracebacks to the console.
+
 ## Choosing the provider
 
 The provider is the engine the mandate runs on. Claude is the default.

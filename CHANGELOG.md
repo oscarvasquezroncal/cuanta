@@ -7,6 +7,14 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Added
+- **Readable runs in both languages.** Console runs follow `ui.language` and global `--lang`.
+  A six-row launch card and a short result lead with scope, effective limits, stop reason,
+  partial accounting and executed roles. Engine guarantees, context-pack details and route
+  audits are available with `--verbose` and Spectrum. A live line shows streamed tokens,
+  elapsed time, role and the last tool/file at most twice per second (plain: once per minute).
+  The app shares the live line, folds technical Result rows under Details/Detalles, and
+  shows the same three-line failures. Unexpected errors name a daily, redacted traceback log;
+  listener tracebacks are copied into that daily log too.
 - **A mandate from a file.** `cuanta mandate --from FILE` (`-f`; also `cuanta queue add -f`) reads
   the whole mandate from a file. The file is split into fields only when, outside code fences, it
   has a `TYPE:` line naming a known type, a `WHAT:`/`QUÉ:` label, a `WHY:`/`EVIDENCE:`/`POR QUÉ:`/

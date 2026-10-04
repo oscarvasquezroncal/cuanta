@@ -136,3 +136,14 @@ copy roots normalize to the same logical paths. Missing pipeline reports, includ
 unknown shapes, retain heuristic v1: useful tool tokens divided by total API tokens. Both
 versions display their formula. Missing read/report observations remain unavailable.
 
+
+## Run presentation
+
+Global `--lang en|es` overrides `ui.language` for a console command or app launch. A console run
+has a short launch card and result by default. `--verbose` (`-V`) reveals engine guarantees,
+route audits, scope hints and evidence-pack details; Spectrum retains their saved evidence.
+The live line refreshes at most twice per second, or once per minute with `--plain`.
+Errors have three logical lines and name `.cuanta/logs/YYYY-MM-DD.log`. Tracebacks are logged
+in both modes and echoed only with `--verbose`; listener logs keep their existing files and
+also copy tracebacks into the daily log. `--json` retains one final document on stdout;
+progress, launch rows and live states go to stderr.

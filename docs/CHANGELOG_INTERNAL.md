@@ -17,6 +17,12 @@ and rejected. What does NOT belong here: rules (`CLAUDE.md`), external facts
 
 ---
 
+## 2026-10-04 — H4: readable runs
+- Shipped: shared es/en console catalogs and global language override, short launch/result output, streamed live status for native and per-role runs including isolated copies, Result details fold, common three-line failures and daily traceback logs. JSON retains a single final document. Known route differences remain technical detail; unexplained model changes stay visible.
+- Why: the real-run result exposed internal diagnostics, interrupted the session with a traceback and obscured partial accounting and the stop reason.
+- Tried and rejected: emitting the launch as an empty JSON document (regression test keeps the final result on stdout); repeating forecast notes after the launch card; one result row for every senior agent instead of aggregating its role.
+- Rule extracted: none. Local milestone evidence and the deferred H5 boundary stay under `.cuanta/`.
+
 ## 2026-10-03 — H3: index and init, fast, honest and visible
 - Shipped: the inventory, detection and snapshots honor `.gitignore`, `.git/info/exclude`, the global excludes and `.git/index` read as files (tracked files stay; virtualenvs found by `pyvenv.cfg` or `conda-meta`); a 20,000-file ceiling that stops before reading and prints the `[detect]` lines to paste; slow-step progress (`index · N files · T s`, `plan`, `forecast`) past two seconds; `index --rebuild` writing a new database and reclaiming space; a doctor size row for `.cuanta`; init that keeps an initialized Forge with no model, a background graph update, stage times and a total; `.cuanta/forge-suggested/` instead of `.new.md` siblings; gateway and ceiling gaps as warnings.
 - Why: the real run's dry run was silent for 1.5 h (the old inventory read 23,922 candidates in 21.1 s before parsing on a shaped copy; the real tree held tens of thousands of virtualenv and checkout files), `.cuanta` stayed at 872.6 MB after a rebuild that kept the old index as a backup, and init took 40 minutes running Forge phases although Forge was initialized, then ended "finished with problems" for a missing gateway line and wrote four `.new.md` agents that the native team most likely loaded in place of the user's tuned ones. Measured after: the stop takes 0.62 s on a 23,802-file real-run-shaped tree, 802 files index in 7.2 s once excluded, and an initialized init returns in under a second while the graph updates in the background.
