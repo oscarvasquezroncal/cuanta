@@ -21,3 +21,5 @@ Offline, $0 proof of behavior: unit, contract, architecture, adapter, CLI and TU
 
 ## Local gotchas
 No local gotchas recorded yet — the docs-updater appends here as they are found.
+- `tests/conftest.py` also deletes `XDG_CONFIG_HOME`, so git's global excludes come from the
+  isolated `CUANTA_HOME`; write `<home>/.config/git/ignore` or `<home>/.gitconfig` to test them.

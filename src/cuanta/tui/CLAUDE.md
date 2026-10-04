@@ -23,3 +23,5 @@ The Textual app (`cuanta ui`, optionally served on the web via `textual-serve`).
 ## Local gotchas
 - Pilot tests race view mounting: wait for the target screen/view before asserting, never
   assert immediately after navigation [UNVERIFIED: from session history].
+- `app.notify` parses markup, so `[detect]` and other bracketed text vanish from toasts; pass
+  `markup=False` for error text and hints, and test the text with `Toast(note).render().plain`.

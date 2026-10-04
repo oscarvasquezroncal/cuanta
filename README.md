@@ -144,6 +144,7 @@ cuanta doctor              # what's installed, what's missing, one fix per issue
 cuanta spectrum --import   # free: see what your past Claude Code sessions cost
 cuanta init --dry-run      # preview what init will do
 cuanta init                # detect the stack, wire local telemetry (asks first), set up Forge
+                           # (a second init keeps Forge; --refresh-forge runs it again)
 cuanta                     # open the app
 ```
 
@@ -180,7 +181,9 @@ proposes the type from the title for you to confirm, while the console runs a fi
 `TYPE:` as a feature on the balanced team, with a Note.
 
 > [!NOTE]
-> `cuanta init` runs Forge through your engine to write the rulebook and agents. On 100–260-file projects it cost about $1.5–2.5 in our runs. `--dry-run` shows the plan first, and `--skip-forge` skips it.
+> The first `cuanta init` runs Forge through your engine to write the rulebook and agents. On 100–260-file projects it cost about $1.5–2.5 in our runs. On a project Forge already initialized, init runs no model unless `--refresh-forge`. `--dry-run` shows the plan first, and `--skip-forge` skips it.
+>
+> init never writes beside your files: where you already have your own agent, command or skill file and Forge's version differs, cuanta keeps yours and saves Forge's in `.cuanta/forge-suggested/` (`.claude` written as `claude`, so Claude Code never loads it), one line per file with its +/- line count; compare and adopt it in the app's Init view (Use new) or copy it over yours. `.new.md` files an older init left in `.claude/` move there on the next `cuanta init`. If Forge rewrites `CLAUDE.md` (`--refresh-forge`, a fresh project, `cuanta refresh`), cuanta keeps the rewrite, says so with the line counts and saves your previous version in `.cuanta/backups/CLAUDE.md.bak`. This overrides the vendored Forge's `.new.md` policy through cuanta's staging instruction; the vendored text is unchanged, so a generated `AGENTS_GUIDE.md` may still mention `.new.md` files.
 
 ---
 
@@ -294,15 +297,17 @@ The dependency rule is enforced by `tests/architecture/test_layers.py`.
 ## Commands
 
 Use `--help` on any command. Global `--plain` and `--json` control CLI output and `-V`/`--verbose`
-echoes listener tracebacks; `ui` opens the app.
+echoes listener tracebacks; `ui` opens the app. Steps that take more than two seconds (index,
+plan, forecast) show live; `--plain` prints one line for each when it ends, and `--json` streams
+them on stderr with their seconds.
 
 | Command | What it does |
 |---|---|
 | `cuanta` / `cuanta ui` | Open the app. `cuanta ui --web` serves it in the browser; `cuanta ui --lang es\|en` sets the language |
-| `cuanta doctor` (`purr`) | Health check, with one fix per issue; the mandate template counts as part of the Forge install (missing, or present but unusable) |
-| `cuanta init` | Detect, graph, telemetry, Forge, verify. `--dry-run`, `--skip-forge`; `--template` only writes a missing mandate template, without a model |
+| `cuanta doctor` (`purr`) | Health check, with one fix per issue; the mandate template counts as part of the Forge install (missing, or present but unusable); also checks the gateway lines and files an older init left beside yours, and warns when `.cuanta` passes 500 MB and names its largest file |
+| `cuanta init` | Detect, graph, telemetry, Forge, verify. `--dry-run`, `--skip-forge`, `--refresh-forge` (run Forge again on an initialized project), `--skip-graph`; `--template` only writes a missing mandate template, without a model. Each stage prints its time; warnings (missing gateway lines, a rulebook over its ceiling) name their fix and keep exit 0 |
 | `cuanta refresh` | Refresh Forge's knowledge, reindex the graph, report tier drift |
-| `cuanta index [--rebuild] [--status]` | Build a deterministic source, style and documentation index, with symbols, directed imports, freshness and coverage; no model call |
+| `cuanta index [--rebuild] [--status]` | Build a deterministic source, style and documentation index, with symbols, directed imports, freshness and coverage; no model call. Leaves out what `.gitignore` ignores and folders holding `pyvenv.cfg`; stops above 20,000 files naming the folders to exclude; `--rebuild` writes a new database, keeps agent notes and summaries, and reclaims the old one's space |
 | `cuanta find <terms>` / `card <path>` / `impact <path>` / `facts [<path>] [--stale]` | Search with ranking reasons, bounded file cards, connected files and current facts or records awaiting revalidation; local by default |
 | `cuanta index --summaries` | Preview a Claude economy summary batch and its estimate; explicit `--yes` permits the shown capped spend; unchanged hashes reuse the cache |
 | `cuanta plan --for <request>` | Compile Edit, Read only, Protected and Verify sets locally; show confidence and exact writer deny rules without a model call |
@@ -347,6 +352,9 @@ mandate_layout = "guided"   # guided | one_page
 [git]
 workflow = "branches"       # branches | trunk
 
+[detect]
+exclude = ["data", "third_party"]   # what .gitignore does not already leave out
+
 [listener]
 port = 4318
 ```
@@ -385,7 +393,7 @@ The full list lives in [`docs/FLAGS.md`](docs/FLAGS.md).
 - **Local records and engine storage.** cuanta stores reports, snapshots and usage locally. OpenCode's temporary prompt attachment is removed after a run. The official engine CLIs can retain their own sessions, prompts and operational state under their settings; cuanta's ledger policy does not disable that storage or their configured plugins and MCP servers.
 - **Instinct is offline by default.** With Jev, it sends the redacted request text and, only if you enable it, file paths and symbol names. It never sends code, and **See what is sent** shows the exact payload.
 - **Engine-specific read-only behavior.** Codex investigations and analyst roles use an explicit read-only sandbox; editing roles use workspace-write with no extra writable roots or writable temp directories, except that isolated-copy runs add the original project's `.cuanta` folder so tests run inside the copy record into your ledger; cuanta checks `.cuanta/config.toml` and stored isolated-copy results after each such run and blocks applying when they changed. cuanta never requests full-access mode. Claude investigations deny write tools and check file changes afterward; this is not a verified OS filesystem boundary. OpenCode investigations and analyst roles are refused because shell permission rules on the verified version admit write bypasses. See the engine table and contracts for the limits of each guarantee.
-- **Git boundary.** cuanta never runs git in your projects. Codex's repository check is skipped only for temporary copies owned by cuanta, never for ordinary user directories. After an isolated-copy run, `cuanta runs apply` writes the changed files itself and prints the git commands (branch, stage, commit) for you to run.
+- **Git boundary.** cuanta never runs git in your projects; it reads `.gitignore`, `.git/info/exclude`, the global excludes file and `.git/index` as files to leave out what git ignores. Codex's repository check is skipped only for temporary copies owned by cuanta, never for ordinary user directories. After an isolated-copy run, `cuanta runs apply` writes the changed files itself and prints the git commands (branch, stage, commit) for you to run.
 - **Isolated copies.** The copy lives in your temp folder, or another folder on the project's drive, and leaves out `.git`, build caches and cuanta's own state. `node_modules` is shared through hard links, so builds work without writing to your project, but never install packages or edit `node_modules` in the copy: an in-place write reaches your project's files. Runs are told so, Claude runs deny edits there, and a check after the run (after every role in a cross-engine run) stops the run and blocks applying if your `node_modules` changed; restore it with `npm ci`. New files ignored by your `.gitignore` never enter the patch, and edits to ignored files are listed as left out. `.env` files are copied so builds work: `--keep` leaves them in the kept copy, so delete it when you are done. Build outputs ignored by `.gitignore` (such as `target/`, `dist/` or `build/`) are not copied, and for Python projects installed in editable mode `PYTHONPATH` points tests at the copy's sources. Applying refuses any file that changed in your project since the copy. The hand-off warns when a changed file already had your own uncommitted edits, or was not tracked by git, because the commit includes them whole; edits you had already staged are not detected, so review `git diff --cached` before committing.
 
 ---

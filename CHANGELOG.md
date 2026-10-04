@@ -74,6 +74,16 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   and an explicit Fast returns to Auto when the engine leaves Claude or the kind becomes an
   investigation.
 
+- Preparing a mandate shows every step that takes more than two seconds: `index · 854 files · 52 s`
+  (the first index update, wherever it runs), `plan` and `forecast`. The console shows a step live
+  once it passes two seconds; `--plain` prints one line when it ends (`+ index 854 files · 52 s`);
+  `--json` streams `StepStarted`/`StepFinished` records on stderr, and `StepFinished` now carries
+  `seconds`. A dry run is never silent. `cuanta index` and per-role dry runs show the index step,
+  and the app's run screen lists the steps in its feed (`✓ índice · 854 archivos · 52 s`).
+- `cuanta doctor`, Health and Home warn when `.cuanta` is over 500 MB and name its largest file with
+  its size. It offers `cuanta index --rebuild` only when reclaimable index pages or old index
+  backups would bring the total under 500 MB or free at least a quarter of it.
+
 ### Changed
 - **`-V` is the global short for `--verbose` (surprising).** `-v` now means `--variant` on
   `cuanta mandate`, `pounce`, `run`, `feat`, `fix`, `audit` and `queue add`; `cuanta -v doctor` is
@@ -113,6 +123,22 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   non-ASCII local parts, and scalar values under secret-named keys are redacted. A body that is not
   OTLP gets HTTP 400. The background listener's own console output goes to
   `.cuanta/logs/listener.out.log`, rewritten at each start, so `listener.log` rotates on Windows too.
+
+- **init keeps a Forge that is already initialized (surprising).** On a project whose
+  `.claude/forge-state.json` says Forge is initialized, `cuanta init` launches no model: it keeps
+  the forge-state, installs only missing vendored Forge files, writes a missing
+  `docs/MANDATE_TEMPLATE.md` when the four agents exist, and verifies, in seconds instead of about
+  40 minutes. `--refresh-forge` runs Forge again as before. The graph update runs in the background
+  after init returns (in the foreground when Forge runs in the same init), and `--skip-graph` skips
+  it. Every stage prints its time and init prints a total; telemetry that is already wired is not
+  asked again.
+- **init never writes beside your files (surprising).** Forge's version of a file you already have
+  goes to `.cuanta/forge-suggested/` (`.claude` written as `claude`, so Claude Code never loads it)
+  with a one-line +/- summary and a Note on how to adopt it; `.new.md` files an older init left in
+  `.claude/` move there on the next init (identical copies are deleted). Missing gateway
+  instructions in an agent or the mandate template, and a rulebook over its ceiling, are warnings
+  with their fix: init ends `init complete` with a warning count and exits 0, instead of `init
+  finished with problems`.
 
 ### Fixed
 - A run is no longer killed after 15 minutes: `runs.repair_timeout_s` bounds the time spent in
@@ -224,6 +250,29 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   title sets the type), a `#` line after the first line of a short story no longer becomes its what, going Back to
   tell another story no longer stays silently on the Tell step, and after **Fast** the model and
   variant boxes show the fast choices ("By kind of change") instead of the balanced ones.
+- The index, detection and run snapshots leave out what git ignores: `.gitignore` at every level,
+  `.git/info/exclude` and the global excludes file, read as files (cuanta still never runs git).
+  Files git tracks stay. A folder holding `pyvenv.cfg` or `conda-meta` is a virtualenv whatever its
+  name. `[detect] exclude` stays for the rest and means the same thing everywhere. Above 20,000
+  files the index stops before reading anything and prints the five largest folders and the
+  `[detect]` lines to paste. A real project with `.venv312`, `.venv_ci` and an Odoo checkout went
+  from a silent 1.5-hour dry run to a 0.6 s stop, and to 802 files indexed in 7 s once excluded.
+- `cuanta index --rebuild` reclaims space: it writes a new database file, carries agent notes and
+  economy summaries over, swaps it in, deletes the old file and earlier index backups
+  (`index.db.rebuild-*.bak`, `index.db.corrupt-*.bak`, `index.db.new-*`) and reports
+  `reclaimed_bytes`; a rebuild used to keep the whole old index as a backup, so `.cuanta` never
+  shrank. While another process holds the index (on Windows), the rebuild stops with a message and
+  a hint and leaves the index as it was.
+- A dry run on a large project no longer prints nothing until the prompt: the first index build
+  ran silently inside the team-shape check, and `cuanta index --rebuild` was silent for 52 s.
+- init no longer resets a completed `.claude/forge-state.json` to Phases 0 and 0.5, which sent the
+  model through Phases 1 to 6 again and rewrote `CLAUDE.md`; `--skip-forge` no longer resets it
+  either. When Forge does rewrite `CLAUDE.md` (`--refresh-forge`, a fresh project, `cuanta
+  refresh`), init and refresh say so with the line counts and keep your previous version in
+  `.cuanta/backups/CLAUDE.md.bak`.
+- Each kept file is listed once instead of two or three times (console, JSON, app), a `.new.md`
+  agent no longer replaces yours in the agents file of native Claude runs, and `cuanta doctor`
+  reports the gateway lines (the fix in the message) and files an older init left beside yours.
 
 ## [0.5.0] - 2026-10-01
 

@@ -122,6 +122,12 @@ Empty — nothing external was harvested at init (no prior docs existed). Fills 
   deleted file keeps its own mode in `deleted file mode`; `git apply` sets the executable bit on
   POSIX — `tests/unit/test_patch.py` (`test_mode_patches_apply_with_git`, run under WSL Linux) —
   2026-09-26.
+- On Windows (Python 3.12.13, SQLite 3.50.4), while any SQLite connection holds a database file
+  (same process or another), `os.replace` onto it raises `PermissionError` WinError 5 and rename
+  raises WinError 32; both work once the holder closes. Python's sqlite3 raises `OperationalError`
+  without `sqlite_errorname` for text it cannot decode — `tests/contracts/test_index_contract.py`
+  (`test_an_open_connection_blocks_the_rebuild_on_windows`,
+  `test_rebuild_of_notes_it_cannot_decode_carries_nothing`) — 2026-10-03.
 - On Windows, `os.replace` onto a read-only file and `os.unlink` of a read-only file raise
   `PermissionError` until the read-only attribute is cleared —
   `tests/adapters/test_workspace_bytes.py` — 2026-09-26.

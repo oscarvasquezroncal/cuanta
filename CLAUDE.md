@@ -138,6 +138,15 @@ floor. Preserve performance assertions, measured startup work and budgets.
   `docs/MANDATE_TEMPLATE.md` from the vendored Forge copy when the four agents exist, at launch
   after the engine checks; dry runs, the app's preview and isolated copies never write it;
   `cuanta init --template` writes only it.
+- The index stops before reading when more than 20,000 files remain after `.gitignore`, virtualenv
+  markers, the fixed exclusions and `[detect] exclude`, and prints the `[detect]` lines to paste
+  (`domain/index_limit.py`; tests monkeypatch `INDEX_FILE_LIMIT`). Scanners read git's ignore
+  files and `.git/index` directly and never run git; tracked files stay even when ignored.
+- On an initialized project `cuanta init` runs no model unless `--refresh-forge`; its graph update
+  runs in the detached worker unless Forge runs in the same init; `--skip-graph` skips it. init and
+  refresh never write beside your files: Forge's differing versions go to `.cuanta/forge-suggested/`
+  (`.claude` → `claude`), gateway and ceiling gaps warn with their fix and keep exit 0, and a Forge
+  rewrite of `CLAUDE.md` is kept, reported and backed up in `.cuanta/backups/CLAUDE.md.bak`.
 - `cache.ttl_s` is a measured or conservative cache window tied to auth mode, engine version and
   date. Without a saved measurement, show unknown. `cuanta probe cache-ttl` previews without
   spending until `--yes` is supplied.
@@ -163,6 +172,10 @@ floor. Preserve performance assertions, measured startup work and budgets.
   option never receives it, so read `session.options.yes` too.
 - `-V` is the hoisted global `--verbose`; `-v` is `--variant` on mandate-family commands and
   must never go back into `GLOBAL_FLAGS`.
+- Preparation steps are published only past `SLOW_STEP_S` (`domain/progress.py`), and the reveal
+  comes from a timer thread: a `ProgressSink` must accept a publish from another thread (the pretty
+  presenter holds a lock). Only a Container's first index update is a step (`Container.indexed`);
+  tests inject `SlowSteps` with `tests/fakes.py` virtual time instead of sleeping.
 - `cuanta bench` copies each run to the system temp dir, outside this repo, so the cuanta
   `CLAUDE.md` and pytest config never leak into a run. Real benches spend money: run them only
   with an approved budget. Public-repo tasks download pinned tarballs checked by sha256 and are

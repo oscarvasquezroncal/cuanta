@@ -24,3 +24,6 @@ graphify, shells and processes. Each subpackage implements a protocol from `cuan
 
 ## Local gotchas
 No local gotchas recorded yet — the docs-updater appends here as they are found.
+- On Windows SQLite opens files without FILE_SHARE_DELETE: while any connection holds a database,
+  `os.replace`, rename and unlink fail (WinError 5/32). Swap database files with a short retry and a
+  named refusal (`sqlite_index._swap`); never rename an open database.
