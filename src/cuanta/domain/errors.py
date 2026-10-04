@@ -18,6 +18,7 @@ class CuantaError(Exception):
         super().__init__(message)
         self.message = message
         self.hint = hint
+        self.log_path = ""
 
 
 class DomainFailure(CuantaError):

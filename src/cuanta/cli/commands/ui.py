@@ -73,7 +73,7 @@ def launch(
         config = load_config(project)
         from cuanta.tui.i18n import os_locale, resolve_language
 
-        language = resolve_language(lang, config.language, os_locale())
+        language = resolve_language(lang or options.lang, config.language, os_locale())
         chosen = ui_theme(options, theme, config.theme)
         if web:
             from cuanta.tui.web import serve

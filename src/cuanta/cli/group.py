@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 GLOBAL_FLAGS = frozenset({"--plain", "--json", "--no-emoji", "--yes", "-y", "--verbose", "-V"})
-GLOBAL_VALUED = frozenset({"--theme", "--project"})
+GLOBAL_VALUED = frozenset({"--theme", "--project", "--lang"})
 
 
 def hoist_globals(args: list[str]) -> list[str]:

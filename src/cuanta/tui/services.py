@@ -186,6 +186,8 @@ class LoopState:
 
 
 class Services(Protocol):
+    def record_failure(self, error: BaseException) -> str: ...
+
     def result_shown(self, run_id: str) -> None: ...
 
     @property
@@ -378,6 +380,11 @@ class CallbackSink:
 
 
 class ContainerServices:
+    def record_failure(self, error: BaseException) -> str:
+        from cuanta.bootstrap import record_failure
+
+        return record_failure(self._project, error)
+
     def build_warning(self, engine: str) -> Message | None:
         return msg("guarantee.codex_builds") if engine == "codex" and os.name == "nt" else None
 
@@ -556,7 +563,7 @@ class ContainerServices:
         try:
             options, _ = container.shaped_options(request, options)
             if per_role_run(options, request.type, container.config.engine):
-                return self._run_cross(container, request, options, progress)
+                return self._run_cross(container, request, options, progress, observer)
             if options.sandbox:
                 return self._run_sandboxed(
                     container, request, signatures, options, observer, progress
@@ -575,10 +582,11 @@ class ContainerServices:
         request: MandateRequest,
         options: MandateOptions,
         progress: ProgressCallback,
+        observer: EventSink,
     ) -> MandateReport:
         self._starting, self._stop_requested = True, False
         try:
-            report = self._cross(container, request, options, CallbackSink(progress))
+            report = self._cross(container, request, options, CallbackSink(progress), observer)
         finally:
             self._starting = False
         return cross_report(
@@ -592,6 +600,7 @@ class ContainerServices:
         request: MandateRequest,
         options: MandateOptions,
         sink: CallbackSink,
+        observer: EventSink,
     ) -> CrossReport:
         ledger = container.shared_ledger()
         plan = role_plan(container, request, options)
@@ -615,7 +624,7 @@ class ContainerServices:
                 wall_s=limits.wall_s,
             )
             started(pipeline)
-            return pipeline.run(request, plan, sink)
+            return pipeline.run(request, plan, sink, observer)
         isolated = container.run_sandboxed_cross(
             ledger,
             request,
@@ -626,6 +635,7 @@ class ContainerServices:
             options.keep_copy,
             options.depth,
             on_start=started,
+            observer=observer,
             implementation=options,
             wall_s=limits.wall_s,
         )

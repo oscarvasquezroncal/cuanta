@@ -70,6 +70,7 @@ def root(
     ] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Assume yes to prompts.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-V", help="More detail.")] = False,
+    lang: Annotated[str, typer.Option("--lang", help="en or es (default: config, then OS).")] = "",
 ) -> None:
     from cuanta.cli.output import GlobalOptions
 
@@ -81,6 +82,7 @@ def root(
         project=project,
         yes=yes,
         verbose=verbose,
+        lang=lang,
     )
 
 

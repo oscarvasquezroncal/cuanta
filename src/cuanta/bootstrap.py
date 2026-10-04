@@ -2407,6 +2407,7 @@ class Container:
         on_start: Callable[[CrossEnginePipeline], None] | None = None,
         implementation: MandateOptions | None = None,
         wall_s: float = 0.0,
+        observer: Callable[[EngineEvent], None] | None = None,
     ) -> SandboxResult:
         from cuanta.application.cross_engine import cross_metrics
 
@@ -2445,7 +2446,7 @@ class Container:
             }
 
         return self.sandbox_runner(ledger).run_cross(
-            pipeline_for, request, plan, progress, keep, payload
+            pipeline_for, request, plan, progress, keep, payload, observer
         )
 
     def new_file_review(self) -> NewFileReview:
@@ -2850,3 +2851,14 @@ class Container:
                 doctor.cuanta_dir_check(workspace),
             ],
         )
+
+
+def record_failure(project: Path, error: BaseException) -> str:
+    import traceback
+    from datetime import datetime
+
+    from cuanta.adapters.system.log_file import LogFile
+
+    relative = f".cuanta/logs/{datetime.now().date().isoformat()}.log"
+    LogFile(project / relative).write("run failed", "".join(traceback.format_exception(error)))
+    return relative

@@ -14,6 +14,7 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import (
     Button,
+    Collapsible,
     DataTable,
     Footer,
     Markdown,
@@ -31,7 +32,7 @@ from cuanta.domain.messages import msg
 from cuanta.domain.outcomes import CROSS_KIND, REJECTED, is_attempt
 from cuanta.domain.overhead import overhead_messages
 from cuanta.domain.report import link_file_refs
-from cuanta.domain.stop_reason import FINISHED_STATUSES, stop_message
+from cuanta.domain.stop_reason import stop_message
 from cuanta.tui.anatomy_text import anatomy_content
 from cuanta.tui.cache_text import first_request_content
 from cuanta.tui.fmt import labeled_money, money, run_money
@@ -98,20 +99,22 @@ class ResultScreen(Screen[None]):
             yield Static(t("result.title"), classes="card-title", id="result-title")
             yield Static(self._status(), id="result-status")
             yield Button(t("result.close"), id="result-close", compact=True)
-        yield Static(self._facts(), id="result-facts")
+        yield from self._notices()
+        yield Static(self._primary(), id="result-facts")
         with Horizontal(id="result-decision-row"):
             yield Static("", id="result-decision")
             yield Button(t("result.accept"), id="result-accept", variant="success", compact=True)
             yield Button(t("result.reject"), id="result-reject", compact=True)
-        yield from self._notices()
-        yield Static(self._split(), id="result-split")
-        yield Static(first_request_content(t, view.cache), id="result-cache")
-        yield Static(self._map_summary(), id="result-map-summary")
-        if view.implementation is not None:
-            yield Static(
-                implementation_content(t, view.implementation, view.run.status != "running"),
-                id="result-implementation",
-            )
+        with Collapsible(title=t("run_output.details"), collapsed=True, id="result-details"):
+            yield Static(self._facts(), id="result-technical")
+            yield Static(self._split(), id="result-split")
+            yield Static(first_request_content(t, view.cache), id="result-cache")
+            yield Static(self._map_summary(), id="result-map-summary")
+            if view.implementation is not None:
+                yield Static(
+                    implementation_content(t, view.implementation, view.run.status != "running"),
+                    id="result-implementation",
+                )
         if view.trial is not None:
             with Vertical(id="result-trial"):
                 yield Static("", id="result-trial-line")
@@ -166,7 +169,7 @@ class ResultScreen(Screen[None]):
 
     def _notices(self) -> ComposeResult:
         t, view = self._t, self.view
-        if view.run.status not in {*FINISHED_STATUSES, "running"}:
+        if view.run.status != "running":
             stop = stop_message(view.run, view.implementation, view.governor)
             yield Static(Content.styled(t.message(stop), "$warning"), id="result-stop")
         if view.fallback_error:
@@ -251,6 +254,24 @@ class ResultScreen(Screen[None]):
         ]
         failed = any(item.passed < item.total for item in self.view.verification[-1:])
         return Content.styled("\n".join(lines), "$warning" if failed else "$text-muted")
+
+    def _primary(self) -> Content:
+        t, view = self._t, self.view
+        partial = (
+            f" ({t('run_output.partial')})"
+            if view.run.partial or view.actual_partial or view.in_flight
+            else ""
+        )
+        lines = [
+            f"{t('run_output.cost')}: {attempt_money(view, t)}",
+            f"{t('run_output.tokens')}: {sum(view.tokens_by_agent.values()):,}{partial}",
+            f"{t('run_output.files')}: {len(view.changed_files)}",
+        ]
+        lines.extend(
+            t("run_output.role_tokens", role=name, tokens=f"{count:,}")
+            for name, count in t.roles(view.tokens_by_agent).items()
+        )
+        return Content("\n".join(lines))
 
     def _facts(self) -> Content:
         t = self._t

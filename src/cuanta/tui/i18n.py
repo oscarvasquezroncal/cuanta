@@ -3,9 +3,13 @@ from __future__ import annotations
 import locale
 import os
 import tomllib
+from collections.abc import Mapping
 from importlib.resources import files
 
-from cuanta.domain.messages import Message, english, keyed, render
+from cuanta.domain.agents import role_of
+from cuanta.domain.errors import CuantaError
+from cuanta.domain.messages import Message, english, keyed, parse_english, render
+from cuanta.domain.progress import LiveStatus
 
 LANGUAGES = ("en", "es")
 DEFAULT_LANGUAGE = "en"
@@ -63,13 +67,52 @@ class Catalog:
 
     def message(self, message: Message | None, fallback: str = "") -> str:
         if message is None:
-            return fallback
+            message = parse_english(fallback.lstrip(), "")
+            if message is None:
+                return fallback
         template = self._strings.get(f"msg.{message.key}") or self._fallback.get(
             f"msg.{message.key}"
         )
         if template is None:
             return english(message)
         return render(template, message.values(self.message))
+
+    def failure(self, error: CuantaError) -> tuple[str, str, str]:
+        localized = getattr(error, "localized", None)
+        reason = (
+            localized(self.message) if callable(localized) else self.message(None, error.message)
+        )
+        hint = (
+            self.message(None, error.hint.split("\n", 1)[0])
+            if error.hint
+            else self("failure.retry")
+        )
+        log = self("failure.log", path=error.log_path) if error.log_path else ""
+        return (
+            self("failure.happened"),
+            self("failure.why", reason=reason),
+            self("failure.now", hint=hint, log=log),
+        )
+
+    def roles(self, tokens: Mapping[str, int]) -> dict[str, int]:
+        totals: dict[str, int] = {}
+        for name, count in tokens.items():
+            found = role_of(name)
+            role = found.value if found is not None else name
+            label = self("run_output.main") if role == "main" else self.keyed("role", role)
+            totals[label] = totals.get(label, 0) + count
+        return totals
+
+    def live(self, state: LiveStatus) -> str:
+        minutes, seconds = divmod(int(state.seconds), 60)
+        return self(
+            "run_output.live",
+            elapsed=f"{minutes}:{seconds:02d}",
+            tokens=f"{state.tokens:,}",
+            role=next(iter(self.roles({state.role: 0}))),
+            tool=state.tool or "–",
+            file=state.file or "–",
+        )
 
     def keyed(self, prefix: str, value: str) -> str:
         found = keyed(prefix, value)

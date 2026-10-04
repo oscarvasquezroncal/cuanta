@@ -106,7 +106,9 @@ def test_the_gpt_team_scout_is_a_read_only_luna_launch_before_the_senior(
     assert isinstance(envelope, dict) and envelope["shape"] == "scout"
     assert [row["role"] for row in envelope["roles"]] == ["scout", "senior", "tester"]
     result = invoke(
-        cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--shape", "scout")
+        cross_args(
+            tmp_path, "--engine", "codex", "--route", "fixed", "--shape", "scout", "--verbose"
+        )
     )
     assert result.exit_code == 0, result.stdout
     launches = [call for call in fake_runner.calls if call[:2] == ("codex", "exec")]
@@ -270,11 +272,13 @@ def test_a_pure_premium_launch_card_says_the_scout_is_skipped(
     forge(tmp_path)
     configure(tmp_path, "[runs]\nscout_threshold = 0.01\n")
     fake_runner.streams["claude -p"] = FakeStream([RESULT])
-    result = invoke(cross_args(tmp_path, "--route", "fixed", "--max-budget-usd", "1", *PURE))
+    result = invoke(
+        cross_args(tmp_path, "--route", "fixed", "--max-budget-usd", "1", *PURE, "--verbose")
+    )
     assert result.exit_code == 0, result.stdout
     output = " ".join(result.stdout.split())
     assert english(msg("scout.shape_pure", model=REAL_MODEL)) in output
-    assert "team · senior → opus (premium) · pure: --pure runs every role on" in output
+    assert "team · Senior → opus (premium) · pure: --pure runs every role on" in output
     assert "because your policy uses" not in output
     calls = [call for call in fake_runner.calls if call[:2] == ("claude", "-p")]
     assert len(calls) == 1

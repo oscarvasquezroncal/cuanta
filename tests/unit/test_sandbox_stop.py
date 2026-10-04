@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ import pytest
 from cuanta.application.cross_engine import CompletionState, CrossReport
 from cuanta.application.mandate_flow import MandateOptions
 from cuanta.bootstrap import Container
+from cuanta.domain.engine import EngineEvent
 from cuanta.domain.errors import DomainFailure
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import msg
@@ -47,7 +49,14 @@ class Team:
         self._stops.append("team")
         return True
 
-    def run(self, request: MandateRequest, plan: object, progress: object) -> CrossReport:
+    def run(
+        self,
+        request: MandateRequest,
+        plan: object,
+        progress: object,
+        observer: Callable[[EngineEvent], None] | None = None,
+    ) -> CrossReport:
+        assert callable(observer)
         assert self._services.stop_mandate()
         return CrossReport((), False, 0.0, msg("cross.stopped"), state=CompletionState.FAILED)
 

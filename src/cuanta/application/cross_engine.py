@@ -37,7 +37,11 @@ from cuanta.domain.engine import (
     BUDGET_LIMIT_SUBTYPE,
     GOVERNOR_STOP_SUBTYPE,
     WALL_LIMIT_SUBTYPE,
+    AssistantText,
+    EngineEvent,
     EngineOutcome,
+    StepUsage,
+    ToolCall,
 )
 from cuanta.domain.envelope import PIPELINE_SHAPE, SCOUT_SHAPE, is_fix
 from cuanta.domain.errors import CuantaError, DomainFailure
@@ -632,6 +636,7 @@ class CrossEnginePipeline:
         self.current = ""
         self._root = ""
         self._active: Engine | None = None
+        self._observer: Callable[[EngineEvent], None] | None = None
         self._halted = False
         self._launchers = launchers
         self._definitions = definitions
@@ -770,14 +775,28 @@ class CrossEnginePipeline:
             if steering is not None:
                 steering.started(run_id)
 
+        owner = f"cuanta-role-{turn.role.value}"
+        if self._observer is not None:
+            self._observer(ToolCall("Agent", owner, {"subagent_type": turn.role.value}))
+
+        def observed(event: EngineEvent) -> None:
+            if self._observer is not None:
+                shown = (
+                    replace(event, parent_tool_use_id=owner)
+                    if isinstance(event, ToolCall | StepUsage | AssistantText)
+                    and not event.parent_tool_use_id
+                    else event
+                )
+                self._observer(shown)
+            if steering is not None:
+                steering(event)
+
         try:
             if steering is None:
-                launch = turn.launcher.launch(
-                    self._isolated(spec, turn.engine), lambda _: None, started
-                )
+                launch = turn.launcher.launch(self._isolated(spec, turn.engine), observed, started)
             else:
                 launch = turn.launcher.launch(
-                    replace(self._isolated(spec, turn.engine), steer=True), steering, started
+                    replace(self._isolated(spec, turn.engine), steer=True), observed, started
                 )
             self._timing_run = launch.run.id
             self._lost_telemetry += launch.unreadable
@@ -806,7 +825,14 @@ class CrossEnginePipeline:
         final = CompletionState.PARTIAL if state.steps else CompletionState.FAILED
         return state.report(final, msg("cross.stopped"))
 
-    def run(self, request: MandateRequest, plan: RoutePlan, progress: ProgressSink) -> CrossReport:
+    def run(
+        self,
+        request: MandateRequest,
+        plan: RoutePlan,
+        progress: ProgressSink,
+        observer: Callable[[EngineEvent], None] | None = None,
+    ) -> CrossReport:
+        self._observer = observer
         if self._implementation_profile == "fast":
             raise DomainFailure("fast implementation uses one native Claude launch")
         if self._pure:

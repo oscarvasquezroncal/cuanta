@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from cuanta.domain.routing import Provider
     from cuanta.domain.scout import DocsChoice, ShapeChoice
     from cuanta.domain.scout_report import ScoutSummary
+    from cuanta.tui.i18n import Catalog
 
 SHORTCUT_TYPES = {"feat": "feature", "fix": "bug", "audit": "investigation"}
 
@@ -619,11 +620,18 @@ def run_mandate_core(
 
     flow, prepared = _prepare(session, container, args, built)
     publish_team(session, prepared, shape)
-    label = f"pounce · {prepared.engine_name} · {prepared.composed.hint.option}"
+    label = session.catalog("run_output.start")
     session.presenter.publish(StepStarted("mandate", label))
-    report = flow.run(prepared, session.presenter, verdict=verdict)
+    from cuanta.cli.live_run import RunProgress
+
+    with RunProgress(session.presenter, session.options.verbose) as progress:
+        report = flow.run(prepared, progress, observer=progress.observe, verdict=verdict)
     status = Status.OK if report.ok else Status.FAIL
-    session.presenter.publish(StepFinished("mandate", status, f"{report.tool_calls} tool calls"))
+    session.presenter.publish(
+        StepFinished(
+            "mandate", status, session.catalog("run_output.tools", count=report.tool_calls)
+        )
+    )
     return report
 
 
@@ -640,7 +648,7 @@ def run_mandate(
     from cuanta.domain.progress import Note, Status
 
     args, sourced = from_source(args)
-    stated = [english(message) for message in (*request_notes, *sourced)]
+    stated = [session.catalog.message(message) for message in (*request_notes, *sourced)]
     container = Container.for_project(session.project, verbose=session.options.verbose)
     container.progress = session.presenter
     container.use_request_files(request_files(args))
@@ -709,7 +717,7 @@ def run_mandate(
         if args.sandbox:
             return run_sandbox(session, container, args, built, choice)
         report = run_mandate_core(session, container, args, built=built, shape=choice)
-        return _final(report)
+        return _final(report, catalog=session.catalog, verbose=session.options.verbose)
     except KeyboardInterrupt as interrupt:
         raise interrupted(interrupt, container.recorded_run()) from interrupt
     finally:
@@ -748,18 +756,31 @@ def run_sandbox(
 
     def started(_: "MandateFlow", prepared: "Prepared") -> None:
         publish_team(session, prepared, shape)
-        label = f"pounce · {prepared.engine_name} · {prepared.composed.hint.option} · isolated copy"
+        label = session.catalog("run_output.start")
         session.presenter.publish(StepStarted("mandate", label))
 
-    result = container.run_sandboxed(
-        ledger, request, signatures, _options(args), session.presenter, on_start=started
-    )
+    from cuanta.cli.live_run import RunProgress
+
+    with RunProgress(session.presenter, session.options.verbose) as progress:
+        result = container.run_sandboxed(
+            ledger,
+            request,
+            signatures,
+            _options(args),
+            progress,
+            observer=progress.observe,
+            on_start=started,
+        )
     report = result.report
     if report is None:
         raise RuntimeError("sandbox run ended without a report")
     status = Status.OK if report.ok else Status.FAIL
-    session.presenter.publish(StepFinished("mandate", status, f"{report.tool_calls} tool calls"))
-    return _final(report, result)
+    session.presenter.publish(
+        StepFinished(
+            "mandate", status, session.catalog("run_output.tools", count=report.tool_calls)
+        )
+    )
+    return _final(report, result, catalog=session.catalog, verbose=session.options.verbose)
 
 
 def _per_role(
@@ -952,53 +973,80 @@ def run_cross_engine(
 ) -> "Document":
     from cuanta.cli.document import Document, Line
     from cuanta.domain.limits import limits_message
-    from cuanta.domain.messages import english
+    from cuanta.domain.messages import msg
     from cuanta.domain.progress import Note, Status
-    from cuanta.domain.routing import Provider
 
     options, plan, provider, limits, docs = _team_plan(container, args, request, choice)
     budget = limits.budget_usd
-    if provider is Provider.CLAUDE and (args.cross_engine or not choice.launch):
-        session.presenter.publish(Note(Status.WARN, "cross-engine pipeline (experimental)"))
-    session.presenter.publish(Note(Status.INFO, per_role_title(provider)))
-    for line in shape_lines(choice, None):
-        session.presenter.publish(Note(Status.INFO, line))
-    session.presenter.publish(Note(Status.INFO, english(limits_message(limits))))
-    publish_cross_team(session, container, request, plan, options.depth, limits, docs)
     guess = container.run_estimate(plan, request.type, options.depth)
-    session.presenter.publish(Note(Status.INFO, estimate_line(guess)))
+    if session.options.verbose:
+        session.presenter.publish(Note(Status.INFO, per_role_title(provider)))
+        for line in shape_lines(choice, None):
+            session.presenter.publish(Note(Status.INFO, session.catalog.message(None, line)))
+        session.presenter.publish(
+            Note(Status.INFO, session.catalog.message(limits_message(limits)))
+        )
+        publish_cross_team(session, container, request, plan, options.depth, limits, docs)
+    else:
+        t = session.catalog
+        rows = (
+            (t("run_output.request"), t(f"wizard.intent_{request.type}")),
+            (t("run_output.scope"), short_scope(request.where or request.what)),
+            (
+                t("run_output.team"),
+                ", ".join(
+                    t.keyed("role", route.role.value)
+                    for route in plan.routes
+                    if route.model is not None
+                ),
+            ),
+            (t("run_output.forecast"), estimate_text(guess, t)),
+            (
+                t("run_output.docs"),
+                t.message(docs.message) if docs is not None else t.message(msg("docs.forced_on")),
+            ),
+            (t("run_output.limits"), t.message(limits_message(limits))),
+        )
+        publish_launch(session, rows)
     max_turns = limits.max_turns
     isolated: SandboxResult | None = None
-    if args.sandbox:
-        isolated = container.run_sandboxed_cross(
-            container.shared_ledger(),
-            request,
-            plan,
-            session.presenter,
-            budget,
-            max_turns,
-            args.keep,
-            options.depth,
-            implementation=options,
-            wall_s=limits.wall_s,
-        )
-        if isolated.cross is None:
-            raise RuntimeError("sandbox cross-engine run ended without a report")
-        report = isolated.cross
+    from cuanta.cli.live_run import RunProgress
+
+    with RunProgress(session.presenter, session.options.verbose) as progress:
+        if args.sandbox:
+            isolated = container.run_sandboxed_cross(
+                container.shared_ledger(),
+                request,
+                plan,
+                progress,
+                budget,
+                max_turns,
+                args.keep,
+                options.depth,
+                implementation=options,
+                wall_s=limits.wall_s,
+                observer=progress.observe,
+            )
+            if isolated.cross is None:
+                raise RuntimeError("sandbox cross-engine run ended without a report")
+            report = isolated.cross
+        else:
+            pipeline = container.cross_engine(
+                container.shared_ledger(),
+                budget,
+                max_turns,
+                depth=options.depth,
+                implementation=options,
+                wall_s=limits.wall_s,
+            )
+            report = pipeline.run(request, plan, progress, progress.observe)
+    if session.options.verbose:
+        blocks = cross_blocks(report, budget, per_role_title(provider))
+        blocks.extend(Line(line, Status.INFO) for line in scout_lines(cross_summary(report)))
+        if report.stopped is not None:
+            blocks.append(Line(session.catalog.message(report.stopped), Status.WARN))
     else:
-        pipeline = container.cross_engine(
-            container.shared_ledger(),
-            budget,
-            max_turns,
-            depth=options.depth,
-            implementation=options,
-            wall_s=limits.wall_s,
-        )
-        report = pipeline.run(request, plan, session.presenter)
-    blocks = cross_blocks(report, budget, per_role_title(provider))
-    blocks.extend(Line(line, Status.INFO) for line in scout_lines(cross_summary(report)))
-    if report.stopped is not None:
-        blocks.append(Line(english(report.stopped), Status.WARN))
+        blocks = readable_cross(report, container, session.catalog)
     if isolated is not None:
         blocks.extend(sandbox_blocks(isolated))
     blocked = container.blocked_calls(
@@ -1356,9 +1404,15 @@ def publish_team(
     from cuanta.domain.messages import english
     from cuanta.domain.progress import Note, Status
 
+    if not session.options.verbose:
+        publish_launch(session, launch_rows(prepared, session.catalog))
+        warning = cap_warning(prepared.engine_name, prepared.spec.max_budget_usd)
+        if warning is not None:
+            session.presenter.publish(Note(Status.WARN, session.catalog.message(warning), warning))
+        return
     applied = prepared.applied
     warn = applied is not None and applied.env_override and not applied.unset
-    for line in team_lines(prepared):
+    for line in localized_team_lines(prepared, session.catalog):
         status = Status.WARN if warn and "is set" in line else Status.INFO
         session.presenter.publish(Note(status, line))
     told = shape.message if shape is not None else None
@@ -1368,7 +1422,9 @@ def publish_team(
     if warning is not None:
         session.presenter.publish(Note(Status.WARN, english(warning)))
     if prepared.spec.estimate is not None:
-        session.presenter.publish(Note(Status.INFO, estimate_line(prepared.spec.estimate)))
+        session.presenter.publish(
+            Note(Status.INFO, estimate_text(prepared.spec.estimate, session.catalog))
+        )
 
 
 def forecast_blocks(
@@ -1508,21 +1564,27 @@ def guard_tripped(result: "SandboxResult | None") -> bool:
     )
 
 
-def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> "Document":
+def _final(
+    report: "MandateReport",
+    isolated: "SandboxResult | None" = None,
+    catalog: "Catalog | None" = None,
+    verbose: bool = False,
+) -> "Document":
     from cuanta.application.mandate import report_payload
     from cuanta.cli.document import Document, Hint, KeyValues, MarkdownText, MascotBlock, Panel
     from cuanta.cli.fmt import compact, percent, turn_count, usd
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
     from cuanta.domain.governor_report import governor_payload, governor_summary
-    from cuanta.domain.messages import english
     from cuanta.domain.scout_report import parse_scout
     from cuanta.domain.stop_reason import stop_message
     from cuanta.domain.voice import Mood
+    from cuanta.tui.i18n import Catalog
 
+    t = catalog or Catalog("en")
     run = report.run
     governor = governor_summary(report.governor)
     implementation = report.implementation.payload() if report.implementation is not None else None
-    stop = english(stop_message(run, implementation, governor))
+    stop = t.message(stop_message(run, implementation, governor))
     agents = ", ".join(
         f"{name} {compact(tokens)}" for name, tokens in report.tokens_by_agent.items()
     )
@@ -1550,19 +1612,50 @@ def _final(report: "MandateReport", isolated: "SandboxResult | None" = None) -> 
         *scout_rows(parse_scout(report.scout, docs_json(report.docs))),
         *implementation_rows(report),
     )
+    if not verbose:
+        partial = f" ({t('run_output.partial')})" if run.partial else ""
+        roles = tuple(
+            (t("run_output.role"), t("run_output.role_tokens", role=name, tokens=compact(count)))
+            for name, count in t.roles(report.tokens_by_agent).items()
+        )
+        routes = tuple(
+            (
+                t("run_output.model"),
+                t(
+                    "run_output.route",
+                    agent=row.agent,
+                    planned=row.planned,
+                    actual=", ".join(row.actual),
+                ),
+            )
+            for row in report.audit
+            if row.cause.key == "audit.unknown" and row.actual
+        )
+        rows = (
+            (t("run_output.status"), t.keyed("run_status", run.status)),
+            (t("run_output.reason"), stop),
+            (
+                t("run_output.cost"),
+                t.message(None, usd(run.cost_usd, run.cost_source, run.partial)),
+            ),
+            (t("run_output.tokens"), f"{sum(report.tokens_by_agent.values()):,}{partial}"),
+            (t("run_output.files"), str(changed)),
+            *roles,
+            *routes,
+        )
     panel = Panel(
         "purr" if report.ok else "hiss",
         (
-            MascotBlock(Mood.HAPPY if report.ok else Mood.ALARMED),
+            *((MascotBlock(Mood.HAPPY if report.ok else Mood.ALARMED),) if verbose else ()),
             KeyValues(rows),
             Hint(f"cuanta spectrum {run.id}"),
         ),
     )
     blocks: list[Block] = [panel]
-    if report.text.strip():
+    if verbose and report.text.strip():
         blocks.append(MarkdownText(report.text))
-    if report.report_path:
-        blocks.append(Hint(f"report saved: {report.report_path} · cuanta runs show {run.id}"))
+    if verbose and report.report_path:
+        blocks.append(Hint(t("run_output.saved", path=report.report_path)))
     if isolated is not None:
         blocks.extend(sandbox_blocks(isolated))
     payload = {
@@ -1603,3 +1696,142 @@ def implementation_rows(report: "MandateReport") -> tuple[tuple[str, str], ...]:
         rows.extend(("introduced error", error) for error in last.introduced)
         rows.extend(("pre-existing error", error) for error in last.preexisting)
     return tuple(rows)
+
+
+def launch_rows(prepared: "Prepared", t: "Catalog") -> tuple[tuple[str, str], ...]:
+    from cuanta.domain.limits import limits_message
+    from cuanta.domain.messages import msg
+
+    request = prepared.composed.request
+    applied = prepared.applied
+    if applied is not None and applied.single:
+        team = applied.single
+    elif applied is not None and applied.active:
+        team = ", ".join(t.keyed("role", route.role.value) for route in applied.plan.routes)
+    else:
+        team = prepared.spec.model or t("run_output.engine_default")
+    forecast = prepared.forecast
+    estimate = (
+        t.message(forecast.messages[0])
+        if forecast is not None and forecast.messages
+        else t("run_output.forecast_none")
+    )
+    docs = (
+        t.message(prepared.docs.message)
+        if prepared.docs is not None
+        else t.message(msg("docs.forced_on"))
+    )
+    return (
+        (t("run_output.request"), t(f"wizard.intent_{request.type}")),
+        (t("run_output.scope"), short_scope(request.where or request.what)),
+        (t("run_output.team"), team),
+        (t("run_output.forecast"), estimate),
+        (t("run_output.docs"), docs),
+        (t("run_output.limits"), t.message(limits_message(prepared.limits))),
+    )
+
+
+def short_scope(text: str) -> str:
+    shown = " ".join(text.split())
+    return shown if len(shown) <= 60 else shown[:57] + "…"
+
+
+def readable_cross(report: "CrossReport", container: "Container", t: "Catalog") -> "list[Block]":
+    from cuanta.application.spectrum import Selection
+    from cuanta.cli.document import KeyValues
+    from cuanta.cli.fmt import compact, usd
+    from cuanta.domain.messages import msg
+    from cuanta.domain.spectrum import View
+
+    by_role: dict[str, int] = {}
+    for step in report.steps:
+        observed = container.spectrum_query(container.shared_ledger()).run(
+            Selection(run=step.run_id)
+        )
+        by_role[step.role.value] = by_role.get(step.role.value, 0) + sum(
+            row.tokens for row in observed.rows(View.AGENT)
+        )
+    partial = f" ({t('run_output.partial')})" if report.partial else ""
+    source = "estimated" if any(step.cost_source == "estimated" for step in report.steps) else ""
+    rows = (
+        (t("run_output.status"), t.message(msg(f"completion.{report.state.value}"))),
+        (t("run_output.reason"), t.message(report.stopped or msg("stop.finished"))),
+        (t("run_output.cost"), t.message(None, usd(report.spent_usd, source, report.partial))),
+        (t("run_output.tokens"), f"{sum(by_role.values()):,}{partial}"),
+        (t("run_output.files"), str(len(report.changed_files))),
+        *(
+            (
+                t("run_output.role"),
+                t("run_output.role_tokens", role=t.keyed("role", role), tokens=compact(tokens)),
+            )
+            for role, tokens in by_role.items()
+        ),
+    )
+    return [KeyValues(rows)]
+
+
+def estimate_text(guess: "RunEstimate", t: "Catalog") -> str:
+    from cuanta.cli.fmt import usd
+    from cuanta.domain.messages import msg
+
+    if guess.low is None:
+        return t("run_output.forecast_none")
+    if guess.source == "history":
+        return t.message(
+            msg("estimate.range", low=usd(guess.low), high=usd(guess.high), count=guess.samples)
+        )
+    return t.message(msg("estimate.plan", cost=usd(guess.low)))
+
+
+def publish_launch(session: Session, rows: tuple[tuple[str, str], ...]) -> None:
+    from cuanta.cli.document import Document, KeyValues, Panel
+    from cuanta.cli.output import OutputMode
+    from cuanta.domain.progress import Note, Status
+
+    if session.settings.mode is OutputMode.JSON:
+        for label, text in rows:
+            session.presenter.publish(Note(Status.INFO, f"{label}: {text}"))
+    else:
+        session.presenter.render(
+            Document(blocks=(Panel(session.catalog("run_output.launch"), (KeyValues(rows),)),))
+        )
+
+
+def localized_team_lines(prepared: "Prepared", t: "Catalog") -> list[str]:
+    import sys
+
+    from cuanta.domain.guarantees import engine_guarantees
+    from cuanta.domain.limits import limits_message
+    from cuanta.domain.messages import msg
+
+    lines = [
+        f"{prepared.engine_name} · {t.message(row.message)}"
+        for row in engine_guarantees(prepared.engine_name, limits=prepared.requested_limits)
+    ]
+    lines.append(t.message(limits_message(prepared.limits)))
+    if prepared.engine_name == "codex" and sys.platform == "win32":
+        lines.append(t.message(msg("guarantee.codex_builds")))
+    applied = prepared.applied
+    if applied is None or not applied.active:
+        return [*lines, t("run_output.team_off")]
+    for route in applied.plan.routes:
+        lines.append(
+            t(
+                "run_output.route_plan",
+                role=t.keyed("role", route.role.value),
+                model=route.model.id if route.model else t("run_output.engine_default"),
+                tier=route.tier.value if route.tier else "–",
+                reason=t.message(route.reason),
+            )
+        )
+    if applied.single:
+        lines.append(t("run_output.single", engine=applied.engine, model=applied.single))
+    if applied.env_override:
+        lines.append(
+            t(
+                "run_output.env",
+                variable=applied.env_override,
+                action=t("run_output.unset" if applied.unset else "run_output.kept"),
+            )
+        )
+    return lines

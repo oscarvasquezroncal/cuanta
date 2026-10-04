@@ -292,7 +292,7 @@ def test_use_last_failure_and_attach_file() -> None:
         await wait_for(pilot, lambda: isinstance(app.screen, AttachScreen))
         await pilot.press(*"missing.log", "enter")
         await wait_for(
-            pilot, lambda: any(note.startswith("Could not read missing.log") for note in notes(app))
+            pilot, lambda: any("Could not read missing.log" in note for note in notes(app))
         )
 
     drive(make_app(services), scenario, size=(120, 50))
@@ -315,7 +315,10 @@ def test_attaching_a_file_that_is_not_utf8_says_so(language: str, refusal: str) 
         wizard.query_one("#wiz-attach", Button).press()
         await wait_for(pilot, lambda: isinstance(app.screen, AttachScreen))
         await pilot.press(*"logs/ansi.txt", "enter")
-        await wait_for(pilot, lambda: refusal in notes(app))
+        await wait_for(
+            pilot,
+            lambda: any(refusal in note and len(note.splitlines()) == 3 for note in notes(app)),
+        )
         assert "envío" not in wizard.query_one("#wiz-why", TextArea).text
 
     drive(make_app(services, language=language), scenario, size=(120, 50))
@@ -336,7 +339,10 @@ def test_attaching_a_tilde_path_whose_home_cannot_be_resolved_says_it_is_missing
         await wait_for(pilot, lambda: isinstance(app.screen, AttachScreen))
         await pilot.press(*path, "enter")
         missing = f"Could not read {path}: No such file or directory"
-        await wait_for(pilot, lambda: missing in notes(app))
+        await wait_for(
+            pilot,
+            lambda: any(missing in note and len(note.splitlines()) == 3 for note in notes(app)),
+        )
 
     drive(make_app(services), scenario, size=(120, 50))
 

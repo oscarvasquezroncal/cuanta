@@ -188,7 +188,8 @@ def test_the_map_refusals_read_in_spanish(
         await wait_for(pilot, lambda: bool(app.query(MapView)))
         await wait_for(pilot, lambda: bool(shown(app)))
         text = "\n".join(shown(app))
-        assert text.startswith("No se pudo cargar el mapa: ")
+        assert text.startswith(app.catalog("failure.happened"))
+        assert "Por qué: No se pudo cargar el mapa: " in text
         assert all(part in text for part in spanish), text
         assert english not in text
 

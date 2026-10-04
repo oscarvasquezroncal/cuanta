@@ -1,0 +1,11 @@
+┌─ hiss ─────────────────────────────────────────────────────────────────────────┐
+│                                                                                │
+│  Estado                falló                                                   │
+│  Motivo de cierre      se detuvo porque el motor terminó sin dar un resultado  │
+│  Costo                 $0.4200 (parcial)                                       │
+│  Tokens                2,100 (parcial)                                         │
+│  Archivos modificados  2                                                       │
+│  Rol                   senior: 2.1K tokens                                     │
+│  → cuanta spectrum 01JMANDATE0000000000000RUN1                                 │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘

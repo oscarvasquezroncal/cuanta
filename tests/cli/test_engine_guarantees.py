@@ -146,7 +146,14 @@ def test_codex_launch_warns_before_the_result_and_labels_estimated_cost(
         ]
     )
     result = invoke(
-        [*mandate_args(tmp_path, "codex"), "--model", "gpt-6-luna", "--max-budget-usd", "0.1"]
+        [
+            *mandate_args(tmp_path, "codex"),
+            "--model",
+            "gpt-6-luna",
+            "--max-budget-usd",
+            "0.1",
+            "--verbose",
+        ]
     )
     assert result.exit_code == 0, result.stdout
     assert "cannot enforce the spend cap" in result.stdout
@@ -191,6 +198,7 @@ def test_cross_cli_passes_resolved_turn_limit_to_every_claude_role(
             "--project",
             str(tmp_path),
             *flags,
+            "--verbose",
         ],
         env={"CUANTA_MAX_TURNS": str(configured)},
     )
@@ -357,7 +365,14 @@ def test_a_gpt_team_runs_one_codex_launch_per_role_with_its_own_model(
     monkeypatch.setattr(Container, "build_blocked", lambda self: frozenset({"codex"}))
     result = invoke(
         cross_args(
-            tmp_path, "--engine", "codex", "--route", "fixed", "--role-model", "senior=gpt-5.6-sol"
+            tmp_path,
+            "--verbose",
+            "--engine",
+            "codex",
+            "--route",
+            "fixed",
+            "--role-model",
+            "senior=gpt-5.6-sol",
         )
     )
     assert result.exit_code == 0, result.stdout
@@ -454,7 +469,16 @@ def test_a_gpt_team_launch_spends_within_the_max_budget(
 ) -> None:
     codex_ready(fake_runner)
     result = invoke(
-        cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--max-budget-usd", "0.3")
+        cross_args(
+            tmp_path,
+            "--verbose",
+            "--engine",
+            "codex",
+            "--route",
+            "fixed",
+            "--max-budget-usd",
+            "0.3",
+        )
     )
     assert result.exit_code == 0, result.stdout
     output = " ".join(result.stdout.split())
@@ -485,7 +509,16 @@ def test_a_gpt_fix_without_checks_shows_and_runs_its_team_without_a_repair_reser
     monkeypatch.setattr(Container, "role_budget", recording)
     codex_ready(fake_runner)
     result = invoke(
-        cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--max-budget-usd", "0.3")
+        cross_args(
+            tmp_path,
+            "--verbose",
+            "--engine",
+            "codex",
+            "--route",
+            "fixed",
+            "--max-budget-usd",
+            "0.3",
+        )
     )
     assert result.exit_code == 0, result.stdout
     assert repairs == [False, False]

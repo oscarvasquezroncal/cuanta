@@ -75,7 +75,9 @@ def test_runs_show_without_runs_says_so_and_creates_nothing(
     error = json.loads(result.stdout)["error"]
     assert error["message"] == "no runs yet"
     assert "cuanta run" in error["hint"]
-    assert not (tmp_path / ".cuanta").exists()
+    logs = list((tmp_path / ".cuanta/logs").glob("*.log"))
+    assert len(logs) == 1
+    assert list((tmp_path / ".cuanta").iterdir()) == [tmp_path / ".cuanta/logs"]
 
 
 def test_runs_alone_lists_the_last_ten(tmp_path: Path, fake_runner: FakeRunner) -> None:

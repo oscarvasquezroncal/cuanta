@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from textual.pilot import Pilot
-from textual.widgets import Button, DataTable, Input, Markdown, Static, TextArea
+from textual.widgets import Button, Collapsible, DataTable, Input, Markdown, Static, TextArea
 
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.overhead import session_overhead
@@ -52,7 +52,7 @@ def test_result_header_names_the_run_shape() -> None:
             app.push_screen(ResultScreen(app.services, app.catalog, view))
             await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
             await settle(app, pilot)
-            assert expected in render(app.screen.query_one("#result-facts", Static))
+            assert expected in render(app.screen.query_one("#result-technical", Static))
             app.pop_screen()
             await pilot.pause()
 
@@ -93,7 +93,7 @@ def test_result_header_shape_in_spanish() -> None:
         app.push_screen(ResultScreen(app.services, app.catalog, sample_result()))
         await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
         await settle(app, pilot)
-        facts = render(app.screen.query_one("#result-facts", Static))
+        facts = render(app.screen.query_one("#result-technical", Static))
         assert "contexto único" in facts
         assert "pipeline" not in facts
 
@@ -113,7 +113,7 @@ def test_result_shows_turns_and_marks_a_turn_limit_cut() -> None:
         app.push_screen(ResultScreen(app.services, app.catalog, stopped))
         await wait_for(pilot, lambda: isinstance(app.screen, ResultScreen))
         await settle(app, pilot)
-        facts = render(app.screen.query_one("#result-facts", Static))
+        facts = render(app.screen.query_one("#result-technical", Static))
         assert "turns 40/40" in facts
         assert "stopped at the turn limit of 40 turns" in render(
             app.screen.query_one("#result-stop", Static)
@@ -136,7 +136,8 @@ def test_a_finished_run_opens_its_result_and_saves_it_to_docs() -> None:
 
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
         screen = await run_to_result(app, pilot)
-        facts = render(screen.query_one("#result-facts", Static))
+        screen.query_one("#result-details", Collapsible).collapsed = False
+        facts = render(screen.query_one("#result-technical", Static))
         assert "Investigate" in facts
         assert "$0.14" in facts
         assert "17 s" in facts

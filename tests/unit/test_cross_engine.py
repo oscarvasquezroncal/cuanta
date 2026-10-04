@@ -126,6 +126,13 @@ def test_each_role_runs_on_its_engine_with_the_previous_handoff(tmp_path: Path) 
     assert CROSS_ORDER[-1] is Role.DOCS
 
 
+def test_cross_pipeline_publishes_stream_events_for_the_live_status(tmp_path: Path) -> None:
+    events: list[EngineEvent] = []
+    report = pipeline(tmp_path, [], 5.0).run(REQUEST, plan(), Recorder(), observer=events.append)
+    assert report.ok
+    assert len([event for event in events if isinstance(event, RunResult)]) == 3
+
+
 @pytest.mark.parametrize("blocked", [frozenset({"codex"}), frozenset()])
 def test_a_gpt_team_runs_every_role_on_codex_and_the_tester_never_runs_builds(
     tmp_path: Path, blocked: frozenset[str]

@@ -37,3 +37,24 @@ def test_pack_rejects_invalid_depth(tmp_path: Path) -> None:
         app, ["--project", str(tmp_path), "pack", "--for", "cart", "--depth", "infinite"]
     )
     assert result.exit_code != 0 and "Unknown pack depth" in result.output
+
+
+def test_pack_explains_invalid_depth_in_spanish(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "--project",
+            str(tmp_path),
+            "--lang",
+            "es",
+            "pack",
+            "--for",
+            "cart",
+            "--depth",
+            "infinite",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Profundidad desconocida" in result.output
+    assert "quick, normal o deep" in result.output
+    assert "ValueError" not in result.output

@@ -1,0 +1,10 @@
+┌─ Inicio ──────────────────────────────────────────────┐
+│                                                       │
+│  Solicitud      Arreglar un error                     │
+│  Alcance        src/cart.py                           │
+│  Equipo         claude-sonnet-5                       │
+│  Previsión      Todavía no hay una estimación fiable  │
+│  Documentación  Docs: encendido (runs.docs = on)      │
+│  Límites        sin límites                           │
+│                                                       │
+└───────────────────────────────────────────────────────┘

@@ -42,12 +42,16 @@ def _pack(
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Column, Document, KeyValues, Table, Verbatim
     from cuanta.domain.depth import Depth
+    from cuanta.domain.errors import DomainFailure
     from cuanta.domain.mandate import MandateRequest, MandateType
+    from cuanta.domain.messages import english, msg
 
     if task_type not in {item.value for item in MandateType}:
         raise ValueError("Unknown request type")
     if depth not in {item.value for item in Depth}:
-        raise ValueError("Unknown pack depth")
+        raise DomainFailure(
+            english(msg("run_error.pack_depth")), english(msg("run_error.pack_depth_hint"))
+        )
     container = Container.for_project(session.project)
     try:
         pack = container.context_pack(

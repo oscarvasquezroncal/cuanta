@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from cuanta.cli.output import Environment, GlobalOptions, OutputSettings
     from cuanta.cli.presenters.base import Presenter
     from cuanta.domain.errors import InterruptedFailure
+    from cuanta.tui.i18n import Catalog
 
 FORCE_TTY_ENV = "CUANTA_FORCE_TTY"
 HINT_SEPARATOR = " · "
@@ -58,6 +59,12 @@ class Session:
     project: Path
 
     @property
+    def catalog(self) -> Catalog:
+        from cuanta.tui.i18n import Catalog
+
+        return Catalog(self.settings.language)
+
+    @property
     def interactive(self) -> bool:
         from cuanta.cli.output import OutputMode
 
@@ -86,12 +93,12 @@ def global_options(ctx: typer.Context) -> GlobalOptions:
     return value if isinstance(value, GlobalOptions) else GlobalOptions()
 
 
-def _config_defaults(project: Path) -> tuple[ThemeName | None, bool]:
+def _config_defaults(project: Path) -> tuple[ThemeName | None, bool, str]:
     from cuanta.bootstrap import load_config
 
     config = load_config(project)
     theme = ThemeName(config.theme) if config.theme in {"dark", "light", "auto"} else None
-    return theme, config.emoji
+    return theme, config.emoji, config.language
 
 
 def build_presenter(settings: OutputSettings) -> Presenter:
@@ -101,10 +108,12 @@ def build_presenter(settings: OutputSettings) -> Presenter:
         from cuanta.cli.presenters.json_presenter import JsonPresenter
 
         return JsonPresenter()
+    from cuanta.tui.i18n import Catalog
+
     if settings.mode is OutputMode.PLAIN:
         from cuanta.cli.presenters.plain import PlainPresenter
 
-        return PlainPresenter()
+        return PlainPresenter(catalog=Catalog(settings.language))
     from cuanta.cli.presenters.pretty import PrettyPresenter, build_console
 
     forced = os.environ.get(FORCE_TTY_ENV) == "1"
@@ -118,8 +127,11 @@ def open_session(ctx: typer.Context) -> Session:
 
     options = global_options(ctx)
     project = (options.project or Path.cwd()).resolve()
-    theme_default, emoji_default = _config_defaults(project)
-    settings = resolve_output(options, detect_environment(), theme_default, emoji_default)
+    from cuanta.tui.i18n import os_locale, resolve_language
+
+    theme_default, emoji_default, configured = _config_defaults(project)
+    language = resolve_language(options.lang, configured, os_locale())
+    settings = resolve_output(options, detect_environment(), theme_default, emoji_default, language)
     return Session(options, settings, build_presenter(settings), project)
 
 
@@ -137,12 +149,18 @@ def execute(ctx: typer.Context, action: Callable[[Session], Document]) -> None:
             document.after_render()
         code = ExitCode(document.exit_code)
     except CuantaError as error:
+        from cuanta.bootstrap import record_failure
+
+        error.log_path = record_failure(session.project, error)
         session.presenter.fail(error)
         code = error.exit_code
     except (KeyboardInterrupt, typer.Abort) as stop:
         interrupt = stop if isinstance(stop, KeyboardInterrupt) else KeyboardInterrupt()
         recorded = document.recorded_run if document is not None else ""
         failure = interrupted_failure(interrupted(interrupt, recorded))
+        from cuanta.bootstrap import record_failure
+
+        failure.log_path = record_failure(session.project, interrupt)
         session.presenter.fail(failure)
         code = failure.exit_code
     except Exception as error:
@@ -150,9 +168,11 @@ def execute(ctx: typer.Context, action: Callable[[Session], Document]) -> None:
             import traceback
 
             traceback.print_exc(file=sys.stderr)
-        session.presenter.fail(
-            CuantaError(f"unexpected {type(error).__name__}: {error}", "re-run with --verbose")
-        )
+        from cuanta.bootstrap import record_failure
+
+        unexpected_failure = CuantaError(session.catalog("failure.unexpected"))
+        unexpected_failure.log_path = record_failure(session.project, error)
+        session.presenter.fail(unexpected_failure)
         code = ExitCode.ENVIRONMENT
     finally:
         session.presenter.close()

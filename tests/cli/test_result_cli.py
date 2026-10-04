@@ -90,6 +90,7 @@ def test_runs_list_show_and_markdown_read_the_stored_report(
             "nada",
             "--simple",
             "--plain",
+            "--verbose",
             "--project",
             str(root),
         ],
@@ -97,7 +98,7 @@ def test_runs_list_show_and_markdown_read_the_stored_report(
     )
     assert ran.exit_code == 0, ran.stdout + ran.stderr
     assert "finding 399 at src/calc/__init__.py:2" in ran.stdout
-    assert "report saved: .cuanta/runs/" in ran.stdout
+    assert "Report saved: .cuanta/runs/" in ran.stdout
     listed = json.loads(invoke(["runs", "list", "--json", "--project", str(root)], env=env).stdout)
     run_id = listed["runs"][0]["id"]
     assert listed["runs"][0]["report"] is True

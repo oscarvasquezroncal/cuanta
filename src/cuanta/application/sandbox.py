@@ -550,6 +550,7 @@ class SandboxRunner:
         progress: ProgressSink,
         keep: bool,
         payload: Callable[[CrossReport], Mapping[str, object]] | None = None,
+        observer: Callable[[EngineEvent], None] | None = None,
     ) -> SandboxResult:
         self._timing.reset()
         self._after_shown = None
@@ -563,7 +564,7 @@ class SandboxRunner:
         completed = False
         try:
             pipeline = pipeline_for(copy, launch, lambda: self.checkpoint(copy))
-            report = pipeline.run(request, plan, progress)
+            report = pipeline.run(request, plan, progress, observer)
             if report.steps:
                 extra = payload(report) if payload is not None else {}
                 first = report.steps[0].run_id

@@ -1,0 +1,11 @@
+┌─ hiss ─────────────────────────────────────────────────────────────┐
+│                                                                    │
+│  Status         failed                                             │
+│  Stop reason    stopped because the engine ended without a result  │
+│  Cost           $0.4200 (partial)                                  │
+│  Tokens         2,100 (partial)                                    │
+│  Files changed  2                                                  │
+│  Role           Senior: 2.1K tokens                                │
+│  → cuanta spectrum 01JMANDATE0000000000000RUN1                     │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘

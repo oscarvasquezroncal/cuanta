@@ -1616,3 +1616,17 @@ Screen.-icons #init-form, Screen.-single #init-form, Screen.-icons #loop-form, S
     padding: 0 1;
 }
 
+
+#pipeline-live, #result-stop, #result-technical, #result-details {
+    height: auto;
+}
+
+#pipeline-live {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#result-details {
+    margin: 0;
+    padding: 0;
+}

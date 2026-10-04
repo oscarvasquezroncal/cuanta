@@ -295,7 +295,9 @@ def test_an_error_during_the_start_snapshot_settles_the_run_as_failed(
     monkeypatch.setattr(MandateService, "snapshot", denied_at_start)
     result = cuanta(tmp_path, "mandate", *asked("Explain the cart"), "--json")
     assert result.exit_code == 2, result.stdout + result.stderr
-    assert "PermissionError" in json.loads(result.stdout)["error"]["message"]
+    error = json.loads(result.stdout)["error"]
+    assert "PermissionError" not in error["message"]
+    assert "PermissionError" in (tmp_path / error["log"]).read_text(encoding="utf-8")
     [run] = ledger_runs(tmp_path)
     assert (run.status, bool(run.ended_at), run.end_reason) == ("failed", True, "error_raised")
     shown = json.loads(cuanta(tmp_path, "runs", "show", "--json").stdout)
@@ -396,14 +398,17 @@ def test_a_queue_stopped_after_its_last_entry_finished_offers_no_nine_lives(
     assert queued(tmp_path) == []
 
 
-def test_an_interrupted_dry_run_init_writes_nothing(
+def test_an_interrupted_dry_run_init_writes_only_its_failure_log(
     tmp_path: Path, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "app.py").write_text("total = 1\n", encoding="utf-8")
     monkeypatch.setattr(GraphStage, "__call__", ctrl_c)
     error = error_of(cuanta(tmp_path, "init", str(tmp_path), "--dry-run", "--json"))
     assert (error["message"], error["hint"]) == (STOPPED, "")
-    assert not (tmp_path / ".cuanta").exists()
+    assert {path.name for path in (tmp_path / ".cuanta").iterdir()} == {"logs"}
+    [log] = (tmp_path / ".cuanta" / "logs").iterdir()
+    assert log.suffix == ".log"
+    assert "KeyboardInterrupt" in log.read_text(encoding="utf-8")
 
 
 def test_looking_up_the_run_never_creates_a_ledger(tmp_path: Path, fake_runner: FakeRunner) -> None:

@@ -22,6 +22,7 @@ class GlobalOptions:
     project: Path | None = None
     yes: bool = False
     verbose: bool = False
+    lang: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,7 @@ class OutputSettings:
     unicode: bool
     emoji: bool
     verbose: bool
+    language: str = "en"
 
 
 def resolve_mode(options: GlobalOptions, environment: Environment) -> OutputMode:
@@ -58,6 +60,7 @@ def resolve_output(
     environment: Environment,
     theme_default: ThemeName | None = None,
     emoji_default: bool = True,
+    language: str = "en",
 ) -> OutputSettings:
     from cuanta.cli.theme import resolve_theme
 
@@ -74,4 +77,5 @@ def resolve_output(
         unicode=unicode,
         emoji=emoji,
         verbose=options.verbose,
+        language=language,
     )

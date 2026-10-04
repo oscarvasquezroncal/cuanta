@@ -30,6 +30,7 @@ class JsonPresenter:
                 "message": error.message,
                 "hint": error.hint,
                 "exit_code": int(error.exit_code),
+                "log": error.log_path,
             }
         }
         self._emit(payload)

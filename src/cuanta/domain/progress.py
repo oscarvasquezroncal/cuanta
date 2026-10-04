@@ -51,7 +51,16 @@ class Metric:
     value: str
 
 
-ProgressEvent = StepStarted | StepFinished | Note | Metric
+@dataclass(frozen=True, slots=True)
+class LiveStatus:
+    seconds: float
+    tokens: int
+    role: str
+    tool: str
+    file: str
+
+
+ProgressEvent = StepStarted | StepFinished | Note | Metric | LiveStatus
 
 
 def started(key: str, message: Message) -> StepStarted:

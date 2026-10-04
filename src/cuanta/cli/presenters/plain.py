@@ -23,8 +23,17 @@ from cuanta.cli.document import (
 from cuanta.cli.mascot import michi
 from cuanta.cli.theme import PALETTE, WORDMARK
 from cuanta.domain.errors import CuantaError
-from cuanta.domain.progress import Metric, Note, ProgressEvent, Status, StepFinished, StepStarted
+from cuanta.domain.progress import (
+    LiveStatus,
+    Metric,
+    Note,
+    ProgressEvent,
+    Status,
+    StepFinished,
+    StepStarted,
+)
 from cuanta.domain.voice import TAGLINE, glyph
+from cuanta.tui.i18n import Catalog
 
 
 def _table_lines(table: Table) -> list[str]:
@@ -94,19 +103,28 @@ def block_lines(block: Block) -> list[str]:
 
 
 class PlainPresenter:
-    def __init__(self, out: TextIO | None = None, err: TextIO | None = None) -> None:
+    def __init__(
+        self, out: TextIO | None = None, err: TextIO | None = None, catalog: Catalog | None = None
+    ) -> None:
         self._out = out if out is not None else sys.stdout
         self._err = err if err is not None else sys.stderr
+        self._t = catalog or Catalog("en")
+        self._live_minute = -1
 
     def publish(self, event: ProgressEvent) -> None:
         match event:
+            case LiveStatus(seconds=seconds):
+                minute = int(seconds // 60)
+                if minute > self._live_minute:
+                    self._live_minute = minute
+                    self._write(self._t.live(event))
             case StepStarted():
                 return
             case StepFinished(key=key, status=status, detail=detail):
-                suffix = f" {detail}" if detail else ""
+                suffix = f" {self._t.message(event.message, detail)}" if detail else ""
                 self._write(f"{glyph(status, False)} {key}{suffix}")
             case Note(status=status, text=text):
-                self._write(f"{glyph(status, False)} {text}")
+                self._write(f"{glyph(status, False)} {self._t.message(event.message, text)}")
             case Metric(label=label, value=value):
                 self._write(f"{glyph(Status.INFO, False)} {label}: {value}")
 
@@ -118,9 +136,10 @@ class PlainPresenter:
                 self._write(line)
 
     def fail(self, error: CuantaError) -> None:
-        self._err.write(f"{glyph(Status.FAIL, False)} {error.message}\n")
-        if error.hint:
-            self._err.write(f"> {error.hint}\n")
+        self._err.write("\n".join(self._t.failure(error)) + "\n")
+        pasted = error.hint.split("\n")[1:]
+        if pasted:
+            self._err.write("\n".join(pasted) + "\n")
         self._err.flush()
 
     def close(self) -> None:

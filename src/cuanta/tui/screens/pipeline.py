@@ -17,8 +17,9 @@ from textual.widgets import Button, Footer, Log, Static
 from cuanta.application.mandate import MandateReport
 from cuanta.application.mandate_flow import MandateOptions
 from cuanta.domain.audit import AuditRow, AuditStatus
-from cuanta.domain.engine import EngineEvent
+from cuanta.domain.engine import EngineEvent, RunResult
 from cuanta.domain.errors import CuantaError
+from cuanta.domain.live_run import LiveRun
 from cuanta.domain.mandate import MandateRequest, parse_shape, single_context
 from cuanta.domain.pipeline import STAGES, AgentCard, CardState, Pipeline
 from cuanta.domain.progress import (
@@ -32,6 +33,7 @@ from cuanta.domain.progress import (
 from cuanta.tui.cells import labeled
 from cuanta.tui.fmt import compact, glyph, run_money, status_style
 from cuanta.tui.i18n import Catalog
+from cuanta.tui.screens.failure import FailureScreen
 from cuanta.tui.screens.result import ResultScreen
 from cuanta.tui.services import Services
 
@@ -130,6 +132,7 @@ class PipelineScreen(Screen[None]):
         self.report: MandateReport | None = None
         self.running = True
         self._started = clock()
+        self._live = LiveRun(self._started)
         self._step_labels: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
@@ -141,6 +144,7 @@ class PipelineScreen(Screen[None]):
             yield Button(t("result.view"), id="pipeline-result", variant="primary", compact=True)
             yield Button(t("pipeline.back"), id="pipeline-back", compact=True)
         with VerticalScroll(id="pipeline-body"):
+            yield Static("", id="pipeline-live")
             with Horizontal(id="agent-cards"):
                 for index, stage in enumerate(self.pipeline.stages):
                     title = f"pipeline.stage_{stage}"
@@ -166,14 +170,18 @@ class PipelineScreen(Screen[None]):
         self.query_one("#pipeline-result", Button).display = False
         self.query_one("#pipeline-spectrum", Button).display = False
         self._paint()
-        self.set_interval(1.0, self._tick)
+        self.set_interval(0.5, self._tick)
         self._tick()
         self.execute()
 
     def _tick(self) -> None:
         if not self.running:
             return
-        seconds = self._clock() - self._started
+        now = self._clock()
+        state = self._live.take(now)
+        if state is not None:
+            self.query_one("#pipeline-live", Static).update(self._t.live(state))
+        seconds = now - self._started
         self.query_one("#pipeline-elapsed", Static).update(
             Content.assemble(
                 (f"{self._t('pipeline.elapsed')}  ", "$text-muted"), elapsed_text(seconds)
@@ -191,10 +199,13 @@ class PipelineScreen(Screen[None]):
                 self._from_progress,
             )
         except CuantaError as error:
-            self.app.call_from_thread(self._failed, str(error), error.hint)
+            error.log_path = self._services.record_failure(error)
+            self.app.call_from_thread(self._failed_error, error)
             return
         except Exception as error:
-            self.app.call_from_thread(self._failed, str(error), "")
+            failure = CuantaError(self._t("failure.unexpected"))
+            failure.log_path = self._services.record_failure(error)
+            self.app.call_from_thread(self._failed_error, failure)
             return
         self.app.call_from_thread(self._finished, report)
 
@@ -221,10 +232,15 @@ class PipelineScreen(Screen[None]):
         self.query_one("#pipeline-feed", Log).write_line(line)
 
     def apply(self, event: EngineEvent) -> None:
+        self._live.observe(event)
         before = len(self.pipeline.feed)
         self.pipeline.apply(event)
         for line in self.pipeline.feed[before:]:
-            self._log(line)
+            self._log(
+                self._t("pipeline.ok" if event.ok else "pipeline.not_ok")
+                if isinstance(event, RunResult)
+                else self._t.message(None, line)
+            )
         self._paint()
 
     def _paint(self) -> None:
@@ -236,15 +252,24 @@ class PipelineScreen(Screen[None]):
         self.query_one("#pipeline-stop", Button).display = False
         self.query_one("#pipeline-back", Button).display = True
 
+    def _failed_error(self, error: CuantaError) -> None:
+        self._show_failure(error.message, error.hint, error.log_path)
+        self.app.push_screen(FailureScreen(self._t, error))
+
     def _failed(self, error: str, hint: str) -> None:
         with suppress(NoMatches):
             self._show_failure(error, hint)
 
-    def _show_failure(self, error: str, hint: str) -> None:
+    def _show_failure(self, error: str, hint: str, log_path: str = "") -> None:
         self._done()
         self.pipeline.close(False)
         self._paint()
-        message = self._t("pipeline.run_failed", error=error, hint=hint)
+        failure = CuantaError(error, hint)
+        failure.log_path = log_path
+        message = "\n".join(self._t.failure(failure))
+        pasted = hint.split("\n")[1:]
+        if pasted:
+            message += "\n" + "\n".join(pasted)
         self.query_one("#pipeline-summary", Static).update(Content.styled(message, "$error"))
         self.app.notify(message, severity="error", markup=False)
 
@@ -270,9 +295,12 @@ class PipelineScreen(Screen[None]):
             Content.assemble((f"{glyph(status)} {headline}", "bold")),
             labeled(rows, width=14),
         ]
-        if report.audit:
+        unexplained = [
+            row for row in report.audit if row.cause.key == "audit.unknown" and row.actual
+        ]
+        if unexplained:
             parts.append(Content.styled(t("pipeline.audit"), "$text-muted"))
-            parts.extend(audit_line(row, t) for row in report.audit)
+            parts.extend(audit_line(row, t) for row in unexplained)
         parts.extend([Content.styled(t("pipeline.changed"), "$text-muted"), Content(files)])
         body = Content("\n").join(parts)
         self.query_one("#pipeline-summary", Static).update(body)

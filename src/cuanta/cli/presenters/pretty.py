@@ -37,8 +37,17 @@ from cuanta.cli.output import OutputSettings
 from cuanta.cli.presenters.base import STATUS_STYLE
 from cuanta.cli.theme import PALETTE, WORDMARK, semantic_colors, wordmark_colors
 from cuanta.domain.errors import CuantaError
-from cuanta.domain.progress import Metric, Note, ProgressEvent, Status, StepFinished, StepStarted
+from cuanta.domain.progress import (
+    LiveStatus,
+    Metric,
+    Note,
+    ProgressEvent,
+    Status,
+    StepFinished,
+    StepStarted,
+)
 from cuanta.domain.voice import TAGLINE, Mood, glyph
+from cuanta.tui.i18n import Catalog
 
 PAW_FRAMES = ("🐾    ", " 🐾   ", "  🐾  ", "   🐾 ", "    🐾")
 ASCII_FRAMES = ("o    ", " o   ", "  o  ", "   o ", "    o")
@@ -76,6 +85,7 @@ class _Checklist:
     settings: OutputSettings
     steps: dict[str, _Step] = field(default_factory=dict)
     spinner: Spinner | None = None
+    live_line: str = ""
 
     def renderable(self) -> RenderableType:
         rows: list[RenderableType] = []
@@ -88,6 +98,8 @@ class _Checklist:
                 rows.append(grid)
                 continue
             rows.append(_status_line(step.status, step.label, step.detail, self.settings))
+        if self.live_line:
+            rows.append(Text(self.live_line, style="muted"))
         return Group(*rows)
 
 
@@ -108,6 +120,7 @@ class PrettyPresenter:
         self._checklist = _Checklist(settings)
         self._live: Live | None = None
         self._lock = threading.RLock()
+        self._t = Catalog(settings.language)
 
     @property
     def console(self) -> Console:
@@ -131,18 +144,23 @@ class PrettyPresenter:
 
     def _publish(self, event: ProgressEvent) -> None:
         match event:
+            case LiveStatus():
+                self._checklist.live_line = self._t.live(event)
+                self._refresh()
             case StepStarted(key=key, label=label):
-                self._checklist.steps[key] = _Step(label)
+                self._checklist.steps[key] = _Step(self._t.message(event.message, label))
                 self._refresh()
             case StepFinished(key=key, status=status, detail=detail):
                 step = self._checklist.steps.setdefault(key, _Step(key))
                 step.status = status
-                step.detail = detail
+                step.detail = self._t.message(event.message, detail)
                 self._refresh()
                 if all(item.status is not None for item in self._checklist.steps.values()):
                     self._stop_live()
             case Note(status=status, text=text):
-                self._print(_status_line(status, text, "", self._settings))
+                self._print(
+                    _status_line(status, self._t.message(event.message, text), "", self._settings)
+                )
             case Metric(label=label, value=value):
                 self._print(_status_line(Status.INFO, f"{label}: {value}", "", self._settings))
 
@@ -170,11 +188,12 @@ class PrettyPresenter:
 
     def _fail(self, error: CuantaError) -> None:
         self._stop_live()
-        first, *pasted = error.hint.split("\n")
+        _, *pasted = error.hint.split("\n")
         lines: list[RenderableType] = [self._mascot(Mood.ALARMED, "")]
-        lines.append(_status_line(Status.FAIL, error.message, "", self._settings))
-        if first:
-            lines.append(Text(f"→ {first}", style="muted"))
+        lines.extend(
+            Text(line, style="err" if index == 0 else "muted")
+            for index, line in enumerate(self._t.failure(error))
+        )
         self._console.print(
             RichPanel(
                 Group(*lines),
@@ -204,7 +223,7 @@ class PrettyPresenter:
             self._live = Live(
                 self._checklist.renderable(),
                 console=self._console,
-                refresh_per_second=8,
+                refresh_per_second=2,
                 transient=False,
             )
             self._live.start()
@@ -217,9 +236,11 @@ class PrettyPresenter:
             self._live.stop()
             self._live = None
             self._checklist.steps.clear()
+            self._checklist.live_line = ""
         elif self._checklist.steps and not self._console.is_terminal:
             self._console.print(self._checklist.renderable())
             self._checklist.steps.clear()
+            self._checklist.live_line = ""
 
     def _pixel_michi(self) -> bool:
         settings = self._settings

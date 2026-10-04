@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 
 PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
@@ -63,6 +64,33 @@ def render(template: str, values: Mapping[str, str]) -> str:
 
 
 ENGLISH: dict[str, str] = {
+    "run_error.pack_depth": "Unknown pack depth",
+    "run_error.pack_depth_hint": "use quick, normal or deep",
+    "pipeline.feed_session": "session started with {model}",
+    "pipeline.feed_handoff": "handoff to {agent}",
+    "run_error.engine_missing": "{name} not found on PATH",
+    "run_error.engine_install": "install it or pick another engine",
+    "run_error.engine_flags": "{name} lacks flags cuanta needs: {flags}",
+    "run_error.engine_upgrade": "upgrade {name}",
+    "run_error.engine_unknown": "unknown engine {engine_name}",
+    "run_error.engine_choices": "use claude, codex or opencode",
+    "run_error.fields": "missing required fields: {names}",
+    "run_error.fields_hint": "pass them as flags",
+    "run_error.type": "unknown type {type}",
+    "run_error.type_hint": "use one of {choices}",
+    "run_error.forge": "this project has no Forge agents yet (.claude/agents)",
+    "run_error.forge_hint": "run cuanta init first, or use simple mode (--simple)",
+    "run_error.gateway": "no gateway result yet",
+    "run_error.gateway_hint": "run cuanta test first",
+    "run_error.green": "last cuanta test was green \u00b7 nap",
+    "run_error.green_hint": "nothing to fix",
+    "run_error.keep": "--keep only applies to --sandbox runs",
+    "run_error.keep_hint": "add --sandbox",
+    "run_error.classic": "--classic runs without a scout",
+    "run_error.classic_hint": "drop --shape scout or --classic",
+    "run_error.cross": "{engine} cannot run a team of separate launches",
+    "run_error.cross_hint": "use {choices}",
+    "run_error.estimated": "{cost} (estimated)",
     "envelope.time": "Time forecast: P50 {p50} · P90 {p90} · n={samples}",
     "read_efficiency.no_reads": "No successful source reads were observed.",
     "read_efficiency.missing_report": "The report needed to count cited files is unavailable.",
@@ -1178,13 +1206,9 @@ def question_message(text: str) -> Message | None:
 
 def parse_english(text: str, prefix: str) -> Message | None:
     for key, template in ENGLISH.items():
-        if not key.startswith(prefix):
+        if not key.startswith(prefix) or not PLACEHOLDER.sub("", template).strip():
             continue
-        parts = PLACEHOLDER.split(template)
-        pattern = "".join(
-            f"(?P<{part}>.+?)" if index % 2 else re.escape(part) for index, part in enumerate(parts)
-        )
-        found = re.fullmatch(pattern, text)
+        found = _english_pattern(template).fullmatch(text)
         if found:
             return msg(key, **found.groupdict())
     return None
@@ -1195,3 +1219,18 @@ def english(message: Message) -> str:
     if template is None:
         return message.key
     return render(template, message.values(english))
+
+
+@lru_cache(maxsize=2048)
+def _english_pattern(template: str) -> re.Pattern[str]:
+    seen: set[str] = set()
+    parts: list[str] = []
+    for index, part in enumerate(PLACEHOLDER.split(template)):
+        if not index % 2:
+            parts.append(re.escape(part))
+        elif part in seen:
+            parts.append(f"(?P={part})")
+        else:
+            seen.add(part)
+            parts.append(f"(?P<{part}>.+?)")
+    return re.compile("".join(parts), re.DOTALL)

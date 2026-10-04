@@ -56,7 +56,9 @@ def test_the_run_card_and_the_result_name_the_rule_that_turned_docs_on(
     forge(tmp_path)
     fake_runner.streams["claude -p"] = FakeStream([RESULT])
     result = invoke(
-        cross_args(tmp_path, *FEATURE, "--route", "fixed", "--evidence", EVIDENCE, "--plain")
+        cross_args(
+            tmp_path, *FEATURE, "--route", "fixed", "--evidence", EVIDENCE, "--plain", "--verbose"
+        )
     )
     assert result.exit_code == 0, result.stdout
     text = " ".join(result.stdout.split())
@@ -177,7 +179,9 @@ def test_a_gpt_team_follows_the_docs_option_in_the_preview_and_the_run(
     assert AGENT_LINE in listed(asked["team"])
     off = preview(tmp_path, "--engine", "codex", *FEATURE, "--evidence", EVIDENCE, "--docs", "off")
     assert off["docs"] == {"on": False, "reason": "flag_off"} and "docs" not in roles_of(off)
-    result = invoke(cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--docs", "on"))
+    result = invoke(
+        cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--docs", "on", "--verbose")
+    )
     assert result.exit_code == 0, result.stdout
     launches = [call for call in fake_runner.calls if call[:2] == ("codex", "exec")]
     assert len(launches) == 4

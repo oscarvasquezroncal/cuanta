@@ -13,12 +13,14 @@ from textual import events, work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Horizontal
 from textual.css.query import NoMatches
+from textual.notifications import SeverityLevel
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Button, ContentSwitcher, Footer
 
 from cuanta.application.home import HomeSnapshot
 from cuanta.application.tests_view import Hairball
+from cuanta.domain.errors import CuantaError
 from cuanta.domain.fixes import Fix, FixAction, FixKind
 from cuanta.domain.fixes import classify as classify_fix
 from cuanta.domain.progress import Status
@@ -79,6 +81,22 @@ LISTENER_AUTO = "auto"
 
 
 class CuantaApp(App[None]):
+    def notify(
+        self,
+        message: str,
+        *,
+        title: str = "",
+        severity: SeverityLevel = "information",
+        timeout: float | None = None,
+        markup: bool = True,
+    ) -> None:
+        if severity == "error" and not message.startswith(self.catalog("failure.happened")):
+            failure = CuantaError(message)
+            failure.log_path = self.services.record_failure(failure)
+            message = "\n".join(self.catalog.failure(failure))
+            markup = False
+        super().notify(message, title=title, severity=severity, timeout=timeout, markup=markup)
+
     def get_theme_variable_defaults(self) -> dict[str, str]:
         return {**super().get_theme_variable_defaults(), "sky": "ansi_bright_cyan"}
 

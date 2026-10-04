@@ -24,7 +24,9 @@ def guide(session: Session, lang: str) -> "Document":
     from cuanta.domain.messages import msg
     from cuanta.tui.i18n import Catalog, os_locale, resolve_language
 
-    language = resolve_language(lang, load_config(session.project).language, os_locale())
+    language = resolve_language(
+        lang or session.options.lang, load_config(session.project).language, os_locale()
+    )
     say = Catalog(language).message
     title = say(msg("guide.title"))
     items = tuple(

@@ -586,6 +586,9 @@ def snapshot(
 
 @dataclass
 class FakeServices:
+    def record_failure(self, error: BaseException) -> str:
+        return ".cuanta/logs/2026-10-04.log"
+
     def result_shown(self, run_id: str) -> None:
         pass
 
