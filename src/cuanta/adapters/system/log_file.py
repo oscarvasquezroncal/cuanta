@@ -35,6 +35,9 @@ class LogFile:
         with self._lock:
             if self._path is not None:
                 self._append(self._path, text)
+                daily = self._path.parent / f"{datetime.now().date().isoformat()}.log"
+                if "Traceback (most recent call last):" in body and daily != self._path:
+                    self._append(daily, text)
             if self._echo:
                 self._show(text)
 

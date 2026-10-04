@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,16 @@ import pytest
 from cuanta.adapters.system.log_file import LogFile
 
 STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z ")
+
+
+def test_listener_tracebacks_also_reach_the_daily_log(tmp_path: Path) -> None:
+    path = tmp_path / "logs/listener.log"
+    LogFile(path).write(
+        "listener failed", "Traceback (most recent call last):\nValueError: token=abc123"
+    )
+    daily = path.parent / f"{datetime.now().date().isoformat()}.log"
+    assert daily.read_text(encoding="utf-8") == path.read_text(encoding="utf-8")
+    assert "abc123" not in daily.read_text(encoding="utf-8")
 
 
 def test_entries_are_stamped_redacted_and_appended(
