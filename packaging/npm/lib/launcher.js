@@ -4,7 +4,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
 
-const numbers = {SIGINT: 2, SIGTERM: 15, SIGHUP: 1};
+const numbers = {SIGINT: 2, SIGTERM: 15, SIGHUP: 1, SIGBREAK: 21};
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function cacheRoot(platform = process.platform, env = process.env, home = os.homedir()) {
   if (env.CUANTA_RUNTIME_DIR) return path.resolve(env.CUANTA_RUNTIME_DIR);
@@ -52,7 +52,12 @@ function builder(env) {
 function execute(file, args, env, preparing = false) {
   return new Promise((resolve, reject) => {
     const child = cp.spawn(file, args, {env, stdio: preparing ? ['inherit', 2, 2] : 'inherit'});
-    const handlers = Object.fromEntries(Object.keys(numbers).map(signal => [signal, () => child.kill(signal)]));
+    const sharedConsole = process.platform === 'win32' || Boolean(process.stdin.isTTY);
+    const signals = ['SIGINT', 'SIGTERM', 'SIGHUP', ...(sharedConsole ? ['SIGBREAK'] : [])];
+    const handlers = Object.fromEntries(signals.map(signal => [signal, () => {
+      if (sharedConsole && (signal === 'SIGINT' || signal === 'SIGBREAK')) return;
+      child.kill(signal);
+    }]));
     for (const [signal, handler] of Object.entries(handlers)) process.on(signal, handler);
     function cleanup() { for (const [signal, handler] of Object.entries(handlers)) process.removeListener(signal, handler); }
     child.once('error', error => { cleanup(); reject(error); });

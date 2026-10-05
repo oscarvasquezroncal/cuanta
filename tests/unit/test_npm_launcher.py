@@ -13,7 +13,12 @@ def test_node_launcher_contracts() -> None:
         pytest.skip("Node is optional locally; the npm launcher requires Node 18 or newer")
     root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
-        [node, "--test", "packaging/npm/test/launcher.test.cjs"],
+        [
+            node,
+            "--test",
+            "packaging/npm/test/launcher.test.cjs",
+            "packaging/npm/test/signals.test.cjs",
+        ],
         cwd=root,
         capture_output=True,
         text=True,
