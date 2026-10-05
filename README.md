@@ -129,6 +129,28 @@ For a source checkout, use `uv tool install .`; web mode additionally needs
 `--with textual-serve`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for development
 and release steps.
 
+### First npm release and trusted publishing
+
+The release workflow builds once and smokes Node 22 and 24 on all three systems. Manual
+`workflow_dispatch` never publishes. Tag publication uses Node 24 with npm >=11.5.1,
+provenance and environment `npm`; an exact version already in the registry is a successful
+skip. Registry failures stop publication.
+
+For the first package, enable npm account 2FA and create a seven-day granular token with
+read/write **All packages** and **Bypass 2FA**. Store it as `NPM_TOKEN` in the GitHub `npm`
+environment. After reviewing the manual smoke, create the release tag with the repository's
+`scripts\git\push.cmd --tag`.
+
+After the package exists, configure its GitHub Actions trusted publisher on npmjs.com:
+owner `oscarvasquezroncal`, repository `cuanta`, workflow `release.yml`, environment `npm`,
+and allow direct `npm publish`. Revoke the initial token and delete the `NPM_TOKEN` secret.
+The workflow retains OIDC permissions; npm selects OIDC before its optional token fallback.
+See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
+
+npm has announced January 2027 as the target for removing direct publish from bypass-2FA
+tokens. Migrate this initial fallback to trusted publishing before that change.
+See the [npm authentication announcement](https://github.blog/changelog/2026-07-31-restricting-npm-bypass-2fa-granular-access-tokens/).
+
 **Optional extras:**
 - [graphify](https://github.com/Graphify-Labs/graphify) for a code graph agents can query instead of reading files.
 - A TypeSafe key in `TYPESAFE_API_KEY` to make Instinct use Jev.
@@ -467,7 +489,7 @@ _Results will appear here after the first public run of `cuanta bench report --r
 ## Project status and roadmap
 
 **0.3.0, beta.**
-- **Release smoke checks** install the npm tarball on Windows, Linux and macOS with Node 20. Linux and macOS also check process-tree cleanup and the launcher. The full typed, covered suite runs locally; a manual workflow builds and smokes without publishing.
+- **Release smoke checks** install the npm tarball on Windows, Linux and macOS with Node 22 and 24. Linux and macOS also check process-tree cleanup and the launcher. The full typed, covered suite runs locally; a manual workflow builds and smokes without publishing.
 - **Codex and OpenCode** support is newer and less exercised.
 
 **Next up:**

@@ -74,7 +74,7 @@ stay ignored and must be generated on the checkout that creates the tag.
 Before the first npm publication, the repository owner must:
 
 1. Set up an npm account with 2FA and confirm that `cuanta` is available to that account.
-2. Create a granular npm access token allowed to publish that package.
+2. Create a seven-day granular read/write token with All packages and Bypass 2FA for the first publish.
 3. Create the GitHub repository environment `npm` and its secret `NPM_TOKEN`.
 4. Run `release.yml` manually (`workflow_dispatch`) on main and review the package smoke on
    Windows, Linux and macOS, including the focused POSIX process and launcher tests.
@@ -95,12 +95,17 @@ name and checked SHA. Inspect local and remote state before any recovery; a subs
 `--tag` invocation refuses the existing tag. Never force, move or recreate a published tag.
 
 The single `release.yml` workflow validates committed metadata, builds the locked Python wheel
-inside the npm tarball, and installs that artifact on Windows, Linux and macOS with Node 20
+inside the npm tarball, and installs that artifact on Windows, Linux and macOS with Node 22 and 24
 and uv. It checks the CLI version and help; Ubuntu also checks npx. Linux and macOS run explicit
 process-tree, timeout, Ctrl+C and launcher tests after package smoke, bounded to three minutes.
 Manual dispatch builds and smokes without publishing. A validated tag push publishes the same
-artifact from environment `npm` with provenance; only that job receives `id-token: write` and
-`NODE_AUTH_TOKEN` from `NPM_TOKEN`. The full suite and performance gates remain local.
+artifact from environment `npm` with Node 24, explicitly installed npm 11 (>=11.5.1) and
+provenance. An exact version already registered is skipped successfully; registry errors fail
+closed. Only that job receives `id-token: write` and the initial token fallback `NODE_AUTH_TOKEN`
+from `NPM_TOKEN`. Configure the package trusted publisher on npmjs.com after the first publish:
+owner/repository matching this checkout, workflow filename `release.yml`, environment `npm`,
+and direct npm publish permission. Then revoke the token and delete the secret; npm prefers OIDC
+before token authentication. The announced bypass-token direct-publish removal targets January 2027. The full suite and performance gates remain local.
 
 After publication, verify `npx cuanta --version`. Package name availability is not a reservation;
 a local artifact or manual smoke does not prove registry publication.

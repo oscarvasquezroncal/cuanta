@@ -285,6 +285,12 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [0.5.0] - 2026-10-01
 
 ### Release pipeline
+- Before the first npm release, exact setup-uv 10.2.0 references and Node 22/24 smokes replace
+  unsupported references/runtime checks. Publish uses Node 24 with OIDC-capable npm, keeps the
+  first-publish token fallback and skips an already registered version.
+- The npm wrapper lets shared-console Ctrl+C/Ctrl+Break reach the child directly and waits for
+  its exit code; piped POSIX input retains signal forwarding.
+
 - One npm workflow validates committed version metadata, builds the tarball, and smokes it on
   Windows, Linux and macOS. Manual dispatch never publishes; tag pushes publish with provenance
   after all smokes pass. POSIX smoke also checks process-tree cleanup, timeout, Ctrl+C and the launcher.
