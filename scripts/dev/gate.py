@@ -22,7 +22,9 @@ def static(report: Report) -> bool:
     return all(report.run(name, command).code == 0 for name, command in commands)
 
 
-def run(static_only: bool = False, no_perf: bool = False, twice: bool = False) -> int:
+def run(
+    static_only: bool = False, no_perf: bool = False, twice: bool = False, npm: bool = False
+) -> int:
     report = Report("gate")
     if not static(report) or static_only:
         return report.finish()
@@ -68,6 +70,8 @@ def run(static_only: bool = False, no_perf: bool = False, twice: bool = False) -
             )
             if performance.code != 0:
                 break
+    if npm and all(step.code == 0 for step in report.steps):
+        report.run("npm", python(str(ROOT / "scripts" / "npm" / "smoke.py")), timeout=900)
     return report.finish()
 
 
@@ -76,8 +80,9 @@ def main() -> int:
     parser.add_argument("--static", action="store_true")
     parser.add_argument("--no-perf", action="store_true")
     parser.add_argument("--twice", action="store_true")
+    parser.add_argument("--npm", action="store_true", help="Build and smoke the local npm tarball")
     options = parser.parse_args()
-    return run(options.static, options.no_perf, options.twice)
+    return run(options.static, options.no_perf, options.twice, options.npm)
 
 
 if __name__ == "__main__":
