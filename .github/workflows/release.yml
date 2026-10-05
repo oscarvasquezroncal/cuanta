@@ -20,13 +20,13 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: "3.13"
           enable-cache: false
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - name: Validate committed release metadata
@@ -46,6 +46,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["22", "24"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
     permissions:
@@ -58,13 +59,13 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: "3.13"
           enable-cache: false
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: ${{ matrix.node }}
           package-manager-cache: false
       - uses: actions/download-artifact@v8
         with:
@@ -83,19 +84,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: npm
+    env:
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
     permissions:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.13"
+          enable-cache: false
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+      - name: Install npm with OIDC support
+        run: npm install --global npm@11
       - uses: actions/download-artifact@v8
         with:
           name: npm-package
           path: dist
-      - run: npm publish dist/*.tgz --provenance --access public
+      - name: Publish once using OIDC or the first-release token fallback
+        run: uv run --no-project --python 3.13 python scripts/npm/publish.py --tarball-dir dist --version "$RELEASE_VERSION"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

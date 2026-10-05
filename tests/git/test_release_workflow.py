@@ -98,3 +98,17 @@ def test_only_one_release_workflow_remains() -> None:
     assert "tests/unit/test_npm_launcher.py" in workflow
     assert "timeout-minutes: 3" in workflow
     assert "pytest --cov" not in workflow
+
+
+def test_release_supports_node_matrix_and_trusted_idempotent_publication() -> None:
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "astral-sh/setup-uv@v10.2.0" in workflow
+    assert "astral-sh/setup-uv@v10\n" not in workflow
+    assert 'node: ["22", "24"]' in workflow
+    assert "node-version: ${{ matrix.node }}" in workflow
+    assert 'node-version: "20"' not in workflow
+    assert "npm install --global npm@11" in workflow
+    assert "scripts/npm/publish.py" in workflow
+    assert "id-token: write" in workflow
+    assert "environment: npm" in workflow
+    assert "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}" in workflow
