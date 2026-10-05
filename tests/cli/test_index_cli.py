@@ -51,14 +51,18 @@ def test_rebuild_after_excluding_a_bulky_folder_reclaims_the_space(
     assert first.exit_code == 0, first.stdout
     assert json.loads(first.stdout)["files"] == 41
     state = tmp_path / ".cuanta"
-    bloated = sum(item.stat().st_size for item in state.iterdir() if item.is_file())
+    bloated = sum(
+        item.stat().st_size
+        for item in state.iterdir()
+        if item.is_file() and item.name != "inventory-hashes.json"
+    )
     (state / "config.toml").write_text('[detect]\nexclude = [".venv312"]\n', encoding="utf-8")
     rebuilt = invoke([*arguments, "--rebuild"])
     assert rebuilt.exit_code == 0, rebuilt.stdout
     report = json.loads(rebuilt.stdout)
     assert report["files"] == 1
     names = sorted(item.name for item in state.iterdir() if item.name != "index.db.hold")
-    assert names == ["config.toml", "index.db"]
+    assert names == ["config.toml", "index.db", "inventory-hashes.json"]
     assert sum(item.stat().st_size for item in state.iterdir() if item.is_file()) * 4 < bloated
     assert report["reclaimed_bytes"] == bloated - (state / "index.db").stat().st_size
     assert not fake_runner.calls

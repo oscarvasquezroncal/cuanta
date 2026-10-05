@@ -230,6 +230,8 @@ class SqliteIndex:
         self._read_only = read_only
         self._lock = threading.RLock()
         self._closed = False
+        self._rows_cache: dict[tuple[IndexTable, str], tuple[IndexRow, ...]] = {}
+        self._rows_version = -1
         self.recovered = False
         self._replaced = 0
         self._holder = None if read_only else _hold_file(path)
@@ -387,6 +389,13 @@ class SqliteIndex:
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         self._require_write()
         with self._lock:
+            self._rows_cache.clear()
+            if self._connection.in_transaction:
+                try:
+                    yield self._connection
+                finally:
+                    self._rows_cache.clear()
+                return
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 yield self._connection
@@ -394,6 +403,23 @@ class SqliteIndex:
             except BaseException:
                 self._connection.rollback()
                 raise
+            finally:
+                self._rows_cache.clear()
+
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        with self._transaction():
+            yield
+
+    def counts(self) -> tuple[tuple[IndexTable, int], ...]:
+        with self._lock:
+            return tuple(
+                (
+                    table,
+                    int(self._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]),
+                )
+                for table in INDEX_TABLES
+            )
 
     def _require_write(self) -> None:
         if self._read_only:
@@ -417,12 +443,24 @@ class SqliteIndex:
     def rows(self, table: IndexTable, path: str = "") -> tuple[IndexRow, ...]:
         selected = _table(table)
         parameters: tuple[str, ...] = (index_path(path),) if path else ()
+        normalized = parameters[0] if parameters else ""
         where = " WHERE path = ?" if path else ""
         with self._lock:
-            records = self._connection.execute(
-                f"SELECT * FROM {selected}{where} ORDER BY path, line, id", parameters
-            ).fetchall()
-        return tuple(_record(row) for row in records)
+            version = int(self._connection.execute("PRAGMA data_version").fetchone()[0])
+            if version != self._rows_version:
+                self._rows_cache.clear()
+                self._rows_version = version
+            key = table, normalized
+            if key not in self._rows_cache:
+                whole = self._rows_cache.get((table, "")) if normalized else None
+                if whole is not None:
+                    self._rows_cache[key] = tuple(row for row in whole if row.path == normalized)
+                else:
+                    records = self._connection.execute(
+                        f"SELECT * FROM {selected}{where} ORDER BY path, line, id", parameters
+                    ).fetchall()
+                    self._rows_cache[key] = tuple(_record(row) for row in records)
+            return self._rows_cache[key]
 
     def replace_files(self, files: Sequence[IndexedFile], removed: Sequence[str]) -> None:
         self._require_write()
@@ -508,10 +546,10 @@ class SqliteIndex:
             raise ValueError("Replacement records must belong to their source path")
         with self._transaction() as connection:
             connection.execute(f"DELETE FROM {selected} WHERE path = ?", (normalized,))
+            source = connection.execute(
+                "SELECT content_hash FROM files WHERE path = ?", (normalized,)
+            ).fetchone()
             for item in prepared:
-                source = connection.execute(
-                    "SELECT content_hash FROM files WHERE path = ?", (item.path,)
-                ).fetchone()
                 stale = item.stale or source is None or str(source[0]) != item.source_hash
                 connection.execute(
                     f"INSERT INTO {selected} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

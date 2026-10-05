@@ -83,7 +83,10 @@ def test_a_rebuilt_index_keeps_agent_notes_fresh_after_the_first_update(tmp_path
         rebuilt.close()
         container.close()
     names = (item.name for item in (tmp_path / ".cuanta").iterdir())
-    assert sorted(name for name in names if name != "index.db.hold") == ["index.db"]
+    assert sorted(name for name in names if name != "index.db.hold") == [
+        "index.db",
+        "inventory-hashes.json",
+    ]
 
 
 def test_a_clean_rebuild_reports_only_the_space_it_returned(tmp_path: Path) -> None:

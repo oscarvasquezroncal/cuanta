@@ -5,6 +5,7 @@ import json
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 
 from cuanta.domain import index_limit
@@ -14,6 +15,7 @@ from cuanta.domain.index_facts import agent_note, history_row, report_facts, rev
 from cuanta.domain.index_limit import IndexTooLarge, oversized_index
 from cuanta.domain.index_rules import scoped_rules, test_links
 from cuanta.ports.code_index import (
+    BufferedIndex,
     CodeIndex,
     IndexExtractor,
     IndexGraph,
@@ -64,6 +66,10 @@ class IndexService:
         self._reclaimed = reclaimed
 
     def update(self) -> IndexStatus:
+        with self.index.batch() if isinstance(self.index, BufferedIndex) else nullcontext():
+            return self._update()
+
+    def _update(self) -> IndexStatus:
         started = time.perf_counter()
         paths = indexable_paths(self.inventory, self._exclusions, self._limit)
         before = {item.path: item for item in self.index.files()}
@@ -94,7 +100,11 @@ class IndexService:
         meta = self.index.meta()
         return IndexStatus(
             files=len(files),
-            counts=tuple((table, len(self.index.rows(table))) for table in INDEX_TABLES),
+            counts=(
+                self.index.counts()
+                if isinstance(self.index, BufferedIndex)
+                else tuple((table, len(self.index.rows(table))) for table in INDEX_TABLES)
+            ),
             coverage=(
                 sum(item.coverage not in {"unsupported", "reduced"} for item in files) / len(files)
                 if files

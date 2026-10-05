@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol
+from contextlib import AbstractContextManager
+from typing import Protocol, runtime_checkable
 
 from cuanta.domain.code_index import (
     IndexedFile,
@@ -29,6 +30,13 @@ class CodeIndex(Protocol):
     def set_meta(self, values: Mapping[str, str]) -> None: ...
 
     def close(self) -> None: ...
+
+
+@runtime_checkable
+class BufferedIndex(Protocol):
+    def batch(self) -> AbstractContextManager[None]: ...
+
+    def counts(self) -> tuple[tuple[IndexTable, int], ...]: ...
 
 
 class IndexInventory(Protocol):

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import stat
 from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path, PurePath, PurePosixPath
+from uuid import uuid4
 
 from cuanta.adapters.system.git_files import GitView, load_git_view, walk_visible
 from cuanta.adapters.system.platform import home_dir
@@ -118,6 +120,23 @@ class LocalIndexInventory:
         self._root = root.resolve()
         self._exclusions = config_exclusions(exclusions)
         self._view = view or partial(load_git_view, self._root, home_dir(), os.environ)
+        self._hashes: dict[str, tuple[int, int, int, str]] = {}
+        try:
+            cached = json.loads(
+                self._path(".cuanta/inventory-hashes.json").read_text(encoding="utf-8")
+            )
+            if isinstance(cached, dict):
+                for name, entry in cached.items():
+                    if (
+                        isinstance(name, str)
+                        and isinstance(entry, list)
+                        and len(entry) == 4
+                        and all(isinstance(value, int) for value in entry[:3])
+                        and isinstance(entry[3], str)
+                    ):
+                        self._hashes[name] = (int(entry[0]), int(entry[1]), int(entry[2]), entry[3])
+        except (OSError, ValueError):
+            pass
 
     def _excluded(self, relative: str) -> bool:
         return any(
@@ -170,23 +189,53 @@ class LocalIndexInventory:
 
     def candidates(self, paths: Sequence[str] | None = None) -> tuple[IndexedFile, ...]:
         result: list[IndexedFile] = []
+        previous = dict(self._hashes)
         for normalized in self.paths() if paths is None else paths:
             try:
-                payload = self._bytes(normalized)
+                info = self._path(normalized).stat()
+                stamp = (info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                cached = self._hashes.get(normalized)
+                if cached is not None and cached[:3] == stamp:
+                    digest, size = cached[3], info.st_size
+                else:
+                    payload = self._bytes(normalized)
+                    if payload is None:
+                        continue
+                    after = self._path(normalized).stat()
+                    digest, size = hashlib.sha256(payload).hexdigest(), len(payload)
+                    if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) == stamp:
+                        self._hashes[normalized] = (*stamp, digest)
             except (OSError, ValueError):
-                continue
-            if payload is None:
                 continue
             suffix = PurePosixPath(normalized).suffix.lower()
             result.append(
                 IndexedFile(
                     normalized,
-                    hashlib.sha256(payload).hexdigest(),
+                    digest,
                     _LANGUAGES.get(suffix, suffix.lstrip(".") or "text"),
-                    len(payload),
+                    size,
                 )
             )
+        self._hashes = {
+            item.path: self._hashes[item.path] for item in result if item.path in self._hashes
+        }
+        if self._hashes != previous:
+            self._save_hashes()
         return tuple(sorted(result, key=lambda item: item.path))
+
+    def _save_hashes(self) -> None:
+        temporary: Path | None = None
+        try:
+            destination = self._path(".cuanta/inventory-hashes.json")
+            destination.parent.mkdir(exist_ok=True)
+            temporary = self._path(f".cuanta/inventory-{uuid4().hex}.tmp")
+            temporary.write_text(json.dumps(self._hashes, sort_keys=True), encoding="utf-8")
+            os.replace(temporary, destination)
+        except (OSError, ValueError):
+            pass
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def read(self, path: str) -> str | None:
         normalized = index_path(path)

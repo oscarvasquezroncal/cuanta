@@ -102,6 +102,7 @@ class LocalWorkspace:
         self._root = root
         self._git_root = git_root
         self._home = home
+        self._hashes: dict[str, tuple[int, int, int, str]] = {}
 
     def _git_view(self) -> GitView:
         home = self._home if self._home is not None else home_dir()
@@ -178,9 +179,18 @@ class LocalWorkspace:
     def sha256(self, relative: str) -> str | None:
         digest = hashlib.sha256()
         try:
-            with self._path(relative).open("rb") as handle:
+            path = self._path(relative)
+            info = path.stat()
+            stamp = (info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            cached = self._hashes.get(relative)
+            if cached is not None and cached[:3] == stamp:
+                return cached[3]
+            with path.open("rb") as handle:
                 for chunk in iter(lambda: handle.read(65536), b""):
                     digest.update(chunk)
+            after = path.stat()
+            if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) == stamp:
+                self._hashes[relative] = (*stamp, digest.hexdigest())
         except OSError:
             return None
         return digest.hexdigest()
