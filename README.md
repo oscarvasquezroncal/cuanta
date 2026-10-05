@@ -137,6 +137,21 @@ release steps.
 
 ## Quick start
 
+Read-only `cuanta audit` skips post-run tests by default. Writing runs select affected tests;
+use `--verify affected` to forbid a full fallback, `--verify full` to request the complete suite,
+or `--verify off` to skip. These options also work on `run`, `feat`, `fix` and `mandate`.
+Verification has a visible ten-minute wall after the agent finishes, independently of opt-in
+agent limits. Configure it in `.cuanta/config.toml`:
+
+```toml
+[verify]
+mode = "auto"
+timeout_s = 600
+```
+
+Set `timeout_s = 0` for unbounded verification. A timeout is inconclusive and keeps the agent's
+stored result; the output includes the command to execute by hand.
+
 ```bash
 cd path/to/your/project
 

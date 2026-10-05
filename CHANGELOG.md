@@ -284,6 +284,16 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [0.5.0] - 2026-10-01
 
+### Faster preparation and verification
+- `--verify auto|affected|full|off` on mandate, run, feat, fix and audit. Auto skips read-only
+  investigations and unchanged runs, then selects affected tests. A full fallback uses xdist only
+  when the project declares it. `[verify] timeout_s = 600` bounds post-run verification; zero
+  disables the wall. Timeouts are inconclusive, with a command to run by hand, and preserve the
+  completed report. The launch card, live line and short result expose verification and timings.
+- Index writes share one transaction; unchanged file stamps reuse hashes and status counts avoid
+  loading every record. JEV reuses identical requests, bounds each call and the run, and switches
+  to local fallback after an unavailable request without changing consent or redaction.
+
 Teams by provider, forecast envelopes, a live governor, scout and senior execution, a warm queue,
 and a fast implementer that runs Claude features and bug fixes in one verified session by default.
 Includes the unpublished 0.4.0 development changes; mixed-provider presets were retired
