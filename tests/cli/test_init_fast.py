@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -43,13 +43,28 @@ def _runs(root: Path) -> list[str]:
 
 def _capture_spawn(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     spawned: list[list[str]] = []
+    original = subprocess.Popen
 
-    def spawn(command: list[str], **kwargs: object) -> subprocess.Popen[bytes]:
+    def spawn(command: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
+        if "cuanta.adapters.graph.index_graph" not in command:
+            return original(command, **kwargs)
         spawned.append(command)
         return cast("subprocess.Popen[bytes]", SimpleNamespace(pid=424242))
 
     monkeypatch.setattr("cuanta.adapters.graph.index_graph.subprocess.Popen", spawn)
     return spawned
+
+
+def test_graph_spawn_double_keeps_other_processes_real(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    spawned = _capture_spawn(monkeypatch)
+    with subprocess.Popen(
+        [sys.executable, "-c", "print('ready')"], stdout=subprocess.PIPE, text=True
+    ) as probe:
+        output, _ = probe.communicate(timeout=5)
+    assert output == "ready\n"
+    assert spawned == []
 
 
 def _sources(root: Path, count: int) -> Path:
