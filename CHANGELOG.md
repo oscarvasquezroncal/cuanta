@@ -284,6 +284,11 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [0.5.0] - 2026-10-01
 
+- **npm distribution.** A zero-dependency Node launcher runs the Python CLI/TUI through a
+  versioned, atomic cache, preferring uv and falling back to Python 3.12/3.13. Packages include
+  the wheel and hash-pinned runtime requirements, with no lifecycle scripts. `--version`
+  exits before project setup; local tarball smoke covers installation, help and npx.
+
 ### Faster preparation and verification
 - `--verify auto|affected|full|off` on mandate, run, feat, fix and audit. Auto skips read-only
   investigations and unchanged runs, then selects affected tests. A full fallback uses xdist only

@@ -99,32 +99,35 @@ More screens: [light theme](docs/screenshots/home-light.svg),
 
 ## Install
 
-**1. Install [uv](https://docs.astral.sh/uv/).** It also provides Python 3.12+ for you.
+Requires Node 18+ and either [uv](https://docs.astral.sh/uv/) or Python 3.12/3.13.
+Install uv with `winget install astral-sh.uv` on Windows, `brew install uv` on macOS,
+or `curl -LsSf https://astral.sh/uv/install.sh | sh` on Linux. The launcher uses uv
+first and Python otherwise. Have at least one engine installed and signed in:
+[Claude Code](https://docs.claude.com/en/docs/claude-code/overview),
+[Codex CLI](https://github.com/openai/codex) or [OpenCode](https://opencode.ai).
 
 ```bash
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+npx cuanta --version
+npx cuanta meow
 
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-**2. Have at least one engine installed and signed in:**
-- [Claude Code](https://docs.claude.com/en/docs/claude-code/overview)
-- [Codex CLI](https://github.com/openai/codex)
-- [OpenCode](https://opencode.ai)
-
-**3. Install cuanta from PyPI:**
-
-```bash
-uv tool install cuanta
+# Global installation
+npm i -g cuanta
 cuanta meow
+
+# Project development dependency
+npm i -D cuanta
+npx cuanta meow
 ```
 
-For web mode, use `uv tool install cuanta --with textual-serve`, then `cuanta ui --web`.
-To install a source checkout instead, run `uv tool install .` from the folder containing
-`pyproject.toml`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for development and
-release steps.
+The npm package runs the real Python CLI and TUI, with no npm dependencies or lifecycle
+scripts. First use creates a versioned runtime; later launches execute its entry point
+directly. Windows stores it in `%LOCALAPPDATA%\cuanta\npm`, macOS in
+`~/Library/Caches/cuanta/npm`, and Linux in `${XDG_CACHE_HOME:-~/.cache}/cuanta/npm`.
+`CUANTA_RUNTIME_DIR` overrides that cache root. Only the two most recently prepared
+versions remain. To uninstall, remove the npm dependency and delete this cache directory.
+For a source checkout, use `uv tool install .`; web mode additionally needs
+`--with textual-serve`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for development
+and release steps.
 
 **Optional extras:**
 - [graphify](https://github.com/Graphify-Labs/graphify) for a code graph agents can query instead of reading files.

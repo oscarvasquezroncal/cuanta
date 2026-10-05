@@ -6,6 +6,9 @@ What does NOT belong here: rules about how to use a flag (rulebook), history of 
 
 | Key | Where read | Purpose | Surprising? |
 |---|---|---|---|
+| `CUANTA_RUNTIME_DIR` | `packaging/npm/lib/launcher.js` | override the npm runtime cache root; the package version is appended | no |
+| `CUANTA_LAUNCHER_DEBUG` | `packaging/npm/lib/launcher.js` | show npm launcher resolution steps on stderr | no |
+| `cuanta --version` | `src/cuanta/cli/app.py`, `cli/group.py` | print the package version and exit before project initialization | no |
 | `CUANTA_ENGINE` | `src/cuanta/domain/config.py` | default agent engine | no |
 | `CUANTA_INSTINCT` | `src/cuanta/domain/config.py` | instinct backend (heuristic / jev / llm) | no |
 | `cuanta instinct use NAME --global` | `src/cuanta/cli/commands/instinct.py` | set the user-level instinct backend; the project setting takes precedence | no |
