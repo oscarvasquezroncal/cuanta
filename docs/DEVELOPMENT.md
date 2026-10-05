@@ -27,7 +27,7 @@ Finish each milestone with separate
 
 ```cmd
 scripts\git\commit.cmd -m "feat(git): add guarded workflow" scripts/git .githooks .gitattributes
-scripts\git\commit.cmd -m "test(git): cover workflow guards" tests pyproject.toml uv.lock .github/workflows/ci.yml
+scripts\git\commit.cmd -m "test(git): cover workflow guards" tests pyproject.toml uv.lock .github/workflows/release.yml
 scripts\git\commit.cmd -m "docs(git): explain repository workflow" README.md docs
 ```
 
@@ -60,51 +60,50 @@ Cuanta's application never executes Git in the user's projects.
 ## Releases
 
 Only the user publishes release tags. Prepare the release on `main`: synchronize the version
-in `pyproject.toml`, `src/cuanta/__init__.py` and `uv.lock`, and add the matching dated entry
-to `CHANGELOG.md`. Run the required gates, commit through `scripts/git/commit.cmd`, publish
-main through `scripts/git/push.cmd`, and wait for every CI job on that exact commit to pass.
+in `pyproject.toml`, `src/cuanta/__init__.py`, `uv.lock` and `packaging/npm/package.json`, and add
+the matching dated entry to `CHANGELOG.md`. Run the full local gate, commit through
+`scripts/git/commit.cmd`, and publish main through `scripts/git/push.cmd`.
 
-For the first PyPI release, the repository owner must create a pending Trusted Publisher in
-their PyPI account with these values:
+A complete successful gate writes `.cuanta/gates/<tree-hash>.json` with the gated working tree,
+starting HEAD, completion time and phase counts. A temporary Git index computes that tree
+without changing the real index. The record remains valid after commits containing exactly
+those files. Static-only, no-performance, failed or changed-tree executions cannot create a
+green record. Release tagging requires a valid green record for `HEAD^{tree}`; local records
+stay ignored and must be generated on the checkout that creates the tag.
 
-| Field | Value |
-| --- | --- |
-| PyPI project | `cuanta` |
-| GitHub owner | `oscarvasquezroncal` |
-| GitHub repository | `cuanta` |
-| Workflow filename | `release.yml` |
-| Environment | `pypi` |
+Before the first npm publication, the repository owner must:
 
-Create the matching `pypi` environment in the GitHub repository settings. The release uses
-Trusted Publishing; no PyPI API token is stored in the repository or GitHub secrets. A pending
-publisher does not reserve the package name before the first successful publication.
-
-After setup and exact-commit CI are complete, the user runs:
+1. Set up an npm account with 2FA and confirm that `cuanta` is available to that account.
+2. Create a granular npm access token allowed to publish that package.
+3. Create the GitHub repository environment `npm` and its secret `NPM_TOKEN`.
+4. Run `release.yml` manually (`workflow_dispatch`) on main and review the package smoke on
+   Windows, Linux and macOS, including the focused POSIX process and launcher tests.
+5. With those checks green, run the repository's tag command:
 
 ```cmd
 scripts\git\push.cmd --tag
 ```
 
 The tag path requires a clean, attached `main` whose HEAD matches remote main, a valid release
-version with a dated changelog entry, successful current-attempt CI for that exact SHA, and
-no existing local or remote version tag. It creates an annotated `vX.Y.Z` tag at the checked
-commit and pushes only that tag. It does not fast-forward the checkout or push main as part
-of tagging. Unknown arguments are rejected.
+version matching package.json with a dated changelog entry, the exact-tree local gate record,
+and no existing local or remote version tag. It creates an annotated `vX.Y.Z` at the checked
+commit and pushes only that tag. It does not update or publish main while tagging. Unknown
+arguments are rejected.
 
 If the tag push fails after local creation, the script retains the local tag and reports its
 name and checked SHA. Inspect local and remote state before any recovery; a subsequent
 `--tag` invocation refuses the existing tag. Never force, move or recreate a published tag.
 
-The `release.yml` workflow runs the reusable CI gates and installed-wheel smoke checks,
-builds the distributions, publishes from the `pypi` environment, and installs that exact
-published version on Windows, Linux and macOS. Each published-package smoke job runs
-`cuanta --plain meow` and `cuanta --plain doctor` without a local wheel fallback. Only the
-publish job receives `id-token: write`.
+The single `release.yml` workflow validates committed metadata, builds the locked Python wheel
+inside the npm tarball, and installs that artifact on Windows, Linux and macOS with Node 20
+and uv. It checks the CLI version and help; Ubuntu also checks npx. Linux and macOS run explicit
+process-tree, timeout, Ctrl+C and launcher tests after package smoke, bounded to three minutes.
+Manual dispatch builds and smokes without publishing. A validated tag push publishes the same
+artifact from environment `npm` with provenance; only that job receives `id-token: write` and
+`NODE_AUTH_TOKEN` from `NPM_TOKEN`. The full suite and performance gates remain local.
 
-Watch the release with `gh run list --workflow release.yml`, then `gh run watch <run-id>`.
-A release is complete only when publication and all three published-package smoke jobs pass.
-If a post-publication check fails, diagnose it without rewriting the tag or republishing the
-same version.
+After publication, verify `npx cuanta --version`. Package name availability is not a reservation;
+a local artifact or manual smoke does not prove registry publication.
 
 ## House rules
 
@@ -154,9 +153,9 @@ Read the short summary first. Full command output and `summary.json` live under
 The gate prints step durations, pytest counts, coverage and a bounded list of failures.
 Exit codes are 0 for success, 1 for a functional, report or coverage failure, and 2 when
 only performance speed assertions exceed their budgets. The local gate enforces the
-unchanged coverage floor in both phases. CI runs performance separately with
-`continue-on-error: true`; it has independent coverage and does not block install-smoke
-or run on release tags. Release validation still requires every gate and install-smoke job.
+unchanged coverage floor in both phases. The release workflow checks the built npm package;
+it does not repeat the full suite or performance phase. Tag validation requires the green
+local record for the exact committed tree.
 
 ```cmd
 scripts\dev\gate.cmd --static

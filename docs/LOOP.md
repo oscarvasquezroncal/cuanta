@@ -3,7 +3,7 @@
 **Budget:** five parts, no more. Rewritten by `/refresh-agents` only when `VERIFY_TIER` changes.
 What does NOT belong here: scheduling this repo does not have, rules (`CLAUDE.md`).
 
-`VERIFY_TIER` = **`strong`** (pytest + mypy strict + ruff, all gated in CI).
+`VERIFY_TIER` = **`strong`** (pytest + mypy strict + ruff, all gated locally).
 
 > An unattended sequence is sanctioned here — mandate → verify → next mandate from the backlog —
 > with a human reviewing every diff before it is committed.
@@ -12,9 +12,9 @@ What does NOT belong here: scheduling this repo does not have, rules (`CLAUDE.md
 
 A human pastes `docs/MANDATE_TEMPLATE.md` with a filled REQUEST block. The FINAL REPORT's NEXT
 section proposes the following mandate; a human (or an operator who has explicitly opted into
-the unattended sequence below) pastes it. CI (`.github/workflows/ci.yml`, on push / pull request)
-re-runs the gates after commit — it verifies, it does not start mandates. No scheduler, daemon or
-webhook exists here.
+the unattended sequence below) pastes it. The local gate verifies the working tree before commit. The npm release workflow
+(`.github/workflows/release.yml`, on version tags or manual dispatch) builds and smokes the
+package; only a tag push can publish. No scheduler or mandate daemon exists here.
 
 ## 2. Goal
 
@@ -31,7 +31,7 @@ floor, cross-platform, installed-wheel smoke. Nothing else counts as done.
    the architecture gates and coverage floor; cannot prove `live` paths (real engines, network)
    or platforms not run locally.
 5. `uv build && cuanta --plain doctor` — proves the wheel installs and starts; not feature
-   behavior. CI's matrix covers the other OSes; a local run proves only the local one.
+   behavior. The npm smoke matrix covers the other OSes; a local run proves only the local one.
 
 ## 4. Stopping rule
 

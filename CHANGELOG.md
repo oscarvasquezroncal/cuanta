@@ -284,6 +284,16 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [0.5.0] - 2026-10-01
 
+### Release pipeline
+- One npm workflow validates committed version metadata, builds the tarball, and smokes it on
+  Windows, Linux and macOS. Manual dispatch never publishes; tag pushes publish with provenance
+  after all smokes pass. POSIX smoke also checks process-tree cleanup, timeout, Ctrl+C and the launcher.
+- The full gate stays local and records the exact working tree without changing the staging
+  index. Release tagging requires that green record, package version parity and existing Git guards.
+- Portable sandbox types, scoped graph-spawn test doubles and drained Windows process jobs
+  fix the defects found in the prior CI run.
+
+
 - **npm distribution.** A zero-dependency Node launcher runs the Python CLI/TUI through a
   versioned, atomic cache, preferring uv and falling back to Python 3.12/3.13. Packages include
   the wheel and hash-pinned runtime requirements, with no lifecycle scripts. `--version`

@@ -7,8 +7,8 @@
 </picture>
 
 <p>
-  <a href="https://github.com/oscarvasquezroncal/cuanta/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/oscarvasquezroncal/cuanta/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://pypi.org/project/cuanta/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/cuanta?style=flat-square&color=F4A87C&labelColor=1C1B26"></a>
+  <a href="https://github.com/oscarvasquezroncal/cuanta/actions/workflows/release.yml"><img alt="npm release" src="https://github.com/oscarvasquezroncal/cuanta/actions/workflows/release.yml/badge.svg"></a>
+  <a href="https://www.npmjs.com/package/cuanta"><img alt="npm version" src="https://img.shields.io/npm/v/cuanta?style=flat-square&color=F4A87C&labelColor=1C1B26"></a>
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-B4B9F5?style=flat-square&labelColor=1C1B26">
   <img alt="Platforms: Windows, Linux, macOS" src="https://img.shields.io/badge/platforms-windows%20%7C%20linux%20%7C%20macos-9FD8A0?style=flat-square&labelColor=1C1B26">
   <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-F2A7C3?style=flat-square&labelColor=1C1B26">
@@ -467,7 +467,7 @@ _Results will appear here after the first public run of `cuanta bench report --r
 ## Project status and roadmap
 
 **0.3.0, beta.**
-- **CI checks** Windows, Linux and macOS on Python 3.12 and 3.13, then installs the wheel on all three OS. Tagged releases also install the published PyPI package on all three OS.
+- **Release smoke checks** install the npm tarball on Windows, Linux and macOS with Node 20. Linux and macOS also check process-tree cleanup and the launcher. The full typed, covered suite runs locally; a manual workflow builds and smokes without publishing.
 - **Codex and OpenCode** support is newer and less exercised.
 
 **Next up:**

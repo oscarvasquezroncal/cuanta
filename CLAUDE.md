@@ -106,7 +106,7 @@ floor. Preserve performance assertions, measured startup work and budgets.
   `cuanta` console script — external plugins and installed users depend on them.
 - Coverage floor on `domain` + `application` (`[tool.coverage.report]` in `pyproject.toml`);
   never lower it to get green.
-- CI runs ubuntu, macOS **and Windows** on Python 3.12 and 3.13 (`.github/workflows/ci.yml`).
+- The local gate runs the full typed, covered suite. `.github/workflows/release.yml` builds and smokes the npm tarball on ubuntu, macOS **and Windows**, with focused POSIX process and launcher checks.
   Paths, shells, subprocess teardown and console encoding must work on all three.
 - `cuanta --plain meow` and `cuanta --plain doctor` must run from an installed wheel.
 
@@ -191,5 +191,5 @@ Things that look like defects and are not. Filled only by pipeline runs (tester
 ## 10. Deploy state
 
 Release metadata lives in `pyproject.toml`; `uv build` produces the wheel and source archive.
-The PyPI release workflow and user-only tag command are documented in `docs/DEVELOPMENT.md`.
-Treat CLI surface and entry points as public. A built artifact does not prove PyPI publication.
+The npm release workflow and user-only tag command are documented in `docs/DEVELOPMENT.md`.
+Treat CLI surface and entry points as public. A built artifact does not prove npm publication.
