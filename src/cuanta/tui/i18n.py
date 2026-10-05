@@ -8,7 +8,7 @@ from importlib.resources import files
 
 from cuanta.domain.agents import role_of
 from cuanta.domain.errors import CuantaError
-from cuanta.domain.messages import Message, english, keyed, parse_english, render
+from cuanta.domain.messages import Message, english, keyed, msg, parse_english, render
 from cuanta.domain.progress import LiveStatus
 
 LANGUAGES = ("en", "es")
@@ -105,6 +105,10 @@ class Catalog:
 
     def live(self, state: LiveStatus) -> str:
         minutes, seconds = divmod(int(state.seconds), 60)
+        if state.phase == "verification":
+            return self.message(
+                msg("verify.live", runner=state.runner, elapsed=f"{minutes}:{seconds:02d}")
+            )
         return self(
             "run_output.live",
             elapsed=f"{minutes}:{seconds:02d}",

@@ -74,11 +74,18 @@ class ProcessTree:
             self._close_job()
         else:
             with contextlib.suppress(OSError):
-                os.killpg(self._process.pid, signal.SIGTERM)
+                os.killpg(self._process.pid, signal.SIGKILL)
 
     def _close_job(self) -> None:
         if self._job is None:
             if self._process.poll() is None:
+                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                    subprocess.run(
+                        ("taskkill", "/PID", str(self._process.pid), "/T", "/F"),
+                        capture_output=True,
+                        timeout=5,
+                        check=False,
+                    )
                 self._process.kill()
             return
         kernel = _kernel()

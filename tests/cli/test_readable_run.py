@@ -12,6 +12,7 @@ from cuanta.cli.presenters.plain import PlainPresenter, block_lines
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.messages import msg
 from cuanta.domain.progress import Status, note
+from cuanta.domain.verification import DEFAULT_VERIFICATION
 from cuanta.tui.i18n import Catalog
 from tests.fakes import FakeRunner
 from tests.support import assert_golden, invoke
@@ -224,6 +225,7 @@ def test_readable_console_snapshots(language: str, width: int, view: str) -> Non
                 forecast=None,
                 docs=DocsChoice(True, DocsReason.FORCED_ON),
                 limits=NO_LIMITS,
+                verification=DEFAULT_VERIFICATION,
             ),
         )
         rows = launch_rows(prepared, t)

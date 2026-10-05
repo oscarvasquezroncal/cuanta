@@ -1,10 +1,11 @@
-┌─ Launch ──────────────────────────────┐
-│                                       │
-│  Request   Fix a bug                  │
-│  Scope     src/cart.py                │
-│  Team      claude-sonnet-5            │
-│  Forecast  No reliable estimate yet   │
-│  Docs      Docs: on (runs.docs = on)  │
-│  Limits    no limits                  │
-│                                       │
-└───────────────────────────────────────┘
+┌─ Launch ──────────────────────────────────┐
+│                                           │
+│  Request       Fix a bug                  │
+│  Scope         src/cart.py                │
+│  Team          claude-sonnet-5            │
+│  Forecast      No reliable estimate yet   │
+│  Docs          Docs: on (runs.docs = on)  │
+│  Limits        no limits                  │
+│  Verification  affected tests, max 10:00  │
+│                                           │
+└───────────────────────────────────────────┘

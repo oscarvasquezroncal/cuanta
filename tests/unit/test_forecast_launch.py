@@ -30,6 +30,7 @@ from cuanta.domain.routing import ROLES, Provider, Role, RoleRoute, RoutingPolic
 from cuanta.domain.spectrum import estimated_tokens
 from tests.fakes import FakeRunner
 from tests.real_run import PHASES_LINE, phased_mandate
+from tests.tui.fakes import mandate_report
 from tests.unit.test_cross_engine import REQUEST, Recorder, ScriptedEngine
 from tests.unit.test_forecast import COLD_CLOCK, PRICES, sizes, team
 
@@ -215,7 +216,8 @@ class StubService:
 
     def run(self, *args: object) -> object:
         self.seen.append(tuple(item.forecast.run_id for item in self.ledger.forecasts()))
-        return SimpleNamespace(run=SimpleNamespace(id="R1", cost_usd=0.2), ok=True, tests="green")
+        report = mandate_report()
+        return replace(report, run=replace(report.run, id="R1", cost_usd=0.2), tests="green")
 
     def close_decisions(self, run_id: str, outcome: str) -> None:
         return None
@@ -255,6 +257,7 @@ def prepared(ledger: MemoryLedger, run_id: str) -> Prepared:
             docs=None,
             read_hooks=False,
             pack_notes=(),
+            preparation_seconds=None,
         ),
     )
 
@@ -327,6 +330,7 @@ def test_a_failed_native_forecast_is_reported_and_the_launch_goes_ahead() -> Non
             docs=None,
             read_hooks=False,
             pack_notes=(),
+            preparation_seconds=None,
         ),
     )
     recorder = Recorder()

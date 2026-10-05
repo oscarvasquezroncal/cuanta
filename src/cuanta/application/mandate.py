@@ -42,6 +42,7 @@ from cuanta.domain.scout import DocsChoice
 from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, docs_payload
 from cuanta.domain.telemetry import unreadable_note
 from cuanta.domain.testing import GatewayStatus
+from cuanta.domain.verification import VerificationResult
 from cuanta.ports.ledger import Ledger
 from cuanta.ports.progress import ProgressSink
 from cuanta.ports.workspace import Workspace
@@ -139,6 +140,9 @@ class MandateReport:
     read_hooks: bool = False
     implementation: ImplementationReport | None = None
     unreadable_telemetry: int = 0
+    verification: VerificationResult | None = None
+    preparation_seconds: float | None = None
+    agent_seconds: float | None = None
 
 
 class MandateService:
@@ -396,4 +400,17 @@ def report_payload(report: MandateReport) -> dict[str, object]:
         payload["implementation"] = report.implementation.payload()
     if report.unreadable_telemetry > 0:
         payload["telemetry_unreadable"] = report.unreadable_telemetry
+    if report.verification is not None:
+        result = report.verification
+        payload["verification"] = {
+            "status": result.status,
+            "reason": english(result.reason),
+            "command": result.command,
+            "runner": result.runner,
+            "seconds": result.seconds,
+        }
+    if report.preparation_seconds is not None:
+        payload["preparation_seconds"] = report.preparation_seconds
+    if report.agent_seconds is not None:
+        payload["agent_seconds"] = report.agent_seconds
     return payload

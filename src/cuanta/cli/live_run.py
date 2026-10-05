@@ -20,6 +20,8 @@ class RunProgress:
         self._thread = threading.Thread(target=self._tick, daemon=True)
 
     def publish(self, event: ProgressEvent) -> None:
+        with self._lock:
+            self._live.progress(event, time.monotonic())
         if isinstance(event, Note) and event.status is Status.INFO and not self._verbose:
             key = event.message.key if event.message is not None else ""
             if key.startswith(

@@ -58,6 +58,8 @@ class LiveStatus:
     role: str
     tool: str
     file: str
+    phase: str = ""
+    runner: str = ""
 
 
 ProgressEvent = StepStarted | StepFinished | Note | Metric | LiveStatus

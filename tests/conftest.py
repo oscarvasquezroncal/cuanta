@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from hypothesis.configuration import set_hypothesis_home_dir
 
+from cuanta.adapters.system.log_file import LogFile
 from cuanta.adapters.system.shell import descendants
 from tests import timeouts
 from tests.timeouts import remember_stderr, unbounded_live
@@ -44,6 +45,15 @@ def isolated_user_dirs(
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("CUANTA_CONFIG_DIR", str(home / "config"))
     monkeypatch.setenv("CUANTA_HOME", str(home))
+    checkout_logs = Path(__file__).resolve().parent.parent / ".cuanta/logs"
+    append = LogFile._append
+
+    def isolated_append(log: LogFile, path: Path, text: str) -> None:
+        if path.resolve().is_relative_to(checkout_logs):
+            path = home / "logs" / path.resolve().relative_to(checkout_logs)
+        append(log, path, text)
+
+    monkeypatch.setattr(LogFile, "_append", isolated_append)
     for variable in (
         "CUANTA_THEME",
         "CUANTA_ENGINE",

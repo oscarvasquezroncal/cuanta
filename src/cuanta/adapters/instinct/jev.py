@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any
 
 import httpx
@@ -32,7 +36,8 @@ QUESTION_PATH = "/v1/systemone"
 PING_QUESTION = "Is this a connection check?"
 MODEL = "jev-latest"
 KEY_ENV = "TYPESAFE_API_KEY"
-TIMEOUT_S = 20.0
+TIMEOUT_S = 3.0
+RUN_BUDGET_S = 6.0
 MIN_LEVELS = 2
 MAX_LEVELS = 10
 
@@ -69,8 +74,23 @@ def spend(data: Mapping[str, Any], direct: bool) -> float | None:
 
 
 class JevInstinct:
-    def __init__(self, *_: object, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        *_: object,
+        transport: httpx.BaseTransport | None = None,
+        timeout_s: float = TIMEOUT_S,
+        scope: Callable[[], str] = lambda: "",
+    ) -> None:
         self._transport = transport
+        self._timeout_s = max(0.01, timeout_s)
+        self._scope = scope
+        self._run = ""
+        self._deadline = 0.0
+        self._broken = False
+        self._lock = threading.Lock()
+        self._requests: dict[
+            str, Future[tuple[dict[str, Any], dict[str, dict[str, Any]], Receipt]]
+        ] = {}
 
     @property
     def name(self) -> str:
@@ -140,6 +160,62 @@ class JevInstinct:
     def _post_many(
         self, questions: Mapping[str, Mapping[str, Any]], context: Context
     ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], Receipt]:
+        token = self._scope()
+        fingerprint = json.dumps([questions, dict(context)], default=str, sort_keys=True)
+        with self._lock:
+            if token != self._run:
+                self._run, self._broken, self._deadline = token, False, 0.0
+                self._requests.clear()
+            future = self._requests.get(fingerprint)
+            if future is not None and future.done() and future.exception() is None:
+                data, answers, _ = future.result()
+                return data, answers, Receipt(self.name, 0, 0.0)
+            if not self._deadline:
+                self._deadline = time.monotonic() + RUN_BUDGET_S
+            remaining = min(self._timeout_s, self._deadline - time.monotonic())
+            if self._broken or remaining <= 0:
+                if not self._broken:
+                    logging.getLogger(__name__).warning("jev unavailable; using local fallback")
+                self._broken = True
+                raise EnvironmentFailure("jev circuit open; using local fallback")
+            cached = future is not None
+            if future is None:
+                future = Future()
+                self._requests[fingerprint] = future
+                threading.Thread(
+                    target=self._fetch,
+                    args=(future, questions, context, remaining),
+                    daemon=True,
+                ).start()
+        try:
+            data, answers, receipt = future.result(timeout=remaining)
+        except (FutureTimeout, EnvironmentFailure) as error:
+            with self._lock:
+                if not self._broken:
+                    logging.getLogger(__name__).warning("jev unavailable; using local fallback")
+                self._broken = True
+            if isinstance(error, EnvironmentFailure):
+                raise
+            raise EnvironmentFailure(
+                f"jev timed out after {remaining:.2f}s; using local fallback"
+            ) from error
+        return data, answers, Receipt(self.name, 0, 0.0) if cached else receipt
+
+    def _fetch(
+        self,
+        future: Future[tuple[dict[str, Any], dict[str, dict[str, Any]], Receipt]],
+        questions: Mapping[str, Mapping[str, Any]],
+        context: Context,
+        timeout_s: float,
+    ) -> None:
+        try:
+            future.set_result(self._request_many(questions, context, timeout_s))
+        except Exception as error:
+            future.set_exception(error)
+
+    def _request_many(
+        self, questions: Mapping[str, Mapping[str, Any]], context: Context, timeout_s: float
+    ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], Receipt]:
         key = self._require_key()
         body = {
             "state": json.dumps(dict(context), default=str),
@@ -148,7 +224,7 @@ class JevInstinct:
         }
         started = time.perf_counter()
         try:
-            with httpx.Client(transport=self._transport, timeout=TIMEOUT_S) as client:
+            with httpx.Client(transport=self._transport, timeout=timeout_s) as client:
                 response = client.post(
                     self.base + QUESTION_PATH, json=body, headers=self._headers(key)
                 )

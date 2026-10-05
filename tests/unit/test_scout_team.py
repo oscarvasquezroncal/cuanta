@@ -610,6 +610,7 @@ def native_run(
             docs=docs,
             read_hooks=False,
             pack_notes=pack_notes,
+            preparation_seconds=None,
         ),
     )
     recorder = Recorder()

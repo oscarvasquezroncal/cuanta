@@ -96,6 +96,7 @@ from cuanta.domain.scout import (
     scout_session_block,
 )
 from cuanta.domain.team import runs_per_role
+from cuanta.domain.verification import DEFAULT_VERIFICATION, VerificationPolicy, VerificationResult
 from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.engine import Engine
 from cuanta.ports.progress import ProgressSink
@@ -135,6 +136,7 @@ class MandateOptions:
     docs: str = ""
     required: tuple[str, ...] | None = None
     type_stated: bool = True
+    verify: str = ""
 
 
 def scout_launch(options: MandateOptions, task_type: str) -> bool:
@@ -299,6 +301,7 @@ class Prepared:
     limits: RunLimits = NO_LIMITS
     pack_notes: tuple[Message, ...] = ()
     requested_limits: RunLimits = NO_LIMITS
+    verification: VerificationPolicy = DEFAULT_VERIFICATION
 
 
 def pack_notes(
@@ -396,7 +399,12 @@ class MandateFlow:
         fast_ready: Callable[[str], bool] | None = None,
         limits: LimitSettings | None = None,
         steps: SlowSteps | None = None,
+        verification: Callable[[str, VerificationPolicy, ProgressSink], VerificationResult]
+        | None = None,
+        verify_policy: VerificationPolicy = DEFAULT_VERIFICATION,
     ) -> None:
+        self._verification = verification
+        self._verify_policy = verify_policy
         self._steps = steps if steps is not None else SlowSteps(None)
         self._fast_ready = fast_ready or self._engine_steerable
         self._implementation_tools = implementation_tools
@@ -467,7 +475,13 @@ class MandateFlow:
         with self._timing.measure("forecast_plan"), self._steps.sequence() as phase:
             phase(PLAN_STEP, msg("progress.plan"))
             prepared = self._prepare_validated(request, signatures, options, preview, phase)
-        return replace(prepared, preparation_seconds=self._timing.elapsed(started))
+        return replace(
+            prepared,
+            preparation_seconds=self._timing.elapsed(started),
+            verification=replace(
+                self._verify_policy, mode=options.verify or self._verify_policy.mode
+            ),
+        )
 
     def _validate(self, request: MandateRequest, options: MandateOptions) -> None:
         validate(request, options.required)
@@ -918,9 +932,10 @@ class MandateFlow:
         finally:
             self._active = None
         applied = prepared.applied
+        report = self._before_verdict(prepared, report, wall_start)
         if self._routing is not None and applied is not None:
             self._routing.record(report.run.id, prepared.composed.request.type, applied)
-        report = self.verdict(report, progress) if verdict else report
+        report = self.verdict(report, progress, prepared.verification) if verdict else report
         if self._routing is not None and applied is not None:
             cost = None if report.run.partial else report.run.cost_usd
             self._routing.close(report.run.id, report.tests, cost)
@@ -942,6 +957,17 @@ class MandateFlow:
         if pending is None or prepared.spec.temporary_copy:
             return template_note(prepared)
         return self._service.keep_template(pending)
+
+    def _before_verdict(
+        self, prepared: Prepared, report: MandateReport, wall_start: float | None
+    ) -> MandateReport:
+        report = replace(
+            report,
+            preparation_seconds=prepared.preparation_seconds,
+            agent_seconds=self._timing.elapsed(wall_start),
+        )
+        self._service.save_meta(report)
+        return report
 
     def _session_scout(
         self, prepared: Prepared, watch: SessionWatch, report: MandateReport
@@ -972,10 +998,45 @@ class MandateFlow:
             return
         publish_forecast(progress, stored)
 
-    def verdict(self, report: MandateReport, progress: ProgressSink) -> MandateReport:
+    def verdict(
+        self,
+        report: MandateReport,
+        progress: ProgressSink,
+        policy: VerificationPolicy = DEFAULT_VERIFICATION,
+    ) -> MandateReport:
         if report.implementation is not None:
             return report
-        if self._final_suite is None or report.run.status == "interrupted":
+        if report.run.status == "interrupted":
+            return report
+        if policy.mode == "off" or (
+            report.task_type == INVESTIGATION and policy.mode in {"auto", "affected"}
+        ):
+            reason = policy.description(report.task_type == INVESTIGATION)
+            progress.publish(finished("verdict", Status.SKIP, reason))
+            return replace(
+                report, tests="skipped", verification=VerificationResult("skipped", reason)
+            )
+        if self._verification is not None:
+            if policy.mode in {"auto", "affected"} and not report.changed_files:
+                reason = msg("affected.nothing_changed")
+                progress.publish(finished("verdict", Status.SKIP, reason))
+                return replace(
+                    report, tests="skipped", verification=VerificationResult("skipped", reason)
+                )
+            with self._timing.measure("verification", report.run.id):
+                result = self._verification(report.run.id, policy, progress)
+            outcome_status = (
+                Status.SKIP
+                if result.status == "skipped"
+                else Status.OK
+                if result.status == "green"
+                else Status.WARN
+                if result.status == "inconclusive"
+                else Status.FAIL
+            )
+            progress.publish(finished("verdict", outcome_status, result.reason))
+            return replace(report, tests=result.status, verification=result)
+        if self._final_suite is None:
             return report
         progress.publish(started("verdict", msg("mandate.verdict")))
         try:

@@ -79,6 +79,9 @@ class Config:
     implementation_variant: str = ""
     repair_rounds: int = 3
     repair_timeout_s: int = 900
+    verify_mode: str = "auto"
+    verify_timeout_s: float = 600.0
+    instinct_timeout_s: float = 3.0
     implementation_tools: tuple[str, ...] = ()
 
 
@@ -111,6 +114,9 @@ KEY_MAP: dict[str, str] = {
     "runs.variant": "implementation_variant",
     "runs.repair_rounds": "repair_rounds",
     "runs.repair_timeout_s": "repair_timeout_s",
+    "verify.mode": "verify_mode",
+    "verify.timeout_s": "verify_timeout_s",
+    "instinct.timeout_s": "instinct_timeout_s",
     "runs.tools": "implementation_tools",
     "git.workflow": "git_workflow",
     "ui.onboarded": "onboarded",
@@ -254,7 +260,9 @@ def _drop_invalid(layer: dict[str, object]) -> None:
         del layer["docs_mode"]
     if layer.get("limits_mode") not in (None, *LIMITS_MODES):
         del layer["limits_mode"]
-    for name in ("budget_usd", "max_turns", "wall_min"):
+    if layer.get("verify_mode") not in (None, "auto", "affected", "full", "off"):
+        del layer["verify_mode"]
+    for name in ("budget_usd", "max_turns", "wall_min", "verify_timeout_s", "instinct_timeout_s"):
         amount = layer.get(name)
         if isinstance(amount, int | float) and amount < 0:
             del layer[name]

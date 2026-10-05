@@ -34,8 +34,10 @@ class PreparingServices(FakeServices):
         progress(finished("index", Status.OK, took(52.0, file_count(854)), 52.0))
         progress(started("plan", msg("progress.plan")))
         progress(finished("plan", Status.OK, took(21.0), 21.0))
-        progress(started("verdict", msg("mandate.verdict")))
-        return super().run_mandate(request, signatures, options, observer, progress)
+        report = super().run_mandate(request, signatures, options, observer, progress)
+        progress(started("verdict", msg("verify.running", runner="pytest")))
+        progress(finished("verdict", Status.OK, msg("mandate.verdict_status", status="green")))
+        return report
 
 
 @pytest.mark.parametrize(
@@ -48,7 +50,7 @@ class PreparingServices(FakeServices):
 def test_the_run_screen_feed_lists_the_slow_preparation_steps(
     language: str, expected: list[str]
 ) -> None:
-    services = PreparingServices(events=single_context_events())
+    services = PreparingServices(events=single_context_events(), results={})
 
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
         screen = PipelineScreen(
@@ -65,9 +67,10 @@ def test_the_run_screen_feed_lists_the_slow_preparation_steps(
                 return list(screen.query_one("#pipeline-feed", Log).lines)
             return []
 
-        await wait_for(pilot, lambda: "pounce started" in feed())
+        await wait_for(pilot, lambda: any("pytest" in line for line in feed()))
         lines = feed()
         assert lines[: len(expected)] == expected
         assert lines[len(expected)] == "pounce started"
+        assert any("pytest" in line for line in lines)
 
     drive(make_app(services, language), scenario)

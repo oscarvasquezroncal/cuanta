@@ -305,6 +305,8 @@ class ResultScreen(Screen[None]):
             if view.terminal_turn and view.run.max_turns > 0:
                 parts.append(t("result.terminal_turn"))
         facts = Content.styled("  ·  ".join(parts), "$text-muted")
+        if view.timing is not None:
+            facts = Content("\n").join((facts, Content(t.message(view.timing))))
         if not view.verification:
             return facts
         return Content("\n").join((facts, self._verification()))

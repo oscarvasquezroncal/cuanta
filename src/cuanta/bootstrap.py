@@ -147,6 +147,7 @@ if TYPE_CHECKING:
     from cuanta.domain.scout import DocsChoice, ShapeChoice
     from cuanta.domain.shells import Shell
     from cuanta.domain.terminal import TerminalReport
+    from cuanta.domain.verification import VerificationPolicy, VerificationResult
     from cuanta.ports.engine import Engine
     from cuanta.ports.instinct import Instinct
     from cuanta.ports.ledger import Ledger
@@ -185,6 +186,8 @@ class Container:
     _issued: list[str] = field(default_factory=list, repr=False)
     progress: ProgressSink | None = field(default=None, repr=False)
     _index_reported: bool = field(default=False, init=False, repr=False)
+    _workspace: LocalWorkspace | None = field(default=None, init=False, repr=False)
+    _jev: Instinct | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def for_project(cls, project: Path, verbose: bool = False) -> Container:
@@ -216,7 +219,9 @@ class Container:
         return ""
 
     def workspace(self) -> LocalWorkspace:
-        return LocalWorkspace(self.project, self.state_project(), self.home)
+        if self._workspace is None:
+            self._workspace = LocalWorkspace(self.project, self.state_project(), self.home)
+        return self._workspace
 
     def git_view(self) -> GitView:
         from cuanta.adapters.system.git_files import load_git_view
@@ -956,7 +961,12 @@ class Container:
         if chosen == "heuristic":
             return HeuristicInstinct()
         if chosen == "jev":
-            return JevInstinct()
+            if self._jev is None:
+                self._jev = JevInstinct(
+                    timeout_s=self.config.instinct_timeout_s,
+                    scope=lambda: self.decision_scope.run_id or self.decision_scope.request_hash,
+                )
+            return self._jev
         if chosen == "llm":
             return LlmInstinct(self.engine("claude"), str(self.project))
         factory = plugin_factories("cuanta.instinct", {}).get(chosen)
@@ -2248,7 +2258,10 @@ class Container:
             default_budget=self.config.budget_usd,
             default_max_turns=self.config.max_turns,
             limits=self.limit_settings(),
-            final_suite=lambda run_id: self.final_suite(ledger, run_id),
+            verification=lambda run_id, policy, progress: self.verify_suite(
+                ledger, run_id, policy, progress
+            ),
+            verify_policy=self.verification_policy(),
             routing=self.mandate_routing(ledger),
             has_agents=self.has_forge_agents,
             scope=self.decision_scope,
@@ -2310,6 +2323,42 @@ class Container:
         except NotAvailable:
             return None
         return scoped.report.status.value
+
+    def verification_policy(self) -> VerificationPolicy:
+        from cuanta.domain.verification import VerificationPolicy
+
+        return VerificationPolicy(self.config.verify_mode, self.config.verify_timeout_s)
+
+    def verify_suite(
+        self, ledger: Ledger, run_id: str, policy: VerificationPolicy, progress: ProgressSink
+    ) -> VerificationResult:
+        from cuanta.domain.errors import NotAvailable
+        from cuanta.domain.messages import msg
+        from cuanta.domain.progress import Status, note, started
+        from cuanta.domain.verification import VerificationResult, pytest_parallel
+
+        detection = self.detector().run(with_engines=False)
+        gateway = self.affected_gateway(ledger)
+
+        def begin(runner: str, reason: Message) -> None:
+            progress.publish(note(Status.INFO, reason))
+            progress.publish(started("verdict", msg("verify.running", runner=runner)))
+
+        try:
+            choice, _ = self.gateway(ledger).choose(
+                detection.stack, self.config, detection.verify_tier
+            )
+            return gateway.verify(
+                detection.stack,
+                self.config,
+                detection.verify_tier,
+                run_id,
+                policy,
+                pytest_parallel(self.workspace().read_text("pyproject.toml") or "", choice.name),
+                begin,
+            )
+        except NotAvailable:
+            return VerificationResult("skipped", msg("mandate.verdict_skipped"))
 
     def trial_store(self, ledger: Ledger) -> TrialStore:
         from cuanta.application.trials import TrialStore

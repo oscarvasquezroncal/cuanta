@@ -20,6 +20,54 @@ from tests.support import FIXTURES
 FAKE = FIXTURES / "fake_claude.py"
 
 
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_run_timeout_or_interrupt_kills_the_parent_and_grandchild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupted: bool
+) -> None:
+    marker = tmp_path / "tree.pid"
+    script = tmp_path / "tree.py"
+    script.write_text(
+        "import pathlib, subprocess, sys, time, os\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()) + ',' + str(child.pid))\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    original = subprocess.Popen.communicate
+
+    def interrupt(
+        process: subprocess.Popen[str], input: str | None = None, timeout: float | None = None
+    ) -> tuple[str, str]:
+        if isinstance(process.args, list | tuple) and str(script) in process.args:
+            deadline = time.monotonic() + 5
+            while not marker.is_file() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert marker.is_file()
+            raise KeyboardInterrupt
+        return original(process, input=input, timeout=timeout)
+
+    if interrupted:
+        monkeypatch.setattr(subprocess.Popen, "communicate", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            SubprocessRunner().run((sys.executable, str(script), str(marker)), timeout=2)
+    else:
+        result = SubprocessRunner().run((sys.executable, str(script), str(marker)), timeout=2)
+        assert result.returncode == 124
+    parent, child = (int(value) for value in marker.read_text(encoding="utf-8").split(","))
+    try:
+        assert not _alive(parent)
+        assert not _alive(child)
+    finally:
+        if _alive(child):
+            if sys.platform == "win32":
+                subprocess.run(
+                    ("taskkill", "/PID", str(child), "/T", "/F"), check=False, capture_output=True
+                )
+            else:
+                os.kill(child, 9)
+
+
 def _alive(pid: int) -> bool:
     return pid in process_table()
 

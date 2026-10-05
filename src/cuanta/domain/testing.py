@@ -13,6 +13,7 @@ class GatewayStatus(StrEnum):
     GREEN = "green"
     RED = "red"
     PERSISTENT = "persistent_failure"
+    INCONCLUSIVE = "inconclusive"
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +181,8 @@ def persistent_signatures(previous: Iterable[str], current: Iterable[str]) -> tu
 
 
 def gateway_status(outcome: TestOutcome, persistent: Sequence[str]) -> GatewayStatus:
+    if outcome.exit_code == 124:
+        return GatewayStatus.INCONCLUSIVE
     if persistent:
         return GatewayStatus.PERSISTENT
     return GatewayStatus.RED if outcome.red else GatewayStatus.GREEN

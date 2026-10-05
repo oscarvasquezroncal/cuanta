@@ -4,12 +4,22 @@ import re
 import threading
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from cuanta.adapters.system.log_file import LogFile
+from cuanta.bootstrap import record_failure
 
 STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z ")
+
+
+def test_source_checkout_failure_logs_are_isolated_from_the_real_project() -> None:
+    checkout = Path(__file__).resolve().parents[2]
+    with patch.object(LogFile, "_rotate", autospec=True) as rotated:
+        record_failure(checkout, RuntimeError("isolated test failure"))
+    assert rotated.call_count == 1
+    assert not rotated.call_args.args[1].is_relative_to(checkout / ".cuanta/logs")
 
 
 def test_listener_tracebacks_also_reach_the_daily_log(tmp_path: Path) -> None:

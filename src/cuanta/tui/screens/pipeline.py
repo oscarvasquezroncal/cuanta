@@ -213,10 +213,17 @@ class PipelineScreen(Screen[None]):
         self.app.call_from_thread(self.apply, event)
 
     def _from_progress(self, event: ProgressEvent) -> None:
+        if isinstance(event, StepStarted | StepFinished) and event.key == "verdict":
+            self.app.call_from_thread(self._verification_step, event)
+            return
         if isinstance(event, Note):
             self.app.call_from_thread(self._log, self._t.message(event.message, event.text))
         elif isinstance(event, StepStarted | StepFinished) and event.key in PREPARE_STEPS:
             self.app.call_from_thread(self._prepared_step, event)
+
+    def _verification_step(self, event: StepStarted | StepFinished) -> None:
+        self._live.progress(event, self._clock())
+        self._prepared_step(event)
 
     def _prepared_step(self, event: StepStarted | StepFinished) -> None:
         if isinstance(event, StepStarted):

@@ -67,11 +67,14 @@ class ReportRunner:
         if report.exists():
             report.unlink()
         command = self.build(base_command or self.default_command(), report)
-        completed = self._process.run(command, cwd=root, env=env, timeout=TEST_TIMEOUT_S)
+        wall = float(env.get("CUANTA_VERIFY_TIMEOUT_S", TEST_TIMEOUT_S)) if env else TEST_TIMEOUT_S
+        completed = self._process.run(command, cwd=root, env=env, timeout=wall or None)
         output = completed.stdout
         if completed.stderr:
             output = f"{output}\n{completed.stderr}" if output else completed.stderr
-        outcome = self.parse(
-            read_report(report), output, completed.returncode, completed.duration_s
+        outcome = (
+            TestOutcome(0, 0, 0, 0, completed.duration_s, (), exit_code=124)
+            if completed.returncode == 124
+            else self.parse(read_report(report), output, completed.returncode, completed.duration_s)
         )
         return RunnerResult(outcome=outcome, output=output, command=join_command(command))

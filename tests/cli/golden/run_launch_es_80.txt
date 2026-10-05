@@ -6,5 +6,6 @@
 │  Previsión      Todavía no hay una estimación fiable  │
 │  Documentación  Docs: encendido (runs.docs = on)      │
 │  Límites        sin límites                           │
+│  Verificación   pruebas afectadas, máx. 10:00         │
 │                                                       │
 └───────────────────────────────────────────────────────┘

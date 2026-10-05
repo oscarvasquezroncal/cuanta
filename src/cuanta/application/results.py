@@ -38,6 +38,7 @@ from cuanta.domain.sandbox import trial_folder
 from cuanta.domain.scout_report import DOCS_KEY, SCOUT_KEY, ScoutSummary, parse_scout
 from cuanta.domain.spectrum import changed_paths, resolve_agents
 from cuanta.domain.time_anatomy import TimeReport, analyze_time
+from cuanta.domain.verification import timing_message
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.workspace import Workspace
 
@@ -128,6 +129,7 @@ class ResultView:
     time: TimeReport = field(default_factory=TimeReport)
     implementation: dict[str, object] | None = None
     stopped: Message | None = None
+    timing: Message | None = None
 
     @property
     def decidable(self) -> bool:
@@ -341,6 +343,7 @@ class ResultQuery:
             ),
             completion=str(meta.get("completion") or ""),
             stopped=parse_message(meta.get("stopped")),
+            timing=timing_message(meta),
             verification=verify_rounds(meta.get("verification_rounds")),
             index=run_index_metrics(index_events, (run, *roles), self._reports.meta),
             anatomy=analyze_anatomy(resolved),

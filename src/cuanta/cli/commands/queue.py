@@ -65,6 +65,7 @@ MANDATE_PARAMS = frozenset(
         "keep",
         "classic",
         "docs",
+        "verify",
     }
 )
 
@@ -245,6 +246,7 @@ def mandate_args(params: Mapping[str, object]) -> "MandateArgs":
         keep=_flag(params, "keep"),
         classic=_flag(params, "classic"),
         docs=_text(params, "docs"),
+        verify=_text(params, "verify"),
     )
 
 

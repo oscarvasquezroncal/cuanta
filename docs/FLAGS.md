@@ -15,6 +15,7 @@ What does NOT belong here: rules about how to use a flag (rulebook), history of 
 | `CUANTA_PORT` | `src/cuanta/domain/config.py` | local listener port | no |
 | `CUANTA_TEST_COMMAND` | `src/cuanta/domain/config.py` | override detected test command | no |
 | `CUANTA_TEST_RUNNER` | `src/cuanta/domain/config.py` | force a test-runner plugin | no |
+| `CUANTA_VERIFY_TIMEOUT_S` | internal post-run runner override | verification wall in seconds; zero disables it | yes |
 | `CUANTA_BUDGET_USD` | `src/cuanta/domain/config.py` | fixed spend cap for every run, the same value as `[limits] budget_usd` and `budget.usd`; also the default total of `cuanta loop` and init's Forge stage | no |
 | `CUANTA_MAX_TURNS` / `runs.max_turns` (`config.toml`) | `src/cuanta/domain/config.py`, `domain/limits.py` | fixed Claude turn limit for every run, the same value as `[limits] max_turns`; zero or unset means none unless `[runs] limits = "depth"` | yes |
 | `cuanta mandate --max-budget-usd` / `--max-turns` / `--max-wall` (minutes), the same on `queue add` and on `loop` (each fix), `[runs] limits = "off"\|"depth"`, `[limits] budget_usd` / `max_turns` / `wall_min`, the app's Límites/Limits switch | `domain/limits.py`, `domain/config.py`, `application/mandate_flow.py` (`mandate_limits`), `application/engine_run.py` (`_wall`), `application/cross_engine.py`, `cli/commands/mandate.py`, `cli/commands/queue.py`, `cli/commands/loop.py`, `tui/widgets/wizard.py` | runs have no spend cap, no turn limit and no wall-time limit unless one is set: on the command line (an explicit `0` removes that limit for the run), in `[limits]` (fixed values for every run), or with `[runs] limits = "depth"`, which restores the depth caps and turn rails (no wall); `--depth` now picks model tiers, effort and read budget only; a team of separate launches has no default cap (the old $1.00 and depth caps are gone); the wall limit halts the engine and, for a team, is shared across roles; the launch card says `no limits` / `sin límites` or lists the active ones; with no spend cap, an unknown cost no longer blocks repairs; the app's switch starts on with exactly the configured `[limits]` values (other fields 0) and an empty field takes the depth default only in depth mode; the card's limits line and the dry-run `limits` key are the limits the launch applies (no turn limit on Codex or OpenCode), while the guarantee rows still say "Turn limit: not available" when one was asked for; a team's deadline also stops its repair, resume and rotation launches (under 1 s left counts as expired) and role runs record the team's limit; values above the platform timer maximum are clamped | yes |
@@ -147,3 +148,8 @@ Errors have three logical lines and name `.cuanta/logs/YYYY-MM-DD.log`. Tracebac
 in both modes and echoed only with `--verbose`; listener logs keep their existing files and
 also copy tracebacks into the daily log. `--json` retains one final document on stdout;
 progress, launch rows and live states go to stderr.
+
+`CUANTA_VERIFY_TIMEOUT_S` is an internal runner override for post-run verification only.
+`--verify auto|affected|full|off` overrides `[verify] mode = "auto"`; `timeout_s = 600`
+bounds verification after the agent finishes. Set `timeout_s = 0` to disable this wall.
+`[instinct] timeout_s = 3` bounds each remote instinct request.

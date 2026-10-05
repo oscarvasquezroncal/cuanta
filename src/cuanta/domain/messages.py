@@ -64,6 +64,20 @@ def render(template: str, values: Mapping[str, str]) -> str:
 
 
 ENGLISH: dict[str, str] = {
+    "verify.label": "Verification",
+    "verify.skipped": "skipped",
+    "verify.off": "off",
+    "verify.readonly": "skipped (read-only)",
+    "verify.affected": "affected tests",
+    "verify.full": "full suite",
+    "verify.wall": "max {time}",
+    "verify.unbounded": "no time limit",
+    "verify.policy": "{kind}, {wall}",
+    "verify.running": "verifying · {runner}",
+    "verify.live": "verifying · {runner} · {elapsed}",
+    "verify.timeout": "inconclusive: timed out after {time}. Run by hand: {command}",
+    "verify.times": "Preparation {preparation} · Agent {agent} · Verification {verification}",
+    "verify.in_session": "in agent session",
     "run_error.pack_depth": "Unknown pack depth",
     "run_error.pack_depth_hint": "use quick, normal or deep",
     "pipeline.feed_session": "session started with {model}",
@@ -1205,6 +1219,9 @@ def question_message(text: str) -> Message | None:
 
 
 def parse_english(text: str, prefix: str) -> Message | None:
+    for key, template in ENGLISH.items():
+        if key.startswith(prefix) and template == text and not PLACEHOLDER.search(template):
+            return msg(key)
     for key, template in ENGLISH.items():
         if not key.startswith(prefix) or not PLACEHOLDER.sub("", template).strip():
             continue

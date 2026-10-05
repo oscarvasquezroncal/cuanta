@@ -72,6 +72,7 @@ class MandateArgs:
     shortcut: str = ""
     type_stated: bool = True
     sources: tuple[Path, ...] = ()
+    verify: str = ""
 
 
 def mandate_command(
@@ -156,7 +157,7 @@ def mandate_command(
     pure: Annotated[
         bool,
         typer.Option(
-            "--pure", help="Pin helpers and subagents to the model.", rich_help_panel=HOW_TO_RUN
+            "--pure", help="Pin helpers and subagents to the model.", rich_help_panel=ADVANCED
         ),
     ] = False,
     depth: Annotated[
@@ -170,6 +171,14 @@ def mandate_command(
     docs: Annotated[
         str,
         typer.Option("--docs", help="Docs role: auto, on or off.", rich_help_panel=HOW_TO_RUN),
+    ] = "",
+    verify: Annotated[
+        str,
+        typer.Option(
+            "--verify",
+            help="Verification: auto, affected, full or off.",
+            rich_help_panel=HOW_TO_RUN,
+        ),
     ] = "",
     sandbox: Annotated[
         bool,
@@ -339,6 +348,7 @@ def mandate_command(
         keep=keep,
         classic=classic,
         docs=docs,
+        verify=verify,
     )
     execute(ctx, lambda cli: run_mandate(cli, args))
 
@@ -537,6 +547,7 @@ def _options(args: MandateArgs) -> "MandateOptions":
     from cuanta.domain.plugins import SESSIONS
     from cuanta.domain.routing import Role
     from cuanta.domain.scout import docs_refusal
+    from cuanta.domain.verification import VERIFY_MODES
 
     check_choice(args.route, ROUTE_MODES, "--route")
     check_choice(args.profile, PROFILE_CHOICES, "--profile")
@@ -546,6 +557,7 @@ def _options(args: MandateArgs) -> "MandateOptions":
     check_choice(args.depth, tuple(depth.value for depth in DEPTHS), "--depth")
     check_choice(args.shape, tuple(shape.value for shape in Shape), "--shape")
     check_choice(args.docs, DOCS_MODES, "--docs")
+    check_choice(args.verify, VERIFY_MODES, "--verify")
     if args.keep and not args.sandbox:
         raise DomainFailure("--keep only applies to --sandbox runs", "add --sandbox")
     if args.classic and args.shape == Shape.SCOUT.value:
@@ -588,6 +600,7 @@ def _options(args: MandateArgs) -> "MandateOptions":
         docs=args.docs,
         required=ESSENTIAL_FIELDS,
         type_stated=args.type_stated,
+        verify=args.verify,
     )
 
 
@@ -1571,12 +1584,21 @@ def _final(
     verbose: bool = False,
 ) -> "Document":
     from cuanta.application.mandate import report_payload
-    from cuanta.cli.document import Document, Hint, KeyValues, MarkdownText, MascotBlock, Panel
+    from cuanta.cli.document import (
+        Document,
+        Hint,
+        KeyValues,
+        Line,
+        MarkdownText,
+        MascotBlock,
+        Panel,
+    )
     from cuanta.cli.fmt import compact, percent, turn_count, usd
     from cuanta.domain.engine import TURN_LIMIT_SUBTYPE
     from cuanta.domain.governor_report import governor_payload, governor_summary
     from cuanta.domain.scout_report import parse_scout
     from cuanta.domain.stop_reason import stop_message
+    from cuanta.domain.verification import timing_message
     from cuanta.domain.voice import Mood
     from cuanta.tui.i18n import Catalog
 
@@ -1652,6 +1674,9 @@ def _final(
         ),
     )
     blocks: list[Block] = [panel]
+    timing = timing_message(report_payload(report))
+    if timing is not None:
+        blocks.append(Line(t.message(timing)))
     if verbose and report.text.strip():
         blocks.append(MarkdownText(report.text))
     if verbose and report.report_path:
@@ -1728,6 +1753,10 @@ def launch_rows(prepared: "Prepared", t: "Catalog") -> tuple[tuple[str, str], ..
         (t("run_output.forecast"), estimate),
         (t("run_output.docs"), docs),
         (t("run_output.limits"), t.message(limits_message(prepared.limits))),
+        (
+            t.message(msg("verify.label")),
+            t.message(prepared.verification.description(request.type == "investigation")),
+        ),
     )
 
 

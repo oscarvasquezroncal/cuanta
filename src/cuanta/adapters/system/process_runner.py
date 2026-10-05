@@ -165,34 +165,53 @@ class SubprocessRunner:
         timeout: float | None = None,
     ) -> Completed:
         started = time.perf_counter()
+        process: subprocess.Popen[str] | None = None
+        tree: ProcessTree | None = None
         try:
-            completed = subprocess.run(
+            flags = creation_flags()
+            process = subprocess.Popen(
                 self.resolve(args),
                 cwd=cwd,
                 env=_environment(env),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=timeout,
-                check=False,
                 stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                creationflags=flags,
+            )
+            tree = ProcessTree(process, suspended=flags != 0)
+            stdout, stderr = process.communicate(timeout=timeout)
+            return Completed(
+                process.returncode, stdout or "", stderr or "", time.perf_counter() - started
             )
         except FileNotFoundError as error:
             return Completed(127, "", str(error), time.perf_counter() - started)
         except OSError as error:
             return Completed(126, "", str(error), time.perf_counter() - started)
         except subprocess.TimeoutExpired as error:
-            partial = error.stdout if isinstance(error.stdout, str) else ""
+            if tree is not None:
+                tree.close()
+            if process is not None:
+                process.kill() if process.poll() is None else None
+                stdout, _ = process.communicate(timeout=EXIT_GRACE_S)
+            else:
+                stdout = error.stdout if isinstance(error.stdout, str) else ""
             return Completed(
-                124, partial, f"timed out after {timeout}s", time.perf_counter() - started
+                124, stdout or "", f"timed out after {timeout}s", time.perf_counter() - started
             )
-        return Completed(
-            completed.returncode,
-            completed.stdout or "",
-            completed.stderr or "",
-            time.perf_counter() - started,
-        )
+        finally:
+            if tree is not None:
+                tree.close()
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=EXIT_GRACE_S)
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
 
     def stream(
         self,

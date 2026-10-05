@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from cuanta.domain.engine import EngineEvent, ToolCall
-from cuanta.domain.progress import LiveStatus
+from cuanta.domain.progress import LiveStatus, ProgressEvent, StepFinished, StepStarted
 from cuanta.domain.received import Received
 
 
@@ -16,6 +16,18 @@ class LiveRun:
     file: str = ""
     roles: dict[str, str] = field(default_factory=dict)
     last: float | None = None
+    verifying: float | None = None
+    runner: str = ""
+
+    def progress(self, event: ProgressEvent, now: float) -> None:
+        if isinstance(event, StepStarted) and event.key == "verdict":
+            self.verifying = now
+            self.runner = str(dict(event.message.params).get("runner", "")) if event.message else ""
+            self.last = None
+        elif isinstance(event, StepFinished) and event.key == "verdict":
+            self.verifying = None
+            self.tool = ""
+            self.file = ""
 
     def observe(self, event: EngineEvent) -> None:
         self.usage.add(event)
@@ -34,9 +46,11 @@ class LiveRun:
             return None
         self.last = now
         return LiveStatus(
-            max(0.0, now - self.started),
+            max(0.0, now - (self.verifying if self.verifying is not None else self.started)),
             sum(item.total for item in self.usage.usage),
             self.role,
             self.tool,
             self.file,
+            "verification" if self.verifying is not None else "",
+            self.runner,
         )
