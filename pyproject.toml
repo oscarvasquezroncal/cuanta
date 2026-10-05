@@ -33,6 +33,11 @@ dependencies = [
     "tree-sitter-go>=0.25.0,<0.26",
 ]
 
+[project.urls]
+Homepage = "https://github.com/oscarvasquezroncal/cuanta"
+Repository = "https://github.com/oscarvasquezroncal/cuanta"
+"Bug Tracker" = "https://github.com/oscarvasquezroncal/cuanta/issues"
+
 [project.scripts]
 cuanta = "cuanta.cli.app:main"
 

@@ -16,3 +16,5 @@ snapshot_report.html
 .pytest_cache/
 .hypothesis/
 *.[zZ][iI][pP]
+
+packaging/npm/payload/

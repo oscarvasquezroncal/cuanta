@@ -56,9 +56,23 @@ app = typer.Typer(
 )
 
 
+def _show_version(value: bool) -> None:
+    if value:
+        from cuanta import __version__
+
+        typer.echo(f"cuanta {__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
 def root(
     ctx: typer.Context,
+    _version: Annotated[
+        bool,
+        typer.Option(
+            "--version", callback=_show_version, is_eager=True, help="Show version and exit."
+        ),
+    ] = False,
     plain: Annotated[bool, typer.Option("--plain", help="No color, emoji or animation.")] = False,
     json_output: Annotated[
         bool, typer.Option("--json", help="One JSON document on stdout.")

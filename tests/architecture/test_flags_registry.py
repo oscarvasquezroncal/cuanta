@@ -36,6 +36,7 @@ def test_every_documented_cuanta_env_is_read_somewhere() -> None:
     files = (
         *((ROOT / "src" / "cuanta").rglob("*.py")),
         *(path for path in (ROOT / "tests").rglob("*.py") if "fixtures" not in path.parts),
+        *((ROOT / "packaging" / "npm" / "lib").rglob("*.js")),
         ROOT / ".github" / "workflows" / "ci.yml",
     )
     text = "\n".join(path.read_text(encoding="utf-8") for path in files)

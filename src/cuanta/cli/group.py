@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-GLOBAL_FLAGS = frozenset({"--plain", "--json", "--no-emoji", "--yes", "-y", "--verbose", "-V"})
+GLOBAL_FLAGS = frozenset(
+    {"--plain", "--json", "--no-emoji", "--yes", "-y", "--verbose", "-V", "--version"}
+)
 GLOBAL_VALUED = frozenset({"--theme", "--project", "--lang"})
 
 

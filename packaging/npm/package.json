@@ -1,0 +1,39 @@
+{
+  "name": "cuanta",
+  "version": "0.5.0",
+  "description": "every token, accounted for \u2014 token observability and Forge bootstrap for AI coding agents",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oscarvasquezroncal/cuanta.git"
+  },
+  "homepage": "https://github.com/oscarvasquezroncal/cuanta",
+  "bugs": {
+    "url": "https://github.com/oscarvasquezroncal/cuanta/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "opencode",
+    "tokens",
+    "observability",
+    "cli"
+  ],
+  "bin": {
+    "cuanta": "bin/cuanta.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "payload",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
