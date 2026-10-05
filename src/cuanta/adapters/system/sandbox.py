@@ -75,7 +75,8 @@ def default_parents() -> tuple[Path, ...]:
 
 def _long(path: Path) -> str:
     text = str(path)
-    if sys.platform != "win32" or text.startswith(EXTENDED):
+    native = sys.platform == "win32"
+    if not native or text.startswith(EXTENDED):
         return text
     if text.startswith("\\\\"):
         return EXTENDED + "UNC\\" + text[2:]

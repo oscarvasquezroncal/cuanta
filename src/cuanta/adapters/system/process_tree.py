@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from ctypes import wintypes
 from typing import Any
 
@@ -13,6 +14,8 @@ KILL_ON_JOB_CLOSE = 0x2000
 BREAKAWAY_OK = 0x0800
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 EXTENDED_LIMIT_INFORMATION = 9
+BASIC_ACCOUNTING_INFORMATION = 1
+JOB_EXIT_GRACE_S = 2.0
 PROCESS_SET_QUOTA = 0x0100
 PROCESS_TERMINATE = 0x0001
 PROCESS_SUSPEND_RESUME = 0x0800
@@ -45,6 +48,19 @@ class _ExtendedLimits(ctypes.Structure):
         ("JobMemoryLimit", ctypes.c_size_t),
         ("PeakProcessMemoryUsed", ctypes.c_size_t),
         ("PeakJobMemoryUsed", ctypes.c_size_t),
+    )
+
+
+class _Accounting(ctypes.Structure):
+    _fields_ = (
+        ("TotalUserTime", ctypes.c_int64),
+        ("TotalKernelTime", ctypes.c_int64),
+        ("ThisPeriodTotalUserTime", ctypes.c_int64),
+        ("ThisPeriodTotalKernelTime", ctypes.c_int64),
+        ("TotalPageFaultCount", wintypes.DWORD),
+        ("TotalProcesses", wintypes.DWORD),
+        ("ActiveProcesses", wintypes.DWORD),
+        ("TotalTerminatedProcesses", wintypes.DWORD),
     )
 
 
@@ -89,9 +105,32 @@ class ProcessTree:
                 self._process.kill()
             return
         kernel = _kernel()
-        kernel.TerminateJobObject(self._job, 1)
-        kernel.CloseHandle(self._job)
-        self._job = None
+        try:
+            if not kernel.TerminateJobObject(self._job, 1):
+                raise OSError("Cannot terminate the process job")
+            _drain_job(kernel, self._job)
+        finally:
+            kernel.CloseHandle(self._job)
+            self._job = None
+
+
+def _drain_job(kernel: Any, job: int) -> None:
+    information = _Accounting()
+    deadline = time.monotonic() + JOB_EXIT_GRACE_S
+    while True:
+        if not kernel.QueryInformationJobObject(
+            job,
+            BASIC_ACCOUNTING_INFORMATION,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+            None,
+        ):
+            raise OSError("Cannot inspect the terminated process job")
+        if information.ActiveProcesses == 0:
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Terminated job processes did not exit within the cleanup grace")
+        time.sleep(0.005)
 
 
 def _kernel() -> Any:
@@ -115,6 +154,13 @@ def _load_kernel() -> Any:
     kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
     kernel.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
     kernel.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    kernel.QueryInformationJobObject.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    )
     kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
     return kernel
 

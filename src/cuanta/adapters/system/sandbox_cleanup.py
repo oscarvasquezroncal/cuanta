@@ -56,11 +56,13 @@ class BackgroundCleanup:
         if self._started:
             return
         self._started = True
-        flags = (
-            subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB
-            if os.name == "nt"
-            else 0
-        )
+        flags = 0
+        if sys.platform == "win32":
+            flags = (
+                subprocess.CREATE_NO_WINDOW
+                | subprocess.DETACHED_PROCESS
+                | CREATE_BREAKAWAY_FROM_JOB
+            )
         try:
             process = subprocess.Popen(
                 [sys.executable, "-m", "cuanta.adapters.system.sandbox_cleanup", str(self._path)],
