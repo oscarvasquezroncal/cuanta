@@ -25,7 +25,7 @@ from cuanta.ports.system import Completed
 from tests.fakes import FakeRunner, FakeStream
 
 HELP_WITH_TURNS = '--print --input-format <format> "text" (default), or "stream-json"'
-FINISH = "termina ahora: aplica lo que está completo"
+FINISH = "termina ahora: aplica lo que está completo "
 ASSISTANT = json.dumps(
     {
         "type": "assistant",
