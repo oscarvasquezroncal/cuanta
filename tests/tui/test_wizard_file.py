@@ -261,6 +261,7 @@ def test_a_twelve_kilobyte_paste_reaches_the_launch_whole() -> None:
         assert (screen.request.what, screen.request.why) == (parsed.what, parsed.why)
         assert len(screen.request.why) > 11_000
         assert screen.options.required == ESSENTIAL_FIELDS
+        await wait_for(pilot, lambda: services.last == text.strip())
         assert services.last == text.strip()
 
     drive(make_app(services), scenario, size=(120, 50))
