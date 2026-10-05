@@ -183,10 +183,10 @@ def test_files_in_the_git_index_stay_even_when_a_pattern_matches(tmp_path: Path)
 
 
 def test_the_folders_git_tracks_something_in_are_named(tmp_path: Path) -> None:
-    for name in (".github/workflows/ci.yml", ".odoo_ref/sale.py", "app.py"):
+    for name in (".github/workflows/release.yml", ".odoo_ref/sale.py", "app.py"):
         _write(tmp_path, name)
     (tmp_path / ".git").mkdir()
-    tracked = (".github/workflows/ci.yml", "vendored", "app.py")
+    tracked = (".github/workflows/release.yml", "vendored", "app.py")
     (tmp_path / ".git" / "index").write_bytes(git_index(tracked))
     inventory = LocalIndexInventory(tmp_path)
     folders = (".github", ".odoo_ref", "vendored", "app.py", ".git")

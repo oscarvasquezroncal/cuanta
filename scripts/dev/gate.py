@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dev.results import ROOT, Report, python, test_environment
+from dev import gate_record
+from dev.results import ROOT, Report, Step, python, test_environment
 
 
 def static(report: Report) -> bool:
@@ -26,6 +28,8 @@ def run(
     static_only: bool = False, no_perf: bool = False, twice: bool = False, npm: bool = False
 ) -> int:
     report = Report("gate")
+    gated_tree = gate_record.worktree(ROOT) if not static_only and not no_perf else ""
+    head = gate_record.git(ROOT, "rev-parse", "HEAD") if gated_tree else ""
     if not static(report) or static_only:
         return report.finish()
     environment = test_environment(report.directory)
@@ -72,7 +76,39 @@ def run(
                 break
     if npm and all(step.code == 0 for step in report.steps):
         report.run("npm", python(str(ROOT / "scripts" / "npm" / "smoke.py")), timeout=900)
+    if gated_tree and all(step.code == 0 for step in report.steps):
+        record_gate(report, gated_tree, head)
     return report.finish()
+
+
+def record_gate(report: Report, tree: str, head: str) -> None:
+    started = time.monotonic()
+    try:
+        if gate_record.worktree(ROOT) != tree:
+            raise ValueError("Working tree changed during the gate")
+        counts = {
+            "static": sum(
+                step.name in {"ruff", "format", "mypy", "privacy"} for step in report.steps
+            ),
+            "functional": sum(
+                step.tests.passed
+                for step in report.steps
+                if step.name.startswith("pytest-") and step.tests is not None
+            ),
+            "performance": sum(
+                step.tests.passed
+                for step in report.steps
+                if step.name.startswith("performance-") and step.tests is not None
+            ),
+        }
+        path = gate_record.write_green(ROOT, tree, head, counts)
+        report.steps.append(
+            Step("gate-record", [], 0, round(time.monotonic() - started, 2), str(path))
+        )
+    except (OSError, ValueError) as error:
+        report.steps.append(
+            Step("gate-record", [], 1, round(time.monotonic() - started, 2), "", problem=str(error))
+        )
 
 
 def main() -> int:

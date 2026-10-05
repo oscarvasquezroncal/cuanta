@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -35,8 +36,17 @@ def command(
     return result.stdout, time.perf_counter() - started
 
 
-def smoke() -> dict[str, object]:
-    tarball = pack()
+def tarball_from(folder: Path) -> Path:
+    files = sorted(folder.glob("*.tgz"))
+    if len(files) != 1:
+        raise ValueError("npm smoke requires exactly one tarball")
+    return files[0].resolve()
+
+
+def smoke(
+    tarball: Path | None = None, expected_version: str | None = None, *, npx: bool = True
+) -> dict[str, object]:
+    tarball = tarball or pack()
     with tempfile.TemporaryDirectory(prefix="cuanta-npm-smoke-") as folder:
         temporary = Path(folder)
         target = temporary / "install space"
@@ -63,7 +73,7 @@ def smoke() -> dict[str, object]:
         version, first = command(
             [str(entry), "--version"], temporary, environment, batch=os.name == "nt"
         )
-        expected = str(
+        expected = expected_version or str(
             json.loads((ROOT / "packaging/npm/package.json").read_text(encoding="utf-8"))["version"]
         )
         if version.strip() != f"cuanta {expected}":
@@ -73,29 +83,44 @@ def smoke() -> dict[str, object]:
         )
         if "Usage:" not in help_text:
             raise ValueError("Installed CLI help did not render")
-        npx_version, npx_seconds = command(
-            [
-                *npm_command("npx"),
-                "--yes",
-                "--cache",
-                str(temporary / "npm-cache"),
-                "file:" + tarball.as_posix(),
-                "--version",
-            ],
-            temporary,
-            environment,
-        )
-        if npx_version.strip() != f"cuanta {expected}":
-            raise ValueError(f"Unexpected npx version output: {npx_version!r}")
+        npx_seconds: float | None = None
+        if npx:
+            npx_version, npx_seconds = command(
+                [
+                    *npm_command("npx"),
+                    "--yes",
+                    "--cache",
+                    str(temporary / "npm-cache"),
+                    "file:" + tarball.as_posix(),
+                    "--version",
+                ],
+                temporary,
+                environment,
+            )
+            if npx_version.strip() != f"cuanta {expected}":
+                raise ValueError(f"Unexpected npx version output: {npx_version!r}")
         result: dict[str, object] = {
             "version": expected,
             "first_seconds": round(first, 3),
             "warm_help_seconds": round(warm, 3),
-            "npx_seconds": round(npx_seconds, 3),
+            "npx_seconds": round(npx_seconds, 3) if npx_seconds is not None else None,
         }
         print(json.dumps(result))
         return result
 
 
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Smoke a built npm tarball outside the checkout")
+    parser.add_argument("--tarball-dir", type=Path)
+    parser.add_argument("--expected-version")
+    parser.add_argument("--npx", action="store_true")
+    options = parser.parse_args()
+    if options.tarball_dir is None:
+        smoke()
+    else:
+        smoke(tarball_from(options.tarball_dir), options.expected_version, npx=options.npx)
+    return 0
+
+
 if __name__ == "__main__":
-    smoke()
+    raise SystemExit(main())

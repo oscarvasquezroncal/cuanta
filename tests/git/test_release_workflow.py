@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import re
 import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -11,24 +9,16 @@ from tests.git.test_workflow import ROOT, git, repo, run
 __all__ = ["repo"]
 
 
-def metadata_step() -> str:
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    match = re.search(
-        r"^\s+uv run --no-project --python 3\.12 python - <<'PY'\n(.*?)^\s+PY$",
-        workflow,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert match is not None
-    return textwrap.dedent(match[1])
-
-
 @pytest.fixture
 def release_commit(repo: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     (repo / "pyproject.toml").write_text('[project]\nversion = "0.3.0"\n', encoding="utf-8")
     (repo / "CHANGELOG.md").write_text("## [0.3.0] - 2026-09-26\n", encoding="utf-8")
-    git(repo, "add", "pyproject.toml", "CHANGELOG.md")
+    (repo / "packaging/npm").mkdir(parents=True)
+    (repo / "packaging/npm/package.json").write_text('{"version": "0.3.0"}', encoding="utf-8")
+    git(repo, "add", "pyproject.toml", "CHANGELOG.md", "packaging/npm/package.json")
     git(repo, "commit", "-m", "chore(release): prepare fixture")
     output = repo.parent / "github-output"
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
     monkeypatch.setenv("GITHUB_SHA", git(repo, "rev-parse", "HEAD"))
     monkeypatch.setenv("GITHUB_REF_TYPE", "tag")
     monkeypatch.setenv("GITHUB_REF_NAME", "v0.3.0")
@@ -40,7 +30,7 @@ def test_release_workflow_emits_only_the_validated_version(
     release_commit: tuple[Path, Path],
 ) -> None:
     repository, output = release_commit
-    result = run(repository, sys.executable, "-c", metadata_step())
+    result = run(repository, sys.executable, str(ROOT / "scripts/git/release_metadata.py"))
     assert result.returncode == 0, result.stdout + result.stderr
     assert output.read_text(encoding="utf-8") == "version=0.3.0\n"
     assert git(repository, "tag", "--list") == ""
@@ -59,7 +49,7 @@ def test_release_workflow_rejects_a_ref_that_is_not_the_release_tag(
     repository, output = release_commit
     monkeypatch.setenv("GITHUB_REF_TYPE", ref_type)
     monkeypatch.setenv("GITHUB_REF_NAME", ref_name)
-    result = run(repository, sys.executable, "-c", metadata_step())
+    result = run(repository, sys.executable, str(ROOT / "scripts/git/release_metadata.py"))
     assert result.returncode != 0
     assert "Release requires tag v0.3.0" in result.stderr
     assert not output.exists()
@@ -78,7 +68,33 @@ def test_release_workflow_refuses_missing_or_invalid_committed_release_notes(
     git(repository, "commit", "-m", "test(release): invalidate fixture release notes")
     monkeypatch.setenv("GITHUB_SHA", git(repository, "rev-parse", "HEAD"))
     (repository / "CHANGELOG.md").write_text("## [0.3.0] - 2026-09-26\n", encoding="utf-8")
-    result = run(repository, sys.executable, "-c", metadata_step())
+    result = run(repository, sys.executable, str(ROOT / "scripts/git/release_metadata.py"))
     assert result.returncode != 0
     assert "CHANGELOG.md" in result.stderr
     assert not output.exists()
+
+
+def test_dispatch_builds_without_creating_a_tag(
+    release_commit: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, output = release_commit
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_REF_TYPE", "branch")
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+    result = run(repository, sys.executable, str(ROOT / "scripts/git/release_metadata.py"))
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8") == "version=0.3.0\n"
+    assert git(repository, "tag", "--list") == ""
+
+
+def test_only_one_release_workflow_remains() -> None:
+    paths = tuple((ROOT / ".github/workflows").glob("*.yml"))
+    assert [path.name for path in paths] == ["release.yml"]
+    workflow = paths[0].read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in workflow
+    assert "needs: [build, smoke]" in workflow
+    assert "github.event_name == 'push'" in workflow
+    assert "tests/adapters/test_process_hygiene.py" in workflow
+    assert "tests/unit/test_npm_launcher.py" in workflow
+    assert "timeout-minutes: 3" in workflow
+    assert "pytest --cov" not in workflow

@@ -24,7 +24,7 @@ from cuanta.domain.routing import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
-from dev import acceptance, focus, gate, results, spec, trial
+from dev import acceptance, focus, gate, gate_record, results, spec, trial
 
 
 def definition(project: Path) -> spec.Spec:
@@ -453,6 +453,10 @@ def test_gate_options_preserve_both_phases_and_twice_order(
     report = results.Report("smoke", tmp_path)
     monkeypatch.setattr(gate, "Report", lambda *a: report)
     monkeypatch.setattr(gate, "static", lambda r: True)
+    monkeypatch.setattr(gate_record, "worktree", lambda root: "a" * 40)
+    monkeypatch.setattr(gate_record, "git", lambda *args: "b" * 40)
+    recorded: list[str] = []
+    monkeypatch.setattr(gate, "record_gate", lambda report, tree, head: recorded.append(tree))
 
     def fake(name: str, command: list[str], **kwargs: Any) -> results.Step:
         step = results.Step(name, command, 0, 0, "fake")
@@ -467,9 +471,11 @@ def test_gate_options_preserve_both_phases_and_twice_order(
         "pytest-2",
         "performance-2",
     ]
+    assert recorded == ["a" * 40]
     report.steps.clear()
     assert gate.run(no_perf=True) == 0
     assert [step.name for step in report.steps] == ["pytest-1"]
+    assert recorded == ["a" * 40]
 
 
 def test_missing_structured_report_fails_closed(tmp_path: Path) -> None:

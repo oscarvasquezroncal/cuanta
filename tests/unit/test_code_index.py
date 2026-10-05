@@ -145,11 +145,11 @@ def test_a_hidden_folder_git_tracks_is_left_out_of_the_lines_to_paste(tmp_path: 
         target = tmp_path / ".odoo_ref" / "addons" / f"m{number}.py"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f"value = {number}\n", encoding="utf-8")
-    for name in ("creator/a.py", "creator/b.py", ".github/workflows/ci.yml", "app.py"):
+    for name in ("creator/a.py", "creator/b.py", ".github/workflows/release.yml", "app.py"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text("value = 1\n", encoding="utf-8")
     (tmp_path / ".git").mkdir()
-    tracked = (".github/workflows/ci.yml", "app.py", "creator/a.py", "creator/b.py")
+    tracked = (".github/workflows/release.yml", "app.py", "creator/a.py", "creator/b.py")
     (tmp_path / ".git" / "index").write_bytes(git_index(tracked))
     index = SqliteIndex(tmp_path / ".cuanta" / "index.db")
     service = IndexService(index, LocalIndexInventory(tmp_path), lambda: "2026-10-03", limit=5)

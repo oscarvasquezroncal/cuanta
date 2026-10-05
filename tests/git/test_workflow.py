@@ -53,6 +53,11 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("UV_OFFLINE", "1")
     root = new_repo(tmp_path / "working copy")
     shutil.copytree(ROOT / "scripts" / "git", root / "scripts" / "git")
+    shutil.copytree(
+        ROOT / "scripts" / "dev",
+        root / "scripts" / "dev",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
     shutil.copytree(ROOT / ".githooks", root / ".githooks")
     shutil.copy2(ROOT / ".gitattributes", root / ".gitattributes")
     shutil.copy2(ROOT / ".gitignore", root / ".gitignore")

@@ -3,12 +3,9 @@ from __future__ import annotations
 import importlib
 import json
 import os
-import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
 
 import pytest
 from tests.git.test_workflow import ROOT, advance_remote, commit_file, git, remote_for, run, script
@@ -22,42 +19,24 @@ def release(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return importlib.import_module("tag_release")
 
 
-def ci_run(sha: str, **changes: object) -> dict[str, object]:
-    return {
-        "databaseId": 123,
-        "attempt": 2,
-        "headSha": sha,
-        "headBranch": "main",
-        "event": "push",
-        "status": "completed",
-        "conclusion": "success",
-        "workflowName": "ci",
-        **changes,
-    }
-
-
-def ci_detail(release: ModuleType, sha: str, **changes: object) -> dict[str, object]:
-    return {
-        **ci_run(sha),
-        "jobs": [
-            {"name": name, "status": "completed", "conclusion": "success"}
-            for name in sorted(release.EXPECTED_JOBS)
-        ],
-        **changes,
-    }
-
-
-def fake_ci(
-    release: ModuleType, monkeypatch: pytest.MonkeyPatch, sha: str
-) -> list[tuple[str, ...]]:
-    calls: list[tuple[str, ...]] = []
-
-    def invoke(*args: str) -> object:
-        calls.append(args)
-        return [ci_run(sha)] if args[:2] == ("run", "list") else ci_detail(release, sha)
-
-    monkeypatch.setattr(release, "gh", invoke)
-    return calls
+def fake_green(case: TagRepo) -> Path:
+    tree = git(case.root, "rev-parse", "HEAD^{tree}")
+    folder = case.root / ".cuanta" / "gates"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{tree}.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tree": tree,
+                "head": case.sha,
+                "status": "green",
+                "finished_at": "2026-10-05T12:00:00+00:00",
+                "counts": {"static": 3, "functional": 10, "performance": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 @dataclass(frozen=True)
@@ -73,14 +52,21 @@ def tag_repo(repo: Path, release: ModuleType, monkeypatch: pytest.MonkeyPatch) -
         '[project]\nname = "release-fixture"\nversion = "0.3.0"\n', encoding="utf-8"
     )
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [0.3.0] - 2026-09-26\n", encoding="utf-8")
-    git(repo, "add", "pyproject.toml", "CHANGELOG.md")
+    (repo / "packaging/npm").mkdir(parents=True)
+    (repo / "packaging/npm/package.json").write_text(
+        json.dumps({"version": "0.3.0"}), encoding="utf-8"
+    )
+    git(repo, "add", "pyproject.toml", "CHANGELOG.md", "packaging/npm/package.json")
     git(repo, "commit", "-m", "docs(test): release metadata")
     remote = remote_for(repo)
     sha = git(repo, "rev-parse", "HEAD")
     monkeypatch.chdir(repo)
     monkeypatch.setattr(release, "repository", lambda origin: "example/cuanta")
-    fake_ci(release, monkeypatch, sha)
-    return TagRepo(repo, remote, sha)
+    case = TagRepo(repo, remote, sha)
+    fake_green(case)
+    if hasattr(release, "gh"):
+        monkeypatch.setattr(release, "gh", lambda *args: pytest.fail("CI queries forbidden"))
+    return case
 
 
 def assert_refused(case: TagRepo, release: ModuleType, match: str) -> None:
@@ -111,24 +97,16 @@ def test_tag_pushes_only_one_annotated_tag_at_checked_sha(
     git(case.root, "tag", "--annotate", "unrelated", "--message", "Keep local")
     git(case.root, "config", "push.followTags", "true")
     evidence = case.root / ".cuanta" / "evidence.txt"
-    evidence.parent.mkdir()
+    evidence.parent.mkdir(exist_ok=True)
     evidence.write_text("ignored", encoding="utf-8")
-    calls = fake_ci(release, monkeypatch, case.sha)
     message = release.publish_tag()
     assert "v0.3.0" in message and case.sha in message
-    assert "https://github.com/example/cuanta/actions/runs/123/attempts/2" in message
+    assert "Local gate:" in message
     assert git(case.root, "cat-file", "-t", "v0.3.0") == "tag"
     assert git(case.remote, "cat-file", "-t", "v0.3.0") == "tag"
     assert git(case.remote, "rev-parse", "v0.3.0^{}") == case.sha
     assert git(case.remote, "tag", "--list") == "v0.3.0"
     assert git(case.root, "rev-parse", "HEAD") == git(case.remote, "rev-parse", "main") == case.sha
-    assert [call[:2] for call in calls] == [("run", "list"), ("run", "view"), ("run", "list")]
-    for call in calls:
-        assert call[call.index("--repo") + 1] == "github.com/example/cuanta"
-        assert "--status" not in call
-    assert calls[0][calls[0].index("--commit") + 1] == case.sha
-    assert calls[0][calls[0].index("--workflow") + 1] == "ci.yml"
-    assert calls[1][calls[1].index("--attempt") + 1] == "2"
 
 
 @pytest.mark.parametrize(
@@ -228,97 +206,13 @@ def test_tag_requires_committed_release_metadata(
     assert_refused(case, release, message)
 
 
-@pytest.mark.parametrize(
-    "change",
-    [
-        {"status": "in_progress"},
-        {"conclusion": "failure"},
-        {"conclusion": "cancelled"},
-        {"conclusion": "skipped"},
-        {"headSha": "other"},
-        {"headBranch": "topic"},
-        {"event": "pull_request"},
-        {"workflowName": "release"},
-        {"databaseId": None},
-        {"attempt": 0},
-        {"attempt": True},
-    ],
-)
-def test_ci_rejects_unsuccessful_or_mismatched_latest_run(
-    release: ModuleType, monkeypatch: pytest.MonkeyPatch, change: dict[str, object]
-) -> None:
-    calls: list[tuple[str, ...]] = []
-
-    def invoke(*args: str) -> object:
-        calls.append(args)
-        return [ci_run("sha", **change)]
-
-    monkeypatch.setattr(release, "gh", invoke)
-    with pytest.raises(release.WorkflowError):
-        release.verify_ci("example/cuanta", "sha")
-    assert len(calls) == 1
-
-
-@pytest.mark.parametrize("payload", [[], {}, None, [None], [{}, {}]])
-def test_ci_rejects_missing_or_malformed_latest_run(
-    release: ModuleType, monkeypatch: pytest.MonkeyPatch, payload: object
-) -> None:
-    monkeypatch.setattr(release, "gh", lambda *args: payload)
-    with pytest.raises(release.WorkflowError):
-        release.verify_ci("example/cuanta", "sha")
-
-
-@pytest.mark.parametrize(
-    "problem",
-    [
-        "empty",
-        "missing",
-        "duplicate",
-        "failed",
-        "pending",
-        "skipped",
-        "malformed",
-        "attempt",
-        "sha",
-        "latest",
-    ],
-)
-def test_ci_requires_all_jobs_from_unchanged_current_attempt(
-    release: ModuleType, monkeypatch: pytest.MonkeyPatch, problem: str
-) -> None:
-    detail: dict[str, Any] = ci_detail(release, "sha")
-    latest = ci_run("sha")
-    if problem == "empty":
-        detail["jobs"] = []
-    elif problem == "missing":
-        detail["jobs"].pop()
-    elif problem == "duplicate":
-        detail["jobs"][-1] = detail["jobs"][0]
-    elif problem in ("failed", "skipped"):
-        detail["jobs"][0]["conclusion"] = "failure" if problem == "failed" else "skipped"
-    elif problem == "pending":
-        detail["jobs"][0]["status"] = "in_progress"
-    elif problem == "malformed":
-        detail["jobs"][0] = None
-    elif problem == "attempt":
-        detail["attempt"] = 1
-    elif problem == "sha":
-        detail["headSha"] = "other"
-    else:
-        latest["attempt"] = 3
-    responses = iter([[ci_run("sha")], detail, [latest]])
-    monkeypatch.setattr(release, "gh", lambda *args: next(responses))
-    with pytest.raises(release.WorkflowError):
-        release.verify_ci("example/cuanta", "sha")
-
-
 @pytest.mark.parametrize("change", ["head", "dirty", "branch", "remote", "tag", "origin"])
-def test_repository_is_rechecked_after_ci_before_creating_a_tag(
+def test_repository_is_rechecked_after_local_gate_before_creating_a_tag(
     tag_repo: TagRepo, release: ModuleType, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
     case = tag_repo
 
-    def changed(repo: str, sha: str) -> str:
+    def changed(sha: str) -> str:
         if change == "head":
             commit_file(case.root)
         elif change == "dirty":
@@ -333,7 +227,7 @@ def test_repository_is_rechecked_after_ci_before_creating_a_tag(
             git(case.root, "remote", "set-url", "origin", "https://github.com/other/repo.git")
         return "https://github.com/example/cuanta/actions/runs/123"
 
-    monkeypatch.setattr(release, "verify_ci", changed)
+    monkeypatch.setattr(release, "require_green", changed)
     with pytest.raises(release.WorkflowError):
         release.publish_tag()
     assert git(case.remote, "tag", "--list") == ""
@@ -356,86 +250,34 @@ def test_failed_tag_push_retains_local_tag_and_refuses_automatic_retry(
     assert_refused(case, release, "Local tag.*already exists")
 
 
-@pytest.mark.parametrize("failure", ["missing", "timeout", "exit", "json"])
-def test_gh_boundary_fails_closed(
-    release: ModuleType, monkeypatch: pytest.MonkeyPatch, failure: str
+@pytest.mark.parametrize("problem", ["missing", "invalid", "failed", "tree", "partial"])
+def test_local_gate_refusal_never_creates_a_tag(
+    tag_repo: TagRepo, release: ModuleType, problem: str
 ) -> None:
-    def invoke(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        assert kwargs["timeout"] == 60
-        if failure == "missing":
-            raise FileNotFoundError("gh")
-        if failure == "timeout":
-            raise subprocess.TimeoutExpired("gh", 60)
-        return subprocess.CompletedProcess("gh", 1 if failure == "exit" else 0, "invalid", "denied")
-
-    monkeypatch.setattr(release.subprocess, "run", invoke)
-    with pytest.raises(release.WorkflowError, match="Cannot verify release CI"):
-        release.gh("run", "list")
-
-
-def test_gh_boundary_uses_argv_and_decodes_json(
-    release: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def invoke(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        assert argv == ["gh", "run", "list", "--repo", "example/cuanta"]
-        assert kwargs["timeout"] == 60 and kwargs["check"] is False
-        return subprocess.CompletedProcess(argv, 0, json.dumps([ci_run("sha")]), "")
-
-    monkeypatch.setattr(release.subprocess, "run", invoke)
-    assert release.gh("run", "list", "--repo", "example/cuanta") == [ci_run("sha")]
+    path = fake_green(tag_repo)
+    if problem == "missing":
+        path.unlink()
+    elif problem == "invalid":
+        path.write_text("broken", encoding="utf-8")
+    else:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if problem == "failed":
+            record["status"] = "failed"
+        elif problem == "tree":
+            record["tree"] = "0" * 40
+        else:
+            record["counts"]["performance"] = 0
+        path.write_text(json.dumps(record), encoding="utf-8")
+    assert_refused(tag_repo, release, "gate")
 
 
-@pytest.mark.parametrize("problem", ["pending", "missing jobs", "gh failure"])
-def test_ci_refusal_never_creates_or_publishes_a_tag(
-    tag_repo: TagRepo, release: ModuleType, monkeypatch: pytest.MonkeyPatch, problem: str
-) -> None:
-    def invoke(*args: str) -> object:
-        if problem == "gh failure":
-            raise release.WorkflowError("Cannot verify release CI")
-        if args[:2] == ("run", "list"):
-            return [
-                ci_run(tag_repo.sha, status="in_progress" if problem == "pending" else "completed")
-            ]
-        return ci_detail(release, tag_repo.sha, jobs=[])
-
-    monkeypatch.setattr(release, "gh", invoke)
-    assert_refused(tag_repo, release, "CI")
-
-
-def test_required_ci_jobs_match_the_committed_workflow_matrix(release: ModuleType) -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    gates, smoke = workflow.split("  install-smoke:", 1)
-    systems = re.search(r"^        os: \[([^\]]+)\]$", gates, re.MULTILINE)
-    versions = re.search(r"^        python: \[([^\]]+)\]$", gates, re.MULTILINE)
-    smoke_systems = re.search(r"^        os: \[([^\]]+)\]$", smoke, re.MULTILINE)
-    assert systems is not None and versions is not None and smoke_systems is not None
-    expected = {
-        f"gates ({system.strip()}, {version.strip().strip(chr(34))})"
-        for system in systems[1].split(",")
-        for version in versions[1].split(",")
-    }
-    expected.update(f"install-smoke ({system.strip()})" for system in smoke_systems[1].split(","))
-    assert expected == release.EXPECTED_JOBS
-
-
-@pytest.mark.parametrize("conclusion", ["success", "failure", "skipped"])
-def test_ci_ignores_only_the_separate_advisory_performance_job(
-    release: ModuleType, monkeypatch: pytest.MonkeyPatch, conclusion: str
-) -> None:
-    detail: dict[str, Any] = ci_detail(release, "sha")
-    detail["jobs"].append({"name": "performance", "status": "completed", "conclusion": conclusion})
-    responses = iter([[ci_run("sha")], detail, [ci_run("sha")]])
-    monkeypatch.setattr(release, "gh", lambda *args: next(responses))
-    assert "/123/attempts/2" in release.verify_ci("example/cuanta", "sha")
-
-
-def test_performance_is_separate_from_required_jobs_and_excluded_on_release_tags() -> None:
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    required, performance = workflow.split("  performance:", 1)
-    assert "scripts/tests/performance.py" not in required
-    assert "continue-on-error: true" in performance
-    assert "if: github.ref_type != 'tag'" in performance
-    assert "needs:" not in performance
+def test_committed_npm_version_must_match_python(tag_repo: TagRepo, release: ModuleType) -> None:
+    path = tag_repo.root / "packaging/npm/package.json"
+    path.write_text('{"version": "0.3.1"}', encoding="utf-8")
+    git(tag_repo.root, "add", str(path))
+    git(tag_repo.root, "commit", "-m", "test(release): drift fixture")
+    with pytest.raises(release.WorkflowError, match="package"):
+        release.release_tag(git(tag_repo.root, "rev-parse", "HEAD"))
 
 
 @pytest.mark.parametrize(

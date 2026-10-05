@@ -2,45 +2,16 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
+import sys
 import tomllib
 from datetime import date
+from pathlib import Path
 
 from git_workflow import WorkflowError, git, identity, require_main
 
-EXPECTED_JOBS = frozenset(
-    [
-        f"gates ({system}, {python})"
-        for system in ("ubuntu-latest", "macos-latest", "windows-latest")
-        for python in ("3.12", "3.13")
-    ]
-    + [
-        f"install-smoke ({system})"
-        for system in ("ubuntu-latest", "macos-latest", "windows-latest")
-    ]
-)
-RUN_FIELDS = "databaseId,headSha,headBranch,event,status,conclusion,attempt,workflowName"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-
-def gh(*args: str) -> object:
-    try:
-        result = subprocess.run(
-            ["gh", *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            timeout=60,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise WorkflowError(f"Cannot verify release CI with gh: {error}") from error
-    if result.returncode:
-        raise WorkflowError(f"Cannot verify release CI with gh: {result.stderr.strip()}")
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise WorkflowError("Cannot verify release CI: gh returned invalid JSON.") from error
+from dev.gate_record import require_green as checked_green
 
 
 def repository(origin: str) -> str:
@@ -50,7 +21,7 @@ def repository(origin: str) -> str:
         origin,
     )
     if match is None:
-        raise WorkflowError("Release CI requires origin to identify a github.com owner/repository.")
+        raise WorkflowError("Release requires origin to identify a github.com owner/repository.")
     return match[1]
 
 
@@ -70,8 +41,7 @@ def require_remote_head(sha: str) -> None:
     expected = f"{sha}\trefs/heads/main"
     if git("ls-remote", "--heads", "origin", "refs/heads/main") != expected:
         raise WorkflowError(
-            "Release tagging requires HEAD to equal origin main. "
-            "Update or push main normally, then wait for its CI."
+            "Release tagging requires HEAD to equal origin main. Update or push main normally."
         )
 
 
@@ -87,6 +57,12 @@ def release_tag(sha: str) -> str:
         or re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version) is None
     ):
         raise WorkflowError("Release project.version must be an exact X.Y.Z version.")
+    try:
+        package = json.loads(git("show", f"{sha}:packaging/npm/package.json"))
+    except ValueError as error:
+        raise WorkflowError("Release package.json is invalid JSON") from error
+    if not isinstance(package, dict) or package.get("version") != version:
+        raise WorkflowError("Release package.json version must match project.version")
     changelog = git("show", f"{sha}:CHANGELOG.md")
     heading = re.search(
         rf"^## \[{re.escape(version)}\] - (\d{{4}}-\d{{2}}-\d{{2}})[ \t]*$",
@@ -110,97 +86,13 @@ def require_new_tag(tag: str) -> None:
         raise WorkflowError(f"Remote tag {tag} already exists; it will not be overwritten.")
 
 
-def record(value: object) -> dict[str, object]:
-    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
-        raise WorkflowError("Cannot verify release CI: gh returned an invalid run record.")
-    return value
-
-
-def positive_number(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise WorkflowError("Cannot verify release CI: missing run ID or attempt.")
-    return value
-
-
-def require_success(run: dict[str, object], sha: str) -> tuple[int, int]:
-    if (
-        run.get("headSha") != sha
-        or run.get("headBranch") != "main"
-        or run.get("event") != "push"
-        or run.get("workflowName") != "ci"
-    ):
-        raise WorkflowError("Release CI must be ci.yml for this exact HEAD on main (push event).")
-    if run.get("status") != "completed" or run.get("conclusion") != "success":
-        raise WorkflowError("The latest CI run for this HEAD is not completed successfully.")
-    return positive_number(run.get("databaseId")), positive_number(run.get("attempt"))
-
-
-def latest_run(repo: str, sha: str) -> dict[str, object]:
-    value = gh(
-        "run",
-        "list",
-        "--repo",
-        f"github.com/{repo}",
-        "--workflow",
-        "ci.yml",
-        "--branch",
-        "main",
-        "--commit",
-        sha,
-        "--event",
-        "push",
-        "--limit",
-        "1",
-        "--json",
-        RUN_FIELDS,
-    )
-    if not isinstance(value, list) or len(value) != 1:
-        raise WorkflowError("Cannot verify release CI: expected the latest exact-HEAD CI run.")
-    return record(value[0])
-
-
-def verify_ci(repo: str, sha: str) -> str:
-    run_id, attempt = require_success(latest_run(repo, sha), sha)
-    detail = record(
-        gh(
-            "run",
-            "view",
-            str(run_id),
-            "--repo",
-            f"github.com/{repo}",
-            "--attempt",
-            str(attempt),
-            "--json",
-            f"{RUN_FIELDS},jobs",
-        )
-    )
-    if require_success(detail, sha) != (run_id, attempt):
-        raise WorkflowError("Release CI run or attempt changed during validation.")
-    jobs = detail.get("jobs")
-    if not isinstance(jobs, list):
-        raise WorkflowError(
-            "Release CI must contain all nine required gate and install-smoke jobs."
-        )
-    names: set[str] = set()
-    for raw in jobs:
-        job = record(raw)
-        name = job.get("name")
-        if name == "performance":
-            continue
-        if (
-            not isinstance(name, str)
-            or job.get("status") != "completed"
-            or job.get("conclusion") != "success"
-        ):
-            raise WorkflowError("Every required CI job must be completed successfully.")
-        if name in names:
-            raise WorkflowError("Release CI contains duplicate required jobs.")
-        names.add(name)
-    if names != EXPECTED_JOBS:
-        raise WorkflowError("Release CI is missing required gate or install-smoke jobs.")
-    if require_success(latest_run(repo, sha), sha) != (run_id, attempt):
-        raise WorkflowError("The latest CI run or attempt changed during validation.")
-    return f"https://github.com/{repo}/actions/runs/{run_id}/attempts/{attempt}"
+def require_green(sha: str) -> str:
+    tree = git("rev-parse", f"{sha}^{{tree}}")
+    try:
+        checked_green(Path(git("rev-parse", "--show-toplevel")), tree)
+    except ValueError as error:
+        raise WorkflowError(str(error)) from error
+    return tree
 
 
 def publish_tag() -> str:
@@ -213,18 +105,19 @@ def publish_tag() -> str:
         )
     sha = git("rev-parse", "HEAD")
     origin = origin_url()
-    repo = repository(origin)
+    repository(origin)
     git("fetch", "--no-tags", "origin", "refs/heads/main")
     require_remote_head(sha)
     tag = release_tag(sha)
     require_new_tag(tag)
-    run_url = verify_ci(repo, sha)
+    tree = require_green(sha)
     require_main()
     require_clean()
     if git("rev-parse", "HEAD") != sha or origin_url() != origin:
         raise WorkflowError("HEAD or origin changed during release validation. No tag was created.")
     require_remote_head(sha)
     require_new_tag(tag)
+    require_green(sha)
     git("tag", "--annotate", tag, sha, "--message", f"Release {tag}")
     try:
         git("-c", "push.followTags=false", "push", "origin", f"refs/tags/{tag}:refs/tags/{tag}")
@@ -233,4 +126,4 @@ def publish_tag() -> str:
             f"Tag push failed; local tag {tag} at {sha} was retained. "
             f"No tag was deleted or moved. Check remote state before recovery. {error}"
         ) from error
-    return f"Published annotated tag {tag} at {sha}. CI: {run_url}"
+    return f"Published annotated tag {tag} at {sha}. Local gate: {tree}"
