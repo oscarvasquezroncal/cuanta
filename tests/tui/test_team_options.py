@@ -47,7 +47,11 @@ def card_text(wizard: MandateWizard, role: str) -> str:
 
 
 def has_card(wizard: MandateWizard, role: str) -> bool:
-    return wizard.plan is not None and bool(wizard.query(f"#override-{role}"))
+    return (
+        wizard.plan is not None
+        and wizard._shaped_revision == wizard._team_revision
+        and bool(wizard.query(f"#override-{role}"))
+    )
 
 
 async def on_team(wizard: MandateWizard, pilot: Pilot[None]) -> None:
