@@ -106,7 +106,5 @@ jobs:
         with:
           name: npm-package
           path: dist
-      - name: Publish once using OIDC or the first-release token fallback
+      - name: Publish once using trusted publishing (OIDC)
         run: uv run --no-project --python 3.13 python scripts/npm/publish.py --tarball-dir dist --version "$RELEASE_VERSION"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

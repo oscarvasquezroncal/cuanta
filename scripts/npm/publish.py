@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -35,14 +36,39 @@ def publish(tarball: Path, name: str, version: str) -> bool:
     if registered(name, version):
         print(f"{name}@{version} already exists; publication skipped")
         return False
+    try:
+        with urlopen(f"https://registry.npmjs.org/{quote(name, safe='')}", timeout=30) as response:
+            metadata = json.load(response)
+    except HTTPError as error:
+        if error.code == 404:
+            raise ValueError(
+                "The first publication must be done manually with npm login and account 2FA; "
+                "configure trusted publishing after the package exists"
+            ) from error
+        raise
+    if not isinstance(metadata, dict) or metadata.get("name") != name:
+        raise ValueError("Registry response does not match the package name")
     command = npm_command()
     npm = subprocess.run([*command, "--version"], capture_output=True, text=True, check=True)
     match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", npm.stdout.strip())
     if match is None or tuple(map(int, match.groups())) < (11, 5, 1):
         raise ValueError("Publication requires npm >= 11.5.1 for OIDC authentication")
-    subprocess.run(
-        [*command, "publish", str(tarball), "--provenance", "--access", "public"], check=True
-    )
+    with tempfile.TemporaryDirectory(prefix="cuanta-npm-") as temporary:
+        userconfig = Path(temporary) / "userconfig"
+        userconfig.write_text("registry=https://registry.npmjs.org/\n", encoding="utf-8")
+        subprocess.run(
+            [
+                *command,
+                "publish",
+                str(tarball),
+                "--provenance",
+                "--access",
+                "public",
+                "--userconfig",
+                str(userconfig),
+            ],
+            check=True,
+        )
     return True
 
 

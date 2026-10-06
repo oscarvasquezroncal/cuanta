@@ -111,4 +111,5 @@ def test_release_supports_node_matrix_and_trusted_idempotent_publication() -> No
     assert "scripts/npm/publish.py" in workflow
     assert "id-token: write" in workflow
     assert "environment: npm" in workflow
-    assert "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}" in workflow
+    assert "NODE_AUTH_TOKEN" not in workflow
+    assert "secrets.NPM_TOKEN" not in workflow
