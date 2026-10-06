@@ -214,11 +214,29 @@ def _format_value(label: str, value: str, column: int) -> list[str]:
     return [head, *rest]
 
 
-def fill_request(block: str, request: MandateRequest, hint: str = "", context: str = "") -> str:
+def fill_request(
+    block: str,
+    request: MandateRequest,
+    hint: str = "",
+    context: str = "",
+    *,
+    report_language: str = "",
+) -> str:
     marker = block.find(REQUEST_MARKER)
     if marker == -1:
         raise TemplateError("block has no === REQUEST === marker")
     above = block[:marker]
+    if report_language == "es":
+        instruction = (
+            "Write the report in Spanish. Do not translate paths, code names or quotations. "
+            "Keep the report headings (SUMMARY, FINDINGS, RISKS, OPEN QUESTIONS, NEXT STEP), "
+            "REQUEST labels and TYPE values in English, exactly as written."
+        )
+        above = (
+            above.replace(REPORT_LANGUAGE, instruction)
+            if REPORT_LANGUAGE in above
+            else (f"{above}{instruction}\n\n")
+        )
     column = _value_column(block[marker:])
     filled = with_defaults(request)
     body: list[str] = [REQUEST_MARKER, ""]

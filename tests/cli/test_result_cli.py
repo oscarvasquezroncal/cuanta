@@ -97,8 +97,11 @@ def test_runs_list_show_and_markdown_read_the_stored_report(
         env=env,
     )
     assert ran.exit_code == 0, ran.stdout + ran.stderr
-    assert "finding 399 at src/calc/__init__.py:2" in ran.stdout
-    assert "Report saved: .cuanta/runs/" in ran.stdout
+    assert "finding 58 at src/calc/__init__.py:2" in ran.stdout
+    assert "finding 59 at src/calc/__init__.py:2" not in ran.stdout
+    assert "finding 399 at src/calc/__init__.py:2" not in ran.stdout
+    assert "complete answer: cuanta runs show" in ran.stdout
+    assert "Report: .cuanta/runs/" in ran.stdout
     listed = json.loads(invoke(["runs", "list", "--json", "--project", str(root)], env=env).stdout)
     run_id = listed["runs"][0]["id"]
     assert listed["runs"][0]["report"] is True
@@ -113,11 +116,13 @@ def test_runs_list_show_and_markdown_read_the_stored_report(
     plain = invoke(["runs", "show", run_id, "--plain", "--project", str(root)], env=env)
     assert "simple (one agent, no project knowledge)" in plain.stdout
     assert "finding 0 at src/calc/__init__.py:2" in plain.stdout
+    assert "finding 399 at src/calc/__init__.py:2" in plain.stdout
     human = invoke(
         ["runs", "show", run_id, "--markdown", "--plain", "--project", str(root)], env=env
     )
     assert human.stdout.startswith(f"# Run {run_id}")
     assert "## Report" in human.stdout
+    assert "finding 399 at src/calc/__init__.py:2" in human.stdout
     meta_path = root / ".cuanta" / "runs" / run_id / "run.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta.pop("shape")

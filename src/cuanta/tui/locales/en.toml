@@ -1215,6 +1215,8 @@ log = " · log: {path}"
 close = "Close"
 
 [run_output]
+report = "Report: {path} · cuanta runs show {run}"
+answer_complete = "… complete answer: cuanta runs show {run}"
 team_off = "team: routing off, the engine picks its default models"
 route_plan = "team · {role} → {model} ({tier}) · {reason}"
 single = "team · single model for {engine}: {model}"

@@ -156,7 +156,9 @@ class MandateService:
         scanned: Workspace | None = None,
         meta: Mapping[str, object] | None = None,
         templates: MandateTemplates | None = None,
+        report_language: str = "",
     ) -> None:
+        self._report_language = report_language
         self._templates = templates
         self._meta = dict(meta or {})
         self._workspace = workspace
@@ -233,7 +235,7 @@ class MandateService:
         hint = scope_hint_line(choice, decided.receipt.backend)
         if extra:
             hint = f"{hint}\n{extra}"
-        prompt = fill_request(block, request, hint, context)
+        prompt = fill_request(block, request, hint, context, report_language=self._report_language)
         return Composed(
             prompt,
             choice,

@@ -10,3 +10,5 @@
 │  → cuanta spectrum 01JMANDATE0000000000000RUN1                               │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
+→ Informe: .cuanta/runs/01JMANDATE0000000000000RUN1/report.md · cuanta runs show
+01JMANDATE0000000000000RUN1

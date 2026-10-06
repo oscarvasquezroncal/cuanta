@@ -64,6 +64,7 @@ def render(template: str, values: Mapping[str, str]) -> str:
 
 
 ENGLISH: dict[str, str] = {
+    "instinct.unavailable": "Note: JEV unavailable; using local fallback",
     "verify.label": "Verification",
     "verify.skipped": "skipped",
     "verify.off": "off",

@@ -8,6 +8,7 @@ import pytest
 from rich.console import Console
 
 from cuanta.cli.commands.mandate import _final
+from cuanta.cli.document import MarkdownText
 from cuanta.cli.presenters.plain import PlainPresenter, block_lines
 from cuanta.domain.errors import CuantaError
 from cuanta.domain.messages import msg
@@ -17,6 +18,80 @@ from cuanta.tui.i18n import Catalog
 from tests.fakes import FakeRunner
 from tests.support import assert_golden, invoke
 from tests.tui.fakes import mandate_report
+
+
+@pytest.mark.parametrize("language", ["es", "en"])
+@pytest.mark.parametrize("task_type", ["investigation", "feature"])
+def test_result_shows_investigation_answer_and_always_report_link(
+    language: str, task_type: str
+) -> None:
+    original = mandate_report()
+    path = f".cuanta/runs/{original.run.id}/report.md"
+    report = replace(
+        original, text="## SUMMARY\nRespuesta solicitada", task_type=task_type, report_path=path
+    )
+    document = _final(report, catalog=Catalog(language))
+    markdown = [block.text for block in document.blocks if isinstance(block, MarkdownText)]
+    assert markdown == ([report.text] if task_type == "investigation" else [])
+    shown = "\n".join(line for block in document.blocks for line in block_lines(block))
+    assert path in shown
+    assert f"cuanta runs show {report.run.id}" in shown
+    assert document.payload["report_text"] == report.text
+
+
+@pytest.mark.parametrize("language", ["es", "en"])
+def test_long_answer_is_clipped_without_changing_saved_payload(language: str) -> None:
+    original = mandate_report()
+    text = "\n".join(f"Finding {index}" for index in range(65))
+    report = replace(original, text=text, task_type="investigation")
+    document = _final(report, catalog=Catalog(language))
+    markdown = [block.text for block in document.blocks if isinstance(block, MarkdownText)]
+    assert markdown == ["\n".join(text.splitlines()[:60])]
+    shown = "\n".join(line for block in document.blocks for line in block_lines(block))
+    assert f"cuanta runs show {report.run.id}" in shown
+    assert "respuesta completa" in shown if language == "es" else "complete answer" in shown
+    assert "Finding 60" not in shown
+    assert document.payload["report_text"] == text
+
+
+def test_writing_answer_remains_available_with_verbose() -> None:
+    report = replace(mandate_report(), task_type="feature", text="## SUMMARY\nDone")
+    document = _final(report, verbose=True)
+    assert any(
+        isinstance(block, MarkdownText) and block.text == report.text for block in document.blocks
+    )
+
+
+def test_cached_jev_backend_uses_the_current_spanish_progress_sink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from cuanta.adapters.instinct.jev import JevInstinct
+    from cuanta.bootstrap import Container
+    from cuanta.domain.config import Config
+    from cuanta.domain.errors import EnvironmentFailure
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    container = Container(tmp_path, Config(instinct="jev"))
+    try:
+        backend = container.instinct_backend()
+        assert isinstance(backend, JevInstinct)
+
+        def transport(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("offline")
+
+        backend._transport = httpx.MockTransport(transport)
+        output = io.StringIO()
+        container.progress = PlainPresenter(output, catalog=Catalog("es"))
+        for question in ("first?", "second?"):
+            with pytest.raises(EnvironmentFailure):
+                backend.noul(question, {})
+        assert output.getvalue().count("Nota: JEV no disponible") == 1
+        assert "using local fallback" not in output.getvalue()
+    finally:
+        container.close()
 
 
 def test_language_is_a_global_option(tmp_path: Path) -> None:
@@ -175,7 +250,7 @@ def test_only_an_unexplained_model_change_gets_a_default_route_line(
 
 @pytest.mark.parametrize("language", ["es", "en"])
 @pytest.mark.parametrize("width", [80, 120])
-@pytest.mark.parametrize("view", ["hiss", "launch", "result", "live"])
+@pytest.mark.parametrize("view", ["hiss", "launch", "result", "live", "audit", "fallback"])
 def test_readable_console_snapshots(language: str, width: int, view: str) -> None:
     from types import SimpleNamespace
     from typing import cast
@@ -204,6 +279,16 @@ def test_readable_console_snapshots(language: str, width: int, view: str) -> Non
     elif view == "result":
         report = mandate_report(ok=False)
         presenter.render(_final(replace(report, run=replace(report.run, partial=True)), catalog=t))
+    elif view == "audit":
+        report = replace(
+            mandate_report(),
+            task_type="investigation",
+            text="## SUMMARY\n"
+            + ("Respuesta del agente." if language == "es" else "Agent answer."),
+        )
+        presenter.render(_final(report, catalog=t))
+    elif view == "fallback":
+        presenter.publish(note(Status.WARN, msg("instinct.unavailable")))
     elif view == "live":
         presenter.render(
             Document(blocks=(Line(t.live(LiveStatus(83, 2410, "main", "Read", "src/cart.py"))),))

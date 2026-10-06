@@ -12,6 +12,7 @@ from cuanta.adapters.instinct.jev import JevInstinct
 from cuanta.bootstrap import Container
 from cuanta.domain.config import Config
 from cuanta.domain.errors import EnvironmentFailure
+from cuanta.domain.messages import Message
 
 
 def test_identical_jev_requests_are_paid_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,3 +96,19 @@ def test_known_jev_answers_remain_cached_after_the_budget_expires(
     with pytest.raises(EnvironmentFailure):
         backend.noul("new?", {})
     assert len(calls) == 1
+
+
+def test_jev_failure_emits_a_single_structured_localizable_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    notices: list[Message] = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline")
+
+    backend = JevInstinct(transport=httpx.MockTransport(transport), notice=notices.append)
+    for question in ("first?", "second?"):
+        with pytest.raises(EnvironmentFailure):
+            backend.noul(question, {})
+    assert [message.key for message in notices] == ["instinct.unavailable"]

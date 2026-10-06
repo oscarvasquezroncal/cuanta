@@ -1,0 +1,15 @@
+┌─ purr ──────────────────────────────────────────┐
+│                                                 │
+│  Estado                ok                       │
+│  Motivo de cierre      el agente terminó        │
+│  Costo                 $0.4200                  │
+│  Tokens                2,100                    │
+│  Archivos modificados  2                        │
+│  Rol                   senior: 2.1K tokens      │
+│  → cuanta spectrum 01JMANDATE0000000000000RUN1  │
+│                                                 │
+└─────────────────────────────────────────────────┘
+SUMMARY
+
+Respuesta del agente.
+→ Informe: .cuanta/runs/01JMANDATE0000000000000RUN1/report.md · cuanta runs show 01JMANDATE0000000000000RUN1

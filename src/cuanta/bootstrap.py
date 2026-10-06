@@ -956,6 +956,7 @@ class Container:
         from cuanta.adapters.instinct.heuristic import HeuristicInstinct
         from cuanta.adapters.instinct.jev import JevInstinct
         from cuanta.adapters.instinct.llm import LlmInstinct
+        from cuanta.domain.progress import Status, note
 
         chosen = name or self.config.instinct
         if chosen == "heuristic":
@@ -965,6 +966,11 @@ class Container:
                 self._jev = JevInstinct(
                     timeout_s=self.config.instinct_timeout_s,
                     scope=lambda: self.decision_scope.run_id or self.decision_scope.request_hash,
+                    notice=lambda message: (
+                        self.progress.publish(note(Status.WARN, message))
+                        if self.progress is not None
+                        else None
+                    ),
                 )
             return self._jev
         if chosen == "llm":
@@ -2233,6 +2239,7 @@ class Container:
             scanned=self.workspace(),
             meta=classic_meta(self.run_mode),
             templates=self.mandate_templates(),
+            report_language=self.config.language,
         )
 
     def mandate_flow(self, ledger: Ledger, sandbox: SandboxLaunch | None = None) -> MandateFlow:

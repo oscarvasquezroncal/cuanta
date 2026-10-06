@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import threading
 import time
@@ -80,7 +79,9 @@ class JevInstinct:
         transport: httpx.BaseTransport | None = None,
         timeout_s: float = TIMEOUT_S,
         scope: Callable[[], str] = lambda: "",
+        notice: Callable[[Message], None] = lambda _: None,
     ) -> None:
+        self._notice = notice
         self._transport = transport
         self._timeout_s = max(0.01, timeout_s)
         self._scope = scope
@@ -175,7 +176,7 @@ class JevInstinct:
             remaining = min(self._timeout_s, self._deadline - time.monotonic())
             if self._broken or remaining <= 0:
                 if not self._broken:
-                    logging.getLogger(__name__).warning("jev unavailable; using local fallback")
+                    self._notice(msg("instinct.unavailable"))
                 self._broken = True
                 raise EnvironmentFailure("jev circuit open; using local fallback")
             cached = future is not None
@@ -192,7 +193,7 @@ class JevInstinct:
         except (FutureTimeout, EnvironmentFailure) as error:
             with self._lock:
                 if not self._broken:
-                    logging.getLogger(__name__).warning("jev unavailable; using local fallback")
+                    self._notice(msg("instinct.unavailable"))
                 self._broken = True
             if isinstance(error, EnvironmentFailure):
                 raise

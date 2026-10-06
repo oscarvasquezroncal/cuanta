@@ -1,0 +1,16 @@
+┌─ purr ──────────────────────────────────────────┐
+│                                                 │
+│  Status         ok                              │
+│  Stop reason    the agent finished              │
+│  Cost           $0.4200                         │
+│  Tokens         2,100                           │
+│  Files changed  2                               │
+│  Role           Senior: 2.1K tokens             │
+│  → cuanta spectrum 01JMANDATE0000000000000RUN1  │
+│                                                 │
+└─────────────────────────────────────────────────┘
+SUMMARY
+
+Agent answer.
+→ Report: .cuanta/runs/01JMANDATE0000000000000RUN1/report.md · cuanta runs show
+01JMANDATE0000000000000RUN1

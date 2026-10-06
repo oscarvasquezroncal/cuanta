@@ -1262,6 +1262,7 @@ improve = "Un modelo económico reescribe tu solicitud. Muestra el costo antes y
 "instinct.key_openrouter_mismatch" = "Clave apikey_ con URL de OpenRouter; revisa TYPESAFE_BASE_URL y TYPESAFE_API_KEY"
 "instinct.key_typesafe_mismatch" = "Clave sk-or- con URL de TypeSafe; revisa TYPESAFE_BASE_URL y TYPESAFE_API_KEY"
 "instinct.fallback" = "{backend} falló: {error}; respondió el heurístico"
+"instinct.unavailable" = "Nota: JEV no disponible; se usa la alternativa local"
 "doctor.instinct.recent_fallback" = "Jev configurado, pero las decisiones recientes usaron el heurístico: {error}"
 "instinct.endpoint" = "{endpoint} ({model})"
 "instinct.claude_missing" = "no se encontró claude"
@@ -1974,6 +1975,8 @@ log = " · registro: {path}"
 close = "Cerrar"
 
 [run_output]
+report = "Informe: {path} · cuanta runs show {run}"
+answer_complete = "… respuesta completa: cuanta runs show {run}"
 team_off = "equipo: sin asignación, el motor elige sus modelos predeterminados"
 route_plan = "equipo · {role} → {model} ({tier}) · {reason}"
 single = "equipo · modelo único en {engine}: {model}"

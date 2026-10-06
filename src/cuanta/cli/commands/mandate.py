@@ -663,6 +663,7 @@ def run_mandate(
     args, sourced = from_source(args)
     stated = [session.catalog.message(message) for message in (*request_notes, *sourced)]
     container = Container.for_project(session.project, verbose=session.options.verbose)
+    container.config = replace(container.config, language=session.catalog.language)
     container.progress = session.presenter
     container.use_request_files(request_files(args))
     try:
@@ -1677,10 +1678,13 @@ def _final(
     timing = timing_message(report_payload(report))
     if timing is not None:
         blocks.append(Line(t.message(timing)))
-    if verbose and report.text.strip():
-        blocks.append(MarkdownText(report.text))
-    if verbose and report.report_path:
-        blocks.append(Hint(t("run_output.saved", path=report.report_path)))
+    if (verbose or report.task_type == "investigation") and report.text.strip():
+        lines = report.text.splitlines()
+        blocks.append(MarkdownText("\n".join(lines[:60])))
+        if len(lines) > 60:
+            blocks.append(Hint(t("run_output.answer_complete", run=run.id)))
+    path = report.report_path or f".cuanta/runs/{run.id}/report.md"
+    blocks.append(Hint(t("run_output.report", path=path, run=run.id)))
     if isolated is not None:
         blocks.extend(sandbox_blocks(isolated))
     payload = {

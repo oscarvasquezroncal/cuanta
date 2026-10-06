@@ -98,6 +98,53 @@ def launches(runner: FakeRunner) -> list[tuple[str, ...]]:
     return [call for call in runner.calls if call[:2] == ("claude", "-p")]
 
 
+@pytest.mark.parametrize("configured", [False, True])
+def test_spanish_session_requests_a_spanish_report_with_stable_headings(
+    tmp_path: Path, fake_runner: FakeRunner, configured: bool
+) -> None:
+    forge(tmp_path)
+    if configured:
+        (tmp_path / ".cuanta").mkdir(exist_ok=True)
+        (tmp_path / ".cuanta/config.toml").write_text('[ui]\nlanguage = "es"\n', encoding="utf-8")
+    arguments = [] if configured else ["--lang", "es"]
+    data = dry(tmp_path, "audit", "Explain src/cart.py", *arguments)
+    prompt = prompt_of(data)
+    assert "Write the report in Spanish" in prompt
+    assert "Do not translate paths, code names or quotations" in prompt
+    assert "## SUMMARY" in prompt and "## FINDINGS" in prompt
+    assert "same language as the request" not in prompt
+    assert "Explain src/cart.py" in prompt
+
+
+@pytest.mark.parametrize("command", ["audit", "feat"])
+def test_command_answer_visibility_and_report_file(
+    tmp_path: Path,
+    fake_runner: FakeRunner,
+    command: str,
+) -> None:
+    forge(tmp_path)
+    fake_runner.streams["claude -p"] = FakeStream([RESULT])
+    result = run_cli(
+        tmp_path,
+        command,
+        "Explain src/cart.py",
+        "--profile",
+        "balanced",
+        "--route",
+        "fixed",
+        "--verify",
+        "off",
+        "--lang",
+        "es",
+    )
+    assert result.exit_code == 0, result.stdout
+    assert ("## SUMMARY" in result.stdout) is (command == "audit")
+    report = next((tmp_path / ".cuanta/runs").glob("*/report.md"))
+    assert "## SUMMARY\nok" in report.read_text(encoding="utf-8")
+    assert report.as_posix().split("/.cuanta/")[-1] in result.stdout.replace("\\", "/")
+    assert f"cuanta runs show {report.parent.name}" in result.stdout
+
+
 @pytest.mark.parametrize(
     "command", [("mandate", "-f"), ("mandate", "--from"), ("run",), ("run", "-f")]
 )
