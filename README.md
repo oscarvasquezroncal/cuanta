@@ -129,27 +129,34 @@ For a source checkout, use `uv tool install .`; web mode additionally needs
 `--with textual-serve`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for development
 and release steps.
 
-### First npm release and trusted publishing
+### npm releases through trusted publishing
 
 The release workflow builds once and smokes Node 22 and 24 on all three systems. Manual
 `workflow_dispatch` never publishes. Tag publication uses Node 24 with npm >=11.5.1,
 provenance and environment `npm`; an exact version already in the registry is a successful
-skip. Registry failures stop publication.
+skip. Registry failures stop publication. The job uses OIDC only, with `id-token: write`
+and environment `npm`; it has no token fallback. A temporary npm userconfig contains only
+`registry=https://registry.npmjs.org/`, avoiding an empty `_authToken` from setup-node.
 
-For the first package, enable npm account 2FA and create a seven-day granular token with
-read/write **All packages** and **Bypass 2FA**. Store it as `NPM_TOKEN` in the GitHub `npm`
-environment. After reviewing the manual smoke, create the release tag with the repository's
-`scripts\git\push.cmd --tag`.
-
-After the package exists, configure its GitHub Actions trusted publisher on npmjs.com:
+If the package does not exist yet, the job stops before invoking npm. Its first publication
+must be performed manually with `npm login` and account 2FA; a bypass-2FA token cannot create
+the package. Once it exists, configure its GitHub Actions trusted publisher on npmjs.com:
 owner `oscarvasquezroncal`, repository `cuanta`, workflow `release.yml`, environment `npm`,
-and allow direct `npm publish`. Revoke the initial token and delete the `NPM_TOKEN` secret.
-The workflow retains OIDC permissions; npm selects OIDC before its optional token fallback.
+and allow direct `npm publish`. Revoke any old publishing token and delete `NPM_TOKEN`.
+After reviewing the manual smoke, create the release tag with `scripts\git\push.cmd --tag`.
+
 See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
 
 npm has announced January 2027 as the target for removing direct publish from bypass-2FA
-tokens. Migrate this initial fallback to trusted publishing before that change.
+tokens. This workflow already requires trusted publishing.
 See the [npm authentication announcement](https://github.blog/changelog/2026-07-31-restricting-npm-bypass-2fa-granular-access-tokens/).
+
+`cuanta audit` displays its Markdown answer after the result panel by default. Answers longer
+than 60 lines show the first 60; every result points to `.cuanta/runs/<id>/report.md` and
+`cuanta runs show <id>` for the complete report. Writing runs show their answer with
+`--verbose`. Spanish sessions (`--lang es` or `ui.language = "es"`) request a Spanish report,
+preserving report headings, paths, code names and quotations. JEV fallback notices follow
+the same session language.
 
 **Optional extras:**
 - [graphify](https://github.com/Graphify-Labs/graphify) for a code graph agents can query instead of reading files.
