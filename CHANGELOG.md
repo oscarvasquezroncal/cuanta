@@ -282,6 +282,17 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   agent no longer replaces yours in the agents file of native Claude runs, and `cuanta doctor`
   reports the gateway lines (the fix in the message) and files an older init left beside yours.
 
+## [0.5.1] - 2026-10-06
+
+### Fixed
+- npm releases authenticate only through trusted publishing (OIDC), with a temporary
+  registry-only userconfig. Existing versions skip successfully; absent packages require
+  a manual first publication with npm login and 2FA before any npm command runs.
+- Investigations display their Markdown answer by default, with a 60-line preview and
+  links to the complete saved report. Writing runs retain verbose-only answers.
+- Spanish sessions explicitly request Spanish reports while preserving parser headings,
+  paths, code names and quotations. JEV fallback notices are localized and emitted once.
+
 ## [0.5.0] - 2026-10-01
 
 ### Release pipeline

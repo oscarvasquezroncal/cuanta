@@ -5,7 +5,7 @@ every token, accounted for
 ( ^.^ )
  > ^ <
 Michi says meow
-version  0.5.0
+version  0.5.1
 theme    dark
 brand: ginger
 accent: blush
