@@ -410,6 +410,9 @@ def test_comparisons_arms_and_config_overrides() -> None:
         "queue-first",
         "queue-second",
         "tight-cap",
+        "claude-alone",
+        "cuanta-default",
+        "cuanta-team",
     }
     on = arm_named("discipline-on")
     off = arm_named("discipline-off")

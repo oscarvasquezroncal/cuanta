@@ -92,6 +92,16 @@ class RoleHandoff:
     reason: str = ""
 
 
+def phases_left(handoffs: Sequence[RoleHandoff], role: str) -> bool:
+    last = next((item for item in reversed(handoffs) if item.role == role), None)
+    return (
+        last is not None
+        and last.source is HandoffSource.JSON
+        and last.status is HandoffStatus.PARTIAL
+        and bool(last.files_changed)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class HandoffChain:
     handoffs: tuple[RoleHandoff, ...] = ()

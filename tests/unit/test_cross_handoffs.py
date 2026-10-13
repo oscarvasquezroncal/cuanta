@@ -29,6 +29,7 @@ from cuanta.application.verification import Verifier
 from cuanta.cli.commands.mandate import cross_payload
 from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.engine import EngineEvent, EngineOutcome, EngineRequest, RunResult
+from cuanta.domain.errors import DomainFailure
 from cuanta.domain.governor_report import HOOKS
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.messages import Message, english, msg
@@ -1004,3 +1005,48 @@ def test_after_a_partial_handoff_the_next_role_is_told_to_continue(tmp_path: Pat
     senior = harness.prompt_of("senior")[0]
     assert "That does not block you" in senior
     assert "That does not block you" not in harness.prompt_of("analyst")[0]
+
+
+class Raising(Actor):
+    def __init__(self, name: str, root: Path, role: str) -> None:
+        super().__init__(name, root, {"analyst": [Act(analyst_json(), 0.1)]})
+        self._role = role
+
+    def run(self, request: EngineRequest, on_event: Callable[[EngineEvent], None]) -> EngineOutcome:
+        if f"You are the {self._role} " in request.prompt:
+            raise DomainFailure("the engine could not start")
+        return super().run(request, on_event)
+
+
+class Unallocated(Harness):
+    def allocate(
+        self, plan: RoutePlan, kind: str, depth: str, cap: float, repair: bool, docs_off: bool
+    ) -> RepairBudget:
+        raise DomainFailure("no budget split")
+
+
+TEAM = {Role.ANALYST: "claude", Role.SENIOR: "claude"}
+
+
+@pytest.mark.parametrize(("role", "completion"), [("senior", "partial"), ("analyst", "failed")])
+def test_an_error_in_a_role_records_the_team_completion_and_still_propagates(
+    tmp_path: Path, role: str, completion: str
+) -> None:
+    seed(tmp_path)
+    harness = Harness(tmp_path, {})
+    harness.actors["claude"] = Raising("claude", tmp_path / "work", role)
+    with pytest.raises(DomainFailure, match="the engine could not start"):
+        harness.run(TEAM)
+    assert harness.saved["RUN0"] == {
+        "completion": completion,
+        "stopped": {"key": "stop.team_error", "params": {}},
+    }
+
+
+def test_an_error_before_any_launch_records_nothing(tmp_path: Path) -> None:
+    seed(tmp_path)
+    harness = Unallocated(tmp_path, {}, shares={})
+    with pytest.raises(DomainFailure, match="no budget split"):
+        harness.run(TEAM)
+    assert harness.saved == {}
+    assert harness.prompts() == []

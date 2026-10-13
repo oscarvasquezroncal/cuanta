@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from cuanta.adapters.engines.claude_code import ClaudeCodeEngine
 from cuanta.adapters.storage.memory_ledger import MemoryLedger
 from cuanta.application.cross_engine import request_block
@@ -167,3 +169,26 @@ def test_a_team_prompt_fills_unstated_fields_like_the_native_prompt() -> None:
     stated = request_block(MandateRequest("bug", "Fix it", "Traceback", "src/a.py", "same API"))
     assert "TESTS: regression fixture for the pasted error" in stated
     assert "WHERE: src/a.py" in stated and "CONSTRAINTS: same API" in stated
+
+
+def test_a_fast_single_session_with_its_model_never_asks_the_role_planner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subject = routing(tmp_path, {})
+    seen: list[str] = []
+    original = subject.apply
+
+    def apply(
+        request: MandateRequest, options: RouteOptions, engine: str, graph: bool = True
+    ) -> object:
+        seen.append(options.mode)
+        return original(request, options, engine, graph)
+
+    monkeypatch.setattr(subject, "apply", apply)
+    service = claude_team(tmp_path, subject)
+    auto = RouteOptions(mode="auto")
+    fast = MandateOptions(profile="fast", model="claude-sonnet-5-5", route=auto)
+    prepared = service.prepare(FEATURE, 0, fast, preview=True)
+    assert prepared.spec.model == "claude-sonnet-5-5"
+    service.prepare(FEATURE, 0, MandateOptions(route=auto), preview=True)
+    assert seen == ["fixed", "auto"]

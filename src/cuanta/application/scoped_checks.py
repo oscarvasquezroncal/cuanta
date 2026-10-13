@@ -10,6 +10,7 @@ from cuanta.domain.scoped_checks import (
     changed_paths,
     daemon_command,
     daemon_control,
+    parallel_selection,
     runner_of,
     scoped_test_command,
 )
@@ -26,7 +27,9 @@ class ScopedChecks:
         snapshot: Callable[[], Mapping[str, str]],
         parallel: bool,
         neighbours: Mapping[str, frozenset[str]] | None = None,
+        marks: str = "",
     ) -> None:
+        self._marks = marks
         self._verifier = verifier
         self._sources = sources
         self._snapshot = snapshot
@@ -60,7 +63,7 @@ class ScopedChecks:
     def final(
         self, commands: Sequence[str], stopped: Callable[[], bool]
     ) -> tuple[VerifyResult, ...]:
-        return self._checks(commands, stopped, *self._current(), daemon=False)
+        return self._checks(commands, stopped, *self._current(), daemon=self._daemon_used)
 
     def close(self) -> None:
         if self._daemon_used:
@@ -88,7 +91,13 @@ class ScopedChecks:
             runner = self._runners.get(command, "")
             if runner:
                 tests, full = affected_tests(runner, changed, files, self._neighbours)
-                scoped = scoped_test_command(command, runner, tests, self._parallel and full)
+                scoped = scoped_test_command(
+                    command,
+                    runner,
+                    tests,
+                    self._parallel and parallel_selection(tests, full),
+                    self._marks,
+                )
                 if (tests or full) and scoped is not None:
                     actual[command] = scoped
                 else:

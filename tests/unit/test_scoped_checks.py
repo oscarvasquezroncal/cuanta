@@ -11,14 +11,17 @@ from cuanta.application.verification import Verifier
 from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.scoped_checks import (
     DMYPY_STATUS,
+    PARALLEL_FILES,
     affected_tests,
     changed_paths,
     check_workers,
     daemon_command,
+    parallel_selection,
     plan_sources,
     runner_of,
     scoped_test_command,
 )
+from cuanta.domain.verification import pytest_speed_filter
 from tests.fakes import FakeRunner, FakeStream
 
 
@@ -153,7 +156,7 @@ class Snapshots:
         return self._states.pop(0) if len(self._states) > 1 else self._states[0]
 
 
-def test_session_checks_use_the_daemon_and_the_selection_and_the_final_check_uses_mypy(
+def test_session_and_final_checks_use_the_daemon_and_a_cold_final_check_uses_mypy(
     tmp_path: Path,
 ) -> None:
     runner = FakeRunner()
@@ -196,10 +199,15 @@ def test_session_checks_use_the_daemon_and_the_selection_and_the_final_check_use
     runner.calls.clear()
     final = scoped.final(("uv run mypy", "uv build", "uv run pytest"), lambda: False)
     assert [result.command for result in final] == ["uv run mypy", "uv build", "uv run pytest"]
-    assert ("uv", "run", "mypy") in runner.calls
+    assert ("uv", "run", "dmypy", *status, "run", "--") in runner.calls
+    assert ("uv", "run", "mypy") not in runner.calls
     runner.calls.clear()
     scoped.close()
     assert ("uv", "run", "dmypy", *status, "stop") in runner.calls
+    cold = ScopedChecks(verifier, ("uv run mypy",), (), Snapshots([{}]), parallel=False)
+    runner.calls.clear()
+    cold.final(("uv run mypy",), lambda: False)
+    assert runner.calls == [("uv", "run", "mypy")]
 
 
 def test_without_selected_tests_the_session_skips_the_test_command_but_keeps_the_others(
@@ -279,3 +287,53 @@ def test_a_daemon_that_stays_broken_falls_back_to_plain_mypy_for_the_session(
     runner.calls.clear()
     scoped(("uv run mypy",), lambda: False)
     assert runner.calls == [("uv", "run", "mypy")]
+
+
+def test_a_wide_selection_runs_in_parallel_and_a_narrow_one_does_not(tmp_path: Path) -> None:
+    assert not parallel_selection(("tests/test_a.py",), False)
+    assert parallel_selection(tuple(f"tests/test_{n}.py" for n in range(PARALLEL_FILES)), False)
+    assert parallel_selection((), True)
+    runner = FakeRunner()
+    verifier = Verifier(runner, tmp_path, False, cores=4)
+    wide = {f"tests/test_{n}.py": "n" for n in range(PARALLEL_FILES)}
+    scoped = ScopedChecks(verifier, ("uv run pytest",), (), Snapshots([{}, wide]), parallel=True)
+    scoped(("uv run pytest",), lambda: False)
+    (call,) = [command for command in runner.calls if "pytest" in command]
+    assert call[7:9] == ("-n", "auto") and len(call) == 9 + PARALLEL_FILES
+    narrow = ScopedChecks(
+        verifier, ("uv run pytest",), (), Snapshots([{}, {"tests/test_a.py": "a"}]), parallel=True
+    )
+    runner.calls.clear()
+    narrow(("uv run pytest",), lambda: False)
+    assert "-n" not in next(command for command in runner.calls if "pytest" in command)
+
+
+CUANTA_LIKE = """
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers -p no:cacheprovider -m \\"not live\\""
+markers = ["live: real binaries", "perf: performance budgets", "slow: long"]
+"""
+
+
+def test_speed_budget_tests_stay_out_of_the_writers_checks(tmp_path: Path) -> None:
+    assert pytest_speed_filter(CUANTA_LIKE) == "(not live) and not perf and not slow"
+    assert pytest_speed_filter('[tool.pytest.ini_options]\nmarkers = ["perf"]\n') == "not perf"
+    assert pytest_speed_filter('[tool.pytest.ini_options]\nmarkers = ["live: x"]\n') == ""
+    assert pytest_speed_filter("not toml [") == ""
+    tests = ("tests/test_cart.py",)
+    assert scoped_test_command("uv run pytest", "pytest", tests, False, "not perf") == (
+        'uv run pytest -x -q -p no:cacheprovider -m "not perf" tests/test_cart.py'
+    )
+    runner = FakeRunner()
+    verifier = Verifier(runner, tmp_path, False, cores=2)
+    scoped = ScopedChecks(
+        verifier,
+        ("uv run pytest",),
+        (),
+        Snapshots([{}, {"tests/test_cart.py": "c"}]),
+        parallel=False,
+        marks="(not live) and not perf",
+    )
+    scoped(("uv run pytest",), lambda: False)
+    call = next(command for command in runner.calls if "pytest" in command)
+    assert "(not live) and not perf" in call and call[call.index("-m") + 1].startswith("(not")

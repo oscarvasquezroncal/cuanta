@@ -87,7 +87,7 @@ from cuanta.domain.progress import (
     started,
 )
 from cuanta.domain.role_tools import SESSION_TOOLS
-from cuanta.domain.routing import Provider, Role, RoleRoute, parse_provider
+from cuanta.domain.routing import Provider, Role, RoleRoute, RouteMode, parse_provider
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, sandbox_launch
 from cuanta.domain.scout import (
     DocsChoice,
@@ -813,6 +813,13 @@ class MandateFlow:
         self, request: MandateRequest, options: MandateOptions, native: bool
     ) -> tuple[RouteOptions, bool, DocsChoice | None]:
         route = replace(options.route, depth=options.depth) if options.depth else options.route
+        if (
+            options.profile == ImplementationProfile.FAST
+            and options.model
+            and self._routing is not None
+            and not self._routing.pinned(route.mode)
+        ):
+            route = replace(route, mode=RouteMode.FIXED.value)
         if not native or options.simple:
             return route, False, None
         trial = options.sandbox or self._sandbox is not None

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -57,12 +57,15 @@ class Session:
     settings: OutputSettings
     presenter: Presenter
     project: Path
+    _loaded: list[Catalog] = field(default_factory=list, init=False, repr=False, compare=False)
 
     @property
     def catalog(self) -> Catalog:
-        from cuanta.tui.i18n import Catalog
+        if not self._loaded:
+            from cuanta.tui.i18n import Catalog
 
-        return Catalog(self.settings.language)
+            self._loaded.append(Catalog(self.settings.language))
+        return self._loaded[0]
 
     @property
     def interactive(self) -> bool:

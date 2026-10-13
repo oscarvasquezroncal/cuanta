@@ -35,6 +35,8 @@ READ_DISCIPLINE_TARGET = 0.5
 SCOUT_TARGET = 0.4
 WARM_TARGET = 0.8
 FINISH_TARGET = 0.0
+DEFAULTS_TARGET = 0.10
+DEFAULTS_TIME = 0.20
 FINISH_ROOM = FINISH_HEADROOM_STEPS
 SEND_TOLERANCE = 0.01
 DEFAULT_OVERSHOOT_USD = 0.10
@@ -47,6 +49,7 @@ class Comparison(StrEnum):
     SCOUT = "scout"
     WARM_QUEUE = "warm-queue"
     FINISH = "finish"
+    DEFAULTS = "defaults"
 
 
 COMPARISONS = tuple(Comparison)
@@ -62,6 +65,9 @@ class Arm:
     position: int = 0
     governor: bool | None = None
     scout_mode: str = ""
+    model: str = ""
+    effort: str = ""
+    defaults: bool = False
 
 
 DISCIPLINE_ON = Arm(
@@ -77,11 +83,23 @@ PIPELINE_ARM = Arm("pipeline", Comparison.SCOUT, Condition.ROUTED, shape="pipeli
 QUEUE_FIRST = Arm("queue-first", Comparison.WARM_QUEUE, Condition.CUANTA, position=1)
 QUEUE_SECOND = Arm("queue-second", Comparison.WARM_QUEUE, Condition.CUANTA, position=2)
 TIGHT_CAP = Arm("tight-cap", Comparison.FINISH, Condition.ROUTED, governor=True)
+CLAUDE_ALONE = Arm(
+    "claude-alone",
+    Comparison.DEFAULTS,
+    Condition.BASELINE,
+    model="claude-opus-5-5",
+    effort="high",
+)
+CUANTA_DEFAULT = Arm("cuanta-default", Comparison.DEFAULTS, Condition.CUANTA, defaults=True)
+CUANTA_TEAM = Arm(
+    "cuanta-team", Comparison.DEFAULTS, Condition.CUANTA, shape="pipeline", defaults=True
+)
 ARMS: dict[Comparison, tuple[Arm, ...]] = {
     Comparison.READ_DISCIPLINE: (DISCIPLINE_ON, DISCIPLINE_OFF),
     Comparison.SCOUT: (SCOUT_ARM, PIPELINE_ARM),
     Comparison.WARM_QUEUE: (QUEUE_FIRST, QUEUE_SECOND),
     Comparison.FINISH: (TIGHT_CAP,),
+    Comparison.DEFAULTS: (CLAUDE_ALONE, CUANTA_DEFAULT, CUANTA_TEAM),
 }
 PAIRED = frozenset({Comparison.WARM_QUEUE})
 
@@ -179,6 +197,12 @@ def _flag(value: bool) -> str:
 
 def arm_settings(arm: Arm) -> str:
     parts: list[str] = []
+    if arm.model:
+        parts += ["claude -p", f"model {arm.model}"]
+    if arm.effort:
+        parts.append(f"effort {arm.effort}")
+    if arm.defaults:
+        parts.append("cuanta run with its defaults")
     if arm.read_discipline is not None:
         value = _flag(arm.read_discipline)
         parts += [f"runs.read_discipline={value}", f"runs.pipeline_read_discipline={value}"]
@@ -189,6 +213,33 @@ def arm_settings(arm: Arm) -> str:
     if arm.shape:
         parts.append(f"shape {arm.shape}")
     return ", ".join(parts) or "the copy's config"
+
+
+def defaults_args(arm: Arm, mandate: str, cap_usd: float, root: str) -> tuple[str, ...]:
+    args = (
+        "--plain",
+        "--yes",
+        "--project",
+        root,
+        "run",
+        mandate,
+        "--max-budget-usd",
+        f"{cap_usd:.2f}",
+    )
+    return (*args, "--shape", arm.shape) if arm.shape else args
+
+
+def chosen_arms(names: Sequence[str], comparison: Comparison) -> frozenset[str]:
+    known = {arm.name for arm in ARMS[comparison]}
+    unknown = [name for name in names if name not in known]
+    if unknown:
+        raise DomainFailure(
+            f"--arm {unknown[0]} is not an arm of {comparison.value}",
+            f"use one of {', '.join(sorted(known))}",
+        )
+    if comparison in PAIRED and names and set(names) != known:
+        raise DomainFailure(f"--compare {comparison.value} runs its arms as a pair", "drop --arm")
+    return frozenset(names)
 
 
 def arm_caps(values: Sequence[str], comparison: Comparison) -> dict[str, float]:
@@ -221,8 +272,9 @@ def plan_proof(
     default_cap: float,
     session: str = LEAN_SESSION,
     index: str = "on",
+    only: frozenset[str] = frozenset(),
 ) -> tuple[PlannedRun, ...]:
-    arms = ARMS[comparison]
+    arms = tuple(arm for arm in ARMS[comparison] if not only or arm.name in only)
     reps_range = range(1, reps + 1)
     groups: list[list[tuple[str, Arm, int]]] = (
         [[(task.name, arm, rep) for arm in arms] for task in tasks for rep in reps_range]
@@ -629,11 +681,58 @@ def cut_by_cap_when_finish_possible(metrics: Sequence[RunMetrics]) -> TargetResu
     return TargetResult(comparison, verdict, float(missed), target, summary, checks)
 
 
+def _change(value: float, base: float) -> float:
+    return value / base - 1 if base > 0 else 0.0
+
+
+def defaults_parity(metrics: Sequence[RunMetrics]) -> TargetResult:
+    comparison, target = Comparison.DEFAULTS, DEFAULTS_TARGET
+    alone, default = _runs(metrics, CLAUDE_ALONE), _runs(metrics, CUANTA_DEFAULT)
+    if not alone or not default:
+        return _unknown(
+            comparison, target, "needs runs of the claude-alone and cuanta-default arms"
+        )
+    alone_costs = [item.cost_usd for item in alone if item.cost_usd is not None]
+    default_costs = [item.cost_usd for item in default if item.cost_usd is not None]
+    if len(alone_costs) != len(alone) or len(default_costs) != len(default):
+        return _unknown(comparison, target, "a run's cost is unknown")
+    cost = _change(_mean(default_costs), _mean(alone_costs))
+    tokens = _change(
+        _mean([float(item.total_tokens) for item in default]),
+        _mean([float(item.total_tokens) for item in alone]),
+    )
+    time = _change(_mean([item.wall_s for item in default]), _mean([item.wall_s for item in alone]))
+    accepted_alone = sum(item.accepted for item in alone)
+    accepted_default = sum(item.accepted for item in default)
+    team = _runs(metrics, CUANTA_TEAM)
+    team_costs = [item.cost_usd for item in team if item.cost_usd is not None]
+    team_text = (
+        f"; cuanta-team ${_mean(team_costs):,.2f}, accepted "
+        f"{sum(item.accepted for item in team)}/{len(team)}"
+        if team_costs
+        else ""
+    )
+    summary = (
+        f"cuanta-default against claude-alone: cost {cost:+.0%}, tokens {tokens:+.0%}, "
+        f"time {time:+.0%} (targets +{target:.0%}, +{target:.0%}, +{DEFAULTS_TIME:.0%}); "
+        f"accepted {accepted_default}/{len(default)} against {accepted_alone}/{len(alone)}"
+        f"{team_text}"
+    )
+    met = (
+        cost <= target
+        and tokens <= target
+        and time <= DEFAULTS_TIME
+        and accepted_default == len(default)
+    )
+    return TargetResult(comparison, Verdict.MET if met else Verdict.MISSED, cost, target, summary)
+
+
 TARGETS = {
     Comparison.READ_DISCIPLINE: read_discipline_saving,
     Comparison.SCOUT: scout_saving,
     Comparison.WARM_QUEUE: queue_warm_share,
     Comparison.FINISH: cut_by_cap_when_finish_possible,
+    Comparison.DEFAULTS: defaults_parity,
 }
 
 

@@ -4,9 +4,16 @@ from pathlib import Path
 
 from cuanta.adapters.engines.claude_code import ClaudeCodeEngine
 from cuanta.application.mandate_flow import MandateOptions
+from cuanta.domain.context_ceiling import max_context
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.messages import english
-from cuanta.domain.role_tools import SESSION_TOOLS, cache_message, cache_use, role_tools
+from cuanta.domain.role_tools import (
+    SESSION_TOOLS,
+    cache_message,
+    cache_use,
+    role_events,
+    role_tools,
+)
 from cuanta.domain.routing import Role
 from cuanta.tui.i18n import Catalog
 from tests.fakes import FakeRunner
@@ -45,3 +52,31 @@ def test_cache_use_is_measured_per_role_with_its_first_request() -> None:
         "cache analyst: 3 requests, 46% read from cache, 1 misses, first request 8,010 tokens"
     )
     assert "caché" in Catalog("es").message(shown)
+
+
+def test_a_per_role_team_measures_each_role_by_its_run() -> None:
+    events = (
+        LedgerEvent(
+            run_id="R1",
+            kind="api_request",
+            agent="main",
+            model="claude-haiku-5-5",
+            input_tokens=9_000,
+        ),
+        LedgerEvent(run_id="R2", kind="api_request", model="claude-sonnet-5-5", input_tokens=40),
+        LedgerEvent(
+            run_id="R2",
+            kind="api_request",
+            model="claude-sonnet-5-5",
+            input_tokens=10,
+            cache_read_tokens=20_000,
+        ),
+        LedgerEvent(run_id="R2", kind="api_request", agent="Explore", input_tokens=700),
+        LedgerEvent(run_id="R3", kind="api_request", input_tokens=5),
+    )
+    labelled = role_events(events, {"R1": "analyst", "R2": "senior"})
+    assert set(cache_use(labelled)) == {"analyst", "senior", "Explore", "main"}
+    assert cache_use(labelled)["senior"].first_tokens == 40
+    assert max_context(labelled)["analyst"] == (9_000, "claude-haiku-5-5")
+    assert max_context(labelled)["senior"] == (20_010, "claude-sonnet-5-5")
+    assert role_events(events, {}) == events

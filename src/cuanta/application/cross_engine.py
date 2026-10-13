@@ -115,6 +115,7 @@ from cuanta.domain.role_handoff import (
     estimate_tokens,
     handoff_budget,
     merge_chain,
+    phases_left,
     refresh_chain,
     refresh_facts,
     render_chain,
@@ -148,6 +149,7 @@ CROSS_KIND = "cross"
 DEFAULT_TOOLS = ("Read", "Grep", "Glob", "Edit", "Write")
 WRITING_ROLES = frozenset({Role.SENIOR, Role.TESTER, Role.DOCS})
 REPAIR_MINIMUM_USD = 0.01
+SENIOR_PHASES = 6
 BUDGET_EPSILON = 1e-9
 SHOWN_PATHS = 5
 WALL_FLOOR_S = 1.0
@@ -739,12 +741,15 @@ class CrossEnginePipeline:
         self.current = run_id
         self._root = self._root or run_id
 
-    def _save_interrupted(self) -> None:
+    def _save_stopped(self, key: str) -> None:
         if not self._root or self._save_metrics is None:
             return
         state = CompletionState.PARTIAL if self.completed else CompletionState.FAILED
-        stopped = message_payload(msg("stop.interrupted"))
+        stopped = message_payload(msg(key))
         self._save_metrics(self._root, {"completion": state.value, "stopped": stopped})
+
+    def _save_interrupted(self) -> None:
+        self._save_stopped("stop.interrupted")
 
     def _isolated(self, spec: LaunchSpec, engine: str) -> LaunchSpec:
         sandbox = self._sandbox
@@ -929,6 +934,9 @@ class CrossEnginePipeline:
                 self._save_metrics(result.steps[0].run_id, cross_metrics(result))
         except KeyboardInterrupt:
             self._save_interrupted()
+            raise
+        except CuantaError:
+            self._save_stopped("stop.team_error")
             raise
         if result.steps and self._learn_run is not None:
             self._learn_run(result.steps[0].run_id)
@@ -1150,6 +1158,8 @@ class CrossEnginePipeline:
                     pending = self._start_beside(state, definitions)
                 try:
                     stop = self._perform(state, turn)
+                    if stop is None and role is Role.SENIOR:
+                        stop = self._next_phases(state, definitions)
                 except _WallExpired:
                     return self._wall_stop(state)
                 if stop is not None:
@@ -1158,6 +1168,47 @@ class CrossEnginePipeline:
             if pending is not None:
                 self._abandon(pending)
         return None
+
+    def _next_phases(
+        self, state: _Pass, definitions: Sequence[AgentDefinition]
+    ) -> CrossReport | None:
+        role = Role.SENIOR
+        for count in range(2, SENIOR_PHASES + 1):
+            if not phases_left(state.handoffs, role.value):
+                return None
+            halt = self._halt(state)
+            if halt is not None:
+                return halt
+            if not self._phase_room(state):
+                state.progress.publish(
+                    note(Status.WARN, msg("cross.phases_stopped", role=role.value))
+                )
+                return None
+            turn = self._admit(state, role, definitions)
+            if not isinstance(turn, _Turn):
+                return turn
+            state.progress.publish(
+                note(
+                    Status.INFO,
+                    msg("cross.next_phase", role=role.value, count=count, limit=SENIOR_PHASES),
+                )
+            )
+            stop = self._perform(state, turn)
+            if stop is not None:
+                return stop
+        if phases_left(state.handoffs, role.value):
+            state.progress.publish(note(Status.WARN, msg("cross.phases_stopped", role=role.value)))
+        return None
+
+    def _phase_room(self, state: _Pass) -> bool:
+        if self._budget <= 0:
+            return True
+        if state.spent is None:
+            return False
+        future = state.routed[state.routed.index(Role.SENIOR) + 1 :]
+        reserved = sum(state.shares.get(later, 0.0) for later in future) + self._held(state)
+        floor = self._budget * floor_fraction(Role.SENIOR)
+        return self._budget - state.spent - reserved >= max(floor, REPAIR_MINIMUM_USD)
 
     def _start_beside(self, state: _Pass, definitions: Sequence[AgentDefinition]) -> _Beside | None:
         beside = self._tuning.beside

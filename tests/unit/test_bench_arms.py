@@ -17,7 +17,15 @@ from cuanta.application.bench import (
     stored_run,
 )
 from cuanta.application.progress import RecordingSink
-from cuanta.domain.bench import BenchMeta, BenchTask, Condition, PlannedRun, ProofRecord, RunMetrics
+from cuanta.domain.bench import (
+    BenchMeta,
+    BenchNotLaunched,
+    BenchTask,
+    Condition,
+    PlannedRun,
+    ProofRecord,
+    RunMetrics,
+)
 from cuanta.domain.bench_proof import NOT_LAUNCHED, Comparison, plan_proof
 from cuanta.domain.errors import DomainFailure
 from cuanta.domain.mandate import MandateRequest
@@ -303,3 +311,15 @@ def test_runs_without_a_proof_store_the_legacy_document() -> None:
     assert metrics_from_json(broken).proof is None
     with pytest.raises(ValueError, match="not defined"):
         planned_proof(PlannedRun(1, "t1", Condition.CUANTA, 1, arm="nope"))
+
+
+def test_an_arm_that_launched_nothing_is_recorded_as_not_launched() -> None:
+    planned = plan_proof([TASK], Comparison.FINISH, 1, 1, {}, 0.3)
+
+    def refused(*_: object) -> Attempt:
+        raise BenchNotLaunched("cuanta run launched nothing (exit 1)", "verification is unusable")
+
+    executor = BenchExecutor(Sandbox(), lambda *_: attempt(0.0), lambda: 0.0, refused)
+    (found,) = executor.group(TASK, planned)
+    assert found.error == "cuanta run launched nothing (exit 1)"
+    assert found.proof is not None and found.proof.end_reason == NOT_LAUNCHED

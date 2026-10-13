@@ -241,6 +241,29 @@ def unusable_reasons(
     return (*missing, *(_unusable_reason(result) for result in unusable_results(results)))
 
 
+PYTHON_MODULE = re.compile(
+    r"^(?:\S*[\\/])?(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?\s+-m\s+([\w.]+)", re.IGNORECASE
+)
+
+
+def missing_tools(results: Sequence[VerifyResult]) -> dict[str, str]:
+    return {
+        result.command: module
+        for result in results
+        if not result.passed and (module := _absent_module(result))
+    }
+
+
+def _absent_module(result: VerifyResult) -> str:
+    found = PYTHON_MODULE.match(result.command.strip())
+    if found is None:
+        return ""
+    module = found.group(1)
+    absent = re.compile(rf"No module named '?{re.escape(module)}'?(?:\s|$)")
+    lines = (*result.tail, *result.errors, result.cause)
+    return module if any(absent.search(line) for line in lines) else ""
+
+
 def unavailable_checks(results: Sequence[VerifyResult], commands: Sequence[str]) -> tuple[str, ...]:
     return tuple(english(reason) for reason in unusable_reasons(results, commands))
 

@@ -198,3 +198,60 @@ def test_the_default_overshoot_is_the_largest_one_the_ledger_measured(
     document = json.loads(result.stdout)
     assert document["overshoot_usd"] == pytest.approx(0.22)
     assert document["ceiling_usd"] == pytest.approx(0.52)
+
+
+@pytest.mark.timeout(300)
+def test_the_defaults_comparison_runs_claude_alone_and_the_cuanta_cli(
+    tmp_path: Path, fake_claude: dict[str, str]
+) -> None:
+    preview = invoke(
+        compare(tmp_path, "--compare", "defaults", "--per-run-usd", "2"), env=fake_claude
+    )
+    assert preview.exit_code == 0, preview.stdout + preview.stderr
+    planned = json.loads(preview.stdout)["planned"]
+    assert sorted(item["arm"] for item in planned) == [
+        "claude-alone",
+        "cuanta-default",
+        "cuanta-team",
+    ]
+    only = invoke(
+        compare(
+            tmp_path, "--compare", "defaults", "--arm", "cuanta-team", "--arm-cap", "cuanta-team=8"
+        ),
+        env=fake_claude,
+    )
+    assert only.exit_code == 0, only.stdout + only.stderr
+    assert [(item["arm"], item["cap_usd"]) for item in json.loads(only.stdout)["planned"]] == [
+        ("cuanta-team", 8.0)
+    ]
+    loose = invoke(compare(tmp_path, "--arm", "cuanta-team"), env=fake_claude)
+    assert loose.exit_code == 1
+    assert "--arm needs --compare" in json.loads(loose.stdout)["error"]["message"]
+    refused = invoke(
+        compare(tmp_path, "--compare", "defaults", "--shape", "single"), env=fake_claude
+    )
+    assert refused.exit_code == 1
+    assert "--compare defaults sets the shape" in json.loads(refused.stdout)["error"]["message"]
+    result = invoke(
+        compare(
+            tmp_path,
+            "--compare",
+            "defaults",
+            "--seed",
+            "5",
+            "--per-run-usd",
+            "2",
+            "--arm-cap",
+            "cuanta-team=1",
+            "--yes",
+        ),
+        env={**fake_claude, "CUANTA_CLAUDE_TEAM": "roles"},
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    document = json.loads(result.stdout)
+    runs = {run["proof"]["arm"]: run for run in document["runs"]}
+    assert set(runs) == {"claude-alone", "cuanta-default", "cuanta-team"}
+    assert all(run["run_id"] and not run["error"] for run in runs.values()), runs
+    assert runs["cuanta-team"]["shape"] == "pipeline"
+    (target,) = document["targets"]
+    assert target["target"] == "defaults" and target["verdict"] in {"met", "missed", "n/a"}

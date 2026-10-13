@@ -177,6 +177,7 @@ ENGLISH: dict[str, str] = {
     "stop.failed": "the run failed",
     "stop.team_partial": "the team stopped before every role finished",
     "stop.team_failed": "the team run failed",
+    "stop.team_error": "the team stopped because a role ended with an error",
     "result.partial_cost": "{cost} (partial)",
     "result.partial_estimated_cost": "{cost} (estimated, partial)",
     "result.partial_turns": "{turns} (partial)",
@@ -193,6 +194,13 @@ ENGLISH: dict[str, str] = {
     ),
     "instinct.launch_single": "one session (Sonnet)",
     "instinct.launch_team": "team (Haiku analyst and tester, Sonnet senior)",
+    "cross.next_phase": (
+        "{role} continues: its handoff lists phases left (launch {count} of at most {limit})"
+    ),
+    "cross.phases_stopped": (
+        "{role} still lists phases left, but the team's budget, time or launch limit stops it here"
+    ),
+    "verify.tool_missing": "{command} skipped: the {module} module is not installed",
     "runs_next.no_report": "run {run} has no saved report, so it has no next step",
     "runs_next.none": "run {run} has no NEXT STEP in its report",
     "runs_next.hint": "an audit or a run that ends with a NEXT STEP block has one",

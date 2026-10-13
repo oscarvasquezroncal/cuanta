@@ -72,6 +72,10 @@ def run_command(
         list[str] | None,
         typer.Option("--arm-cap", help="Cap per run of one arm, ARM=USD (repeatable)."),
     ] = None,
+    arm: Annotated[
+        list[str] | None,
+        typer.Option("--arm", help="With --compare: run only this arm (repeatable)."),
+    ] = None,
     overshoot_usd: Annotated[
         float | None,
         typer.Option(
@@ -105,6 +109,7 @@ def run_command(
             compare,
             tuple(arm_cap or ()),
             overshoot_usd,
+            tuple(arm or ()),
         ),
     )
 
@@ -164,6 +169,7 @@ def _run(
     compare: str = "",
     arm_cap: tuple[str, ...] = (),
     overshoot_usd: float | None = None,
+    arms: tuple[str, ...] = (),
 ) -> "Document":
     from cuanta.bootstrap import Container
     from cuanta.cli.commands.route import check_choice
@@ -194,6 +200,8 @@ def _run(
         raise NotAvailable("claude not found on PATH", "install Claude Code")
     if arm_cap and not compare:
         raise DomainFailure("--arm-cap needs --compare", "add --compare or drop --arm-cap")
+    if arms and not compare:
+        raise DomainFailure("--arm needs --compare", "add --compare or drop --arm")
     if overshoot_usd is not None and not compare:
         raise DomainFailure(
             "--overshoot-usd needs --compare", "add --compare or drop --overshoot-usd"
@@ -224,6 +232,7 @@ def _run(
                 compare,
                 arm_cap,
                 overshoot_usd,
+                arms,
             ),
         )
     runs = len(tasks) * len(conditions) * reps * len(sessions_for(profile))
@@ -309,6 +318,7 @@ class ProofOptions:
     compare: str
     arm_cap: tuple[str, ...]
     overshoot_usd: float | None = None
+    arms: tuple[str, ...] = ()
 
 
 def _run_proof(
@@ -326,6 +336,7 @@ def _run_proof(
         Comparison,
         arm_caps,
         arm_settings,
+        chosen_arms,
         parse_comparison,
         plan_proof,
         worst_case,
@@ -335,15 +346,18 @@ def _run_proof(
 
     comparison = parse_comparison(options.compare)
     caps = arm_caps(options.arm_cap, comparison)
+    only = chosen_arms(options.arms, comparison)
     if options.conditions.strip():
         raise DomainFailure(
             "--conditions does not apply to --compare", "each comparison runs its own arms"
         )
     if options.profile == BOTH_SESSIONS:
         raise DomainFailure("--compare runs one session profile", "use --session lean or full")
-    if comparison is Comparison.SCOUT and options.shape:
-        raise DomainFailure("--compare scout sets the shape of each arm", "drop --shape")
-    arms = ARMS[comparison]
+    if comparison in (Comparison.SCOUT, Comparison.DEFAULTS) and options.shape:
+        raise DomainFailure(
+            f"--compare {comparison.value} sets the shape of each arm", "drop --shape"
+        )
+    arms = tuple(arm for arm in ARMS[comparison] if not only or arm.name in only)
     preview = plan_proof(
         tasks,
         comparison,
@@ -353,6 +367,7 @@ def _run_proof(
         options.per_run_usd,
         options.profile,
         options.index,
+        only,
     )
     total = sum(item.cap_usd for item in preview)
     overshoot = (
@@ -445,6 +460,7 @@ def _run_proof(
         options.per_run_usd,
         options.profile,
         options.index,
+        only,
     )
     runner = container.bench_runner(
         _resolve(session, options.fixtures, DEFAULT_FIXTURES),

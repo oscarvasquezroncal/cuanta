@@ -229,8 +229,11 @@ proposes the type from the title for you to confirm, while the console runs a fi
 
 The console follows `[ui] language = "es"` or `"en"` in `.cuanta/config.toml`; `--lang es`
 overrides it for one command. Before a run, the short launch card names the request type and
-scope, the team or single model, the forecast, whether docs run and why, and the effective limits.
-Limits are off by default. To opt in for one run:
+scope, the team or single model, what Instinct decided and with which backend, the forecast,
+whether docs run and why, and the effective limits. Without a spend limit you set, a run with a
+forecast gets a soft cap at its P90, where the governor sends the closing turn, and a hard cap at
+twice the P90, sent as Claude's native budget limit (`[limits] soft_p90` and `hard_p90` change the
+factors; `0` turns either off). Turn and wall limits stay opt-in. To set your own for one run:
 
 ```bash
 cuanta run mandato.md --lang es --max-budget-usd 5 --max-turns 80 --max-wall 45
@@ -305,19 +308,35 @@ flowchart LR
 | Normal | medium | $0.60 |
 | Deep | high | $1.50 |
 
+On Claude Code, cuanta sizes a feature or bug before it spends (`runs.profile = auto`). Instinct
+(Jev with a key and consent, the heuristic otherwise) reads the type, the change plan, the cited
+ranges and the ledger history:
+
+| Scope | Shape | Models and effort |
+|---|---|---|
+| Trivial or normal | one session | Sonnet 5.5, medium for a feature and high for a bug, Opus 5.5 advisor |
+| Complex, or `--shape pipeline` | one launch per role, JSON handoffs | analyst Haiku 5.5 medium · senior Sonnet 5.5 high with the Opus 5.5 advisor · tester Haiku 5.5 medium · docs Haiku 5.5 low, beside the tester in a copy |
+
+Opus or Fable as the main model, `--pure`, xhigh effort, ultracode on a team and `--fast` show how
+much they multiply the forecast and need a confirmation or `--yes`. `--advisor auto|opus|fable|off`
+picks the advisor. Claude Code versions without Sonnet 5.5 or Haiku 5.5 fall back to Sonnet 5 and
+Haiku 4.5. Other routes (balanced runs, other engines, `--route`) use the tiers:
+
 | Role | Default tier | Example models |
 |---|---|---|
-| Orchestrator | standard | Sonnet 5 · GPT-5.6 Terra |
-| Analyst | standard | Sonnet 5 · GPT-5.6 Terra |
+| Orchestrator | standard | Sonnet 5.5 · GPT-5.6 Terra |
+| Analyst | standard | Sonnet 5.5 · GPT-5.6 Terra |
 | Senior | premium | Opus 5.5 · GPT-5.6 Sol |
 | Tester | premium | Opus 5.5 · GPT-5.6 Sol |
-| Docs | economy | Haiku 4.5 · GPT-5.6 Luna |
+| Docs | economy | Haiku 5.5 · GPT-5.6 Luna |
 
 - **The tiers** ship in `src/cuanta/assets/model_tiers.toml`, and you can change them in the **Models** screen.
 - **cuanta only picks models your engines report as available.** Model tiers constrain routing. Spend enforcement depends on the engine; the Team step warns about limits before launch.
 - **Frontier models are opt-in.**
 - **After each run, the audit** compares the planned model with the one the telemetry saw.
-- **Limits are opt-in.** Without `--max-budget-usd`, `--max-turns`, `--max-wall` or a `[limits]` value, a run has no spend cap, no turn limit and no time limit; `[runs] limits = "depth"` restores the depth caps and turn limits for every run. See [docs/FLAGS.md](docs/FLAGS.md).
+- **Spend caps come from the forecast.** Without `--max-budget-usd` or `[limits] budget_usd`, a run with a forecast P90 gets a soft cap at the P90 and a hard cap at twice it; turn and wall limits stay opt-in, and `[runs] limits = "depth"` restores the depth caps and turn limits for every run. See [docs/FLAGS.md](docs/FLAGS.md).
+- **Writers are checked on what they touched.** After each writing turn cuanta runs the tests the change can affect, the type checker through its daemon (`dmypy` for mypy) and the build, in parallel, with `-n auto` for six test files or more; the final check reuses the type checker's daemon. A check whose own Python module is not installed (`python -m build` without `build`) is skipped and logged instead of refusing the writer.
+- **Context stays bounded.** The pack gives cited ranges about 12k tokens first; an indexed run sends Read and Grep through the index first; Claude Code 2.1.296+ compacts at 120k tokens (100k on Haiku 5.5), though one request can pass the window before the compaction runs, and older versions hand over to a fresh session at that ceiling. The result lists each role's largest context, its cache use and the index/Grep ratio.
 
 </details>
 
@@ -382,12 +401,13 @@ them on stderr with their seconds.
 | `cuanta find <terms>` / `card <path>` / `impact <path>` / `facts [<path>] [--stale]` | Search with ranking reasons, bounded file cards, connected files and current facts or records awaiting revalidation; local by default |
 | `cuanta index --summaries` | Preview a Claude economy summary batch and its estimate; explicit `--yes` permits the shown capped spend; unchanged hashes reuse the cache |
 | `cuanta plan --for <request>` | Compile Edit, Read only, Protected and Verify sets locally; show confidence and exact writer deny rules without a model call |
-| `cuanta mandate` (`pounce`) | Compose and run a mandate. `-f`/`--from FILE` (the whole mandate from a file), `-t`/`--type`, `--what`, `--why`, `--out-of-scope`, `-m`/`--model`, `-v`/`--variant`, `-p`/`--profile`, `--depth`, `--shape`, `--docs auto\|on\|off`, optional limits (`--max-budget-usd`, `--max-turns` for Claude, `--max-wall` in minutes), `--dry-run`, `-s`/`--sandbox` to work in an isolated copy (`--keep` keeps the copy). Only the type and the what are required |
+| `cuanta mandate` (`pounce`) | Compose and run a mandate. `-f`/`--from FILE` (the whole mandate from a file), `-t`/`--type`, `--what`, `--why`, `--out-of-scope`, `-m`/`--model`, `-v`/`--variant`, `-p`/`--profile`, `--depth`, `--shape`, `--docs auto\|on\|off`, `--advisor auto\|opus\|fable\|off`, `--fast`, optional limits (`--max-budget-usd`, `--max-turns` for Claude, `--max-wall` in minutes), `--dry-run`, `-s`/`--sandbox` to work in an isolated copy (`--keep` keeps the copy). Only the type and the what are required |
 | `cuanta run <file>` / `feat` / `fix` / `audit "<text>"` | Aliases of `cuanta mandate` with every option: `run` takes a file as the whole mandate; `feat`, `fix` and `audit` set the type |
 | `cuanta help` (`ayuda`) | One screen, in the UI language, with the six things people do |
 | `cuanta queue add \| list \| run \| clear` | Queue mandates (`add` takes the options of `cuanta mandate`) and run them back to back on a warm prefix, the same engine and model together; `run` asks first unless `--yes` and stops at the first failure unless `--keep-going`; shows "warm prefix until HH:MM" |
 | `cuanta route --dry-run` | Show the routing plan for a request |
 | `cuanta runs` / `runs list \| show [id] \| open` | Stored runs and their reports, with the estimate shown at launch, the cap, the estimate error and the outcome; `cuanta runs` alone lists the last ten and `runs show` without an id shows the last run you launched |
+| `cuanta runs next [id]` | Write the NEXT STEP of a run's report as `.cuanta/runs/<id>/next.md` and print `cuanta run .cuanta/runs/<id>/next.md`; without an id, the last run you launched. An audit whose answer has a next step ends with this command |
 | `cuanta runs accept <id>` | Record that a run's change or report was useful; an isolated-copy run is only marked, never applied, and a role of a cross-engine run resolves to its pipeline |
 | `cuanta runs reject <id> [--reason TEXT]` | Record that a run was not useful; rejecting an isolated-copy run discards it |
 | `cuanta costs [--since YYYY-MM-DD]` | Real costs for the last 30 days (UTC) by type and by engine mix: runs, accepted, spend, median cost and time, cost per accepted change and the median estimate error |
@@ -486,6 +506,10 @@ The rules:
 of the three conditions, with a cap per arm (`--arm-cap ARM=USD`); without `--yes` it lists the
 planned runs, their caps and the worst case, allowing an overshoot past each cap
 (`--overshoot-usd`). The report states each target as met or missed from the stored runs.
+`--compare defaults` is the acceptance comparison: Claude Code alone (`claude -p`, Opus 5.5,
+high effort) against `cuanta run` with its defaults, as one launch and as a team, each through
+the installed CLI; `--arm NAME` runs only the arms you name, such as a team alone on a larger
+task with its own `--arm-cap`.
 
 <!-- cuanta-bench:start -->
 _Results will appear here after the first public run of `cuanta bench report --readme`._
@@ -495,7 +519,7 @@ _Results will appear here after the first public run of `cuanta bench report --r
 
 ## Project status and roadmap
 
-**0.3.0, beta.**
+**0.6.0, beta.**
 - **Release smoke checks** install the npm tarball on Windows, Linux and macOS with Node 22 and 24. Linux and macOS also check process-tree cleanup and the launcher. The full typed, covered suite runs locally; a manual workflow builds and smokes without publishing.
 - **Codex and OpenCode** support is newer and less exercised.
 

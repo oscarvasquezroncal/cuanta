@@ -24,6 +24,7 @@ from cuanta.ports.progress import ProgressSink
 from cuanta.ports.system import Clock, ProcessRunner
 
 UNBOUNDED_CHECK_S = 86_400.0
+BENCH_DEFAULTS_TIMEOUT_S = 3_600.0
 BUILTIN_TEST_RUNNERS = {
     "pytest": "cuanta.adapters.testing.pytest_runner:PytestRunner",
     "jest": "cuanta.adapters.testing.jest_runner:JestRunner",
@@ -151,6 +152,7 @@ if TYPE_CHECKING:
     from cuanta.domain.sandbox import SandboxLaunch
     from cuanta.domain.scout import DocsChoice, ShapeChoice
     from cuanta.domain.shells import Shell
+    from cuanta.domain.spectrum import Totals
     from cuanta.domain.terminal import TerminalReport
     from cuanta.domain.verification import VerificationPolicy, VerificationResult
     from cuanta.ports.engine import Engine
@@ -753,13 +755,15 @@ class Container:
             DIAGNOSTICS_VERSION,
             UnusableVerification,
             baseline_key,
+            missing_tools,
             unusable_reasons,
             unusable_results,
         )
+        from cuanta.domain.messages import english, msg
         from cuanta.domain.scoped_checks import plan_sources
-        from cuanta.domain.verification import pytest_parallel
+        from cuanta.domain.verification import pytest_parallel, pytest_speed_filter
 
-        if spec.read_only or spec.kind not in {"mandate", "cross"}:
+        if spec.read_only or spec.kind not in {"mandate", "cross"} or spec.role == "docs":
             return None
         stack = self.detector().run(with_engines=False).stack
         commands = tuple(
@@ -787,6 +791,7 @@ class Container:
             self.project_snapshot,
             bool(pytest_parallel(self.workspace().read_text("pyproject.toml") or "", "pytest")),
             load_neighbours(self.project),
+            pytest_speed_filter(self.workspace().read_text("pyproject.toml") or ""),
         )
         for name in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "uv.lock"):
             digest = self.workspace().sha256(name)
@@ -801,6 +806,27 @@ class Container:
             baseline = VerificationBaselines(self.state_workspace()).get(
                 snapshot, commands, scoped.baseline, lambda: False, context
             )
+        absent = missing_tools(baseline)
+        if absent:
+            record_details(
+                self.project,
+                "; ".join(
+                    english(msg("verify.tool_missing", command=command, module=module))
+                    for command, module in absent.items()
+                ),
+                "\n".join(
+                    f"$ {result.command} (exit {result.exit_code})\n" + "\n".join(result.tail)
+                    for result in baseline
+                    if result.command in absent
+                ),
+            )
+            commands = tuple(command for command in commands if command not in absent)
+            baseline = tuple(result for result in baseline if result.command not in absent)
+            if not commands:
+                scoped.close()
+                if spec.implementation_steps:
+                    raise DomainFailure("ordered implementation requires verification commands")
+                return None
         reasons = unusable_reasons(baseline, commands)
         if reasons:
             record_details(
@@ -1504,6 +1530,15 @@ class Container:
                 )
         if profile is ImplementationProfile.FAST:
             return options, ShapeChoice(Shape.SINGLE)
+        if (
+            automatic
+            and options.shape == Shape.PIPELINE.value
+            and not options.model
+            and not options.pure
+            and (options.engine or self.config.engine) == "claude"
+            and not self.routing_pinned(options.route.mode)
+        ):
+            options = self.team_defaults(options)
         choice = self.team_shape(request, options, cross_engine)
         if not choice.scout:
             return options, choice
@@ -1585,13 +1620,21 @@ class Container:
         from cuanta.domain.index_first import index_ratio
         from cuanta.domain.index_metrics import exploration_counts
         from cuanta.domain.launch_choice import scope_payload
-        from cuanta.domain.role_tools import cache_message, cache_use
+        from cuanta.domain.role_tools import cache_message, cache_use, role_events
         from cuanta.ports.ledger import EventQuery
 
         reports = RunReports(self.state_workspace())
         ledger = self.shared_ledger()
         table = self.prices()
-        events = [event for run_id in run_ids for event in ledger.events(EventQuery(run_id=run_id))]
+        roles = {
+            run.id: run.scope
+            for run_id in run_ids
+            if (run := ledger.get_run(run_id)) is not None and run.kind == "cross" and run.scope
+        }
+        events = role_events(
+            [event for run_id in run_ids for event in ledger.events(EventQuery(run_id=run_id))],
+            roles,
+        )
         requests, cost = advisor_spend(events, advisor, table) if advisor else (0, 0.0)
         index, greps, reads = exploration_counts(events)
         contexts = max_context(events)
@@ -2242,6 +2285,7 @@ class Container:
         session: str,
         depth: str,
         ledger: Ledger,
+        effort: str = "",
     ) -> tuple[Run, str, str | None]:
         from cuanta.application.engine_run import DEFAULT_DENIED, LaunchSpec
         from cuanta.application.mandate import allowed_tools
@@ -2286,7 +2330,8 @@ class Container:
             task_type=task.request.type,
             shape="single",
             depth=chosen_depth.value,
-            effort=(
+            effort=effort
+            or (
                 profile(chosen_depth, task.request.type).effort
                 if depth or task.request.type == "investigation"
                 else ""
@@ -2351,8 +2396,18 @@ class Container:
             chosen_depth = parse_depth(depth)
             if condition is Condition.BASELINE:
                 run, subtype, answer = sub._bench_baseline(
-                    task, root, cap, model, session, depth, ledger
+                    task,
+                    root,
+                    cap,
+                    arm.model if arm is not None and arm.model else model,
+                    session,
+                    depth,
+                    ledger,
+                    arm.effort if arm is not None else "",
                 )
+            elif arm is not None and arm.defaults:
+                run, subtype, answer = sub._bench_defaults(task, root, cap, arm, ledger)
+                actual_shape = arm.shape or "single"
             else:
                 report = sub._bench_mandate(
                     task, condition, cap, model, session, shape, depth, ledger, arm
@@ -2366,6 +2421,8 @@ class Container:
             outside, protected = bench_boundaries(plan, before, sub.project_snapshot())
             totals = spectrum.totals
             events = ledger.events(EventQuery(run_id=run.id))
+            if arm is not None and arm.defaults:
+                totals = sub._bench_totals(ledger)
             overhead = session_overhead(events, 0)
             split = overhead.split
             seen: dict[str, str] = {}
@@ -2410,6 +2467,56 @@ class Container:
             )
         finally:
             sub.close()
+
+    def _bench_defaults(
+        self, task: BenchTask, root: str, cap: float, arm: Arm, ledger: Ledger
+    ) -> tuple[Run, str, str | None]:
+        import sys
+
+        from cuanta.application.run_reports import RunReports
+        from cuanta.domain.bench import BenchNotLaunched
+        from cuanta.domain.bench_proof import defaults_args
+        from cuanta.domain.mandate import render_mandate
+
+        mandate = Path(root).parent / "mandate.md"
+        mandate.write_text(render_mandate(task.request), encoding="utf-8")
+        done = self.runner.run(
+            (sys.executable, "-m", "cuanta", *defaults_args(arm, str(mandate), cap, root)),
+            cwd=Path(root),
+            timeout=BENCH_DEFAULTS_TIMEOUT_S,
+        )
+        runs = sorted(ledger.runs(), key=lambda item: item.started_at)
+        if not runs:
+            raise BenchNotLaunched(
+                f"cuanta run launched nothing (exit {done.returncode})",
+                (done.stderr or done.stdout)[-2_000:],
+            )
+        cost = sum(item.cost_usd or 0.0 for item in runs)
+        first = replace(
+            runs[0],
+            cost_usd=cost if any(item.cost_usd is not None for item in runs) else None,
+            partial=any(item.partial for item in runs),
+        )
+        reports = RunReports(self.state_workspace())
+        answer = next(
+            (text for item in reversed(runs) if (text := reports.report(item.id)) is not None),
+            None,
+        )
+        return first, "success" if done.ok else "error", answer
+
+    def _bench_totals(self, ledger: Ledger) -> Totals:
+        from cuanta.application.spectrum import Selection
+        from cuanta.domain.spectrum import Totals
+
+        query = self.spectrum_query(ledger)
+        found = [query.run(Selection(run=run.id)).report.totals for run in ledger.runs()]
+        return Totals(
+            fresh_input=sum(item.fresh_input for item in found),
+            cache_read=sum(item.cache_read for item in found),
+            cache_write=sum(item.cache_write for item in found),
+            output=sum(item.output for item in found),
+            reasoning=sum(item.reasoning for item in found),
+        )
 
     def _bench_mandate(
         self,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from cuanta.domain.context_ceiling import prompt_tokens
 from cuanta.domain.ledger import LedgerEvent
@@ -12,6 +12,7 @@ from cuanta.domain.spectrum import USAGE_KINDS
 READERS = ("Read", "Grep", "Glob")
 WRITERS = (*READERS, "Edit", "Write")
 SESSION_TOOLS = (*WRITERS, "Bash")
+MAIN_AGENTS = frozenset({"", "main"})
 ROLE_TOOLS: Mapping[Role, tuple[str, ...]] = {
     Role.ANALYST: READERS,
     Role.SCOUT: READERS,
@@ -32,6 +33,15 @@ class CacheUse:
 
 def role_tools(role: Role) -> tuple[str, ...] | None:
     return ROLE_TOOLS.get(role)
+
+
+def role_events(events: Sequence[LedgerEvent], roles: Mapping[str, str]) -> tuple[LedgerEvent, ...]:
+    return tuple(
+        replace(event, agent=role)
+        if event.agent in MAIN_AGENTS and (role := roles.get(event.run_id, ""))
+        else event
+        for event in events
+    )
 
 
 def cache_use(events: Sequence[LedgerEvent]) -> dict[str, CacheUse]:

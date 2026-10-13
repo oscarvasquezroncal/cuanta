@@ -217,3 +217,40 @@ def test_claude_catalog_without_settings_lists_every_alias(tmp_path: Path) -> No
     fallback = {entry.id: entry for entry in older.list()}
     assert fallback["haiku"].resolved == "claude-haiku-4-5" and fallback["haiku"].efforts == ()
     assert fallback["sonnet"].resolved == "claude-sonnet-5"
+
+
+def test_a_catalog_cached_before_the_5_5_aliases_is_listed_again(tmp_path: Path) -> None:
+    from cuanta.adapters.system.workspace import LocalWorkspace
+    from cuanta.application.models import CACHE_PATH, ModelService
+
+    workspace = LocalWorkspace(tmp_path)
+    stale = ClaudeCatalog(
+        tmp_path,
+        tmp_path,
+        {},
+        load_prices(),
+        installed=True,
+        managed=(),
+        version=lambda: "2.1.280",
+    )
+    document = {
+        "refreshed_at": "2026-09-28T04:18:15Z",
+        "table_version": 1,
+        "verified_on": "2026-09-23",
+        "engines": ["claude"],
+        "models": [entry_to_json(entry) for entry in stale.list()],
+    }
+    workspace.write_text(CACHE_PATH, json.dumps(document))
+    current = ClaudeCatalog(tmp_path, tmp_path, {}, load_prices(), installed=True, managed=())
+    service = ModelService(
+        (current,),
+        load_tier_table(),
+        dict,
+        lambda key, tier: None,
+        workspace,
+        lambda: "2026-10-13T00:00:00Z",
+    )
+    view = service.view()
+    assert not view.cached and view.refreshed_at == "2026-10-13T00:00:00Z"
+    sonnet = next(entry for entry in view.entries if entry.id == "sonnet")
+    assert sonnet.resolved == "claude-sonnet-5-5"

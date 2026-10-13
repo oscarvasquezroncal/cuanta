@@ -6,7 +6,16 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-13
+
 ### Added
+- **The acceptance bench.** `cuanta bench run --compare defaults` runs one task three ways:
+  Claude Code alone (`claude -p`, Opus 5.5, high effort), and `cuanta run` with its defaults as
+  a single launch and as a team (`--shape pipeline`), each through the installed CLI on a mandate
+  file in its own copy. The `defaults` target is met when the default run costs and spends tokens
+  at most 10% above Claude Code alone, takes at most 20% longer and every run is accepted.
+  `--arm NAME` (repeatable) runs only the named arms of a comparison, so a reference task can
+  run the team alone with its own `--arm-cap`.
 - **A cap from the forecast.** Without a spend cap, a run with a forecast P90 gets a soft cap
   at the P90, where the governor sends the closing turn so the role finishes and hands over,
   and a hard cap at 2×P90, sent as Claude Code's native `--max-budget-usd`. `[limits] soft_p90`
@@ -138,6 +147,28 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   backups would bring the total under 500 MB or free at least a quarter of it.
 
 ### Changed
+- **An explicit team gets the team defaults.** `--shape pipeline` on Claude without `--model`,
+  role pins or a pinned routing policy now runs the same team as a complex scope (Haiku 5.5
+  analyst and tester, Sonnet 5.5 senior with the Opus 5.5 advisor, Haiku 5.5 docs) instead of
+  the policy's Opus senior, so Opus as the main model stays opt-in.
+- **A team finishes a plan of several phases.** The Forge senior implements one phase per
+  launch; a team that cuanta runs per role now launches the senior again while its JSON
+  handoff says `partial` and it changed files, up to six launches and within the team's
+  budget and time, before the tester and docs. On the reference bug the team stopped after two
+  of three phases.
+- **Faster checks on big changes.** A test selection of six files or more runs with `-n auto`
+  when the project declares pytest-xdist, and the final type check uses the daemon that served
+  the session (plain `mypy` only when the daemon never ran or fell back). Tests under a speed
+  marker the project registers (`perf`, `performance`, `benchmark`, `slow`) stay out of the
+  writer's checks, combined with the `-m` of `addopts`; a first-paint budget failing under
+  parallel load had cost a real run its three repair rounds. The docs role writes
+  without a verification session of its own. On the reference bug a single check took up to
+  158 s and the final one 315 s.
+- **The console loads its catalog once per command.** `Session.catalog` builds the Catalog on
+  the first read and reuses it (IMP-029).
+- **A fast single session no longer plans a team.** With its model chosen, the launch skips the
+  per-role tier questions to Instinct: a Jev-backed preview asks two questions instead of nine
+  (about 3 s instead of 6 s on the bench fixture).
 - **Verification in seconds.** The writer's baseline and each same-session check run only the
   tests of the change plan plus the test files the writer touched (pytest gets
   `-x -q -p no:cacheprovider`), under the `[verify] timeout_s` wall instead of 900 s per
@@ -201,6 +232,20 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   finished with problems`.
 
 ### Fixed
+- A check whose own Python module is not installed (`python -m build` without `build`, found by
+  the acceptance bench) is skipped and logged instead of refusing the writer; a broken tool still
+  refuses it.
+- The context and cache figures of a team that cuanta runs per role are kept per role; they were
+  merged under one `main` entry with the ceiling of the last model.
+- A `CuantaError` raised in a later role of a team that cuanta runs per role now records the
+  team's completion (`partial`, or `failed` when no role finished) with "the team stopped
+  because a role ended with an error" before it propagates, so `cuanta runs show` no longer
+  reads "the agent finished" (IMP-020).
+- A project whose model catalog was cached before Sonnet 5.5 and Haiku 5.5 kept launching
+  `claude-sonnet-5` for the `sonnet` tier: the tier table is now version 2, so older caches
+  are listed again.
+- A bench arm that launched nothing is recorded as not launched and no longer stops the bench
+  for an unknown cost.
 - Writing runs work again on Windows when cuanta runs from the npm runtime: the `PYTHONHOME`
   that uv's trampoline sets for cuanta's own Python (`UV_INTERNAL__PYTHONHOME`, or a home equal
   to the base prefix on uv 0.8 to 0.9.28) no longer reaches checks, engines, graphify, hooks or

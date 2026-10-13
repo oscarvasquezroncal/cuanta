@@ -77,6 +77,10 @@ def shown(root: Path) -> tuple[dict[str, object], str]:
             team(CompletionState.FAILED, msg("cross.failed", role="senior")),
             "senior failed: the pipeline stopped",
         ),
+        (
+            team(CompletionState.PARTIAL, msg("stop.team_error")),
+            "the team stopped because a role ended with an error",
+        ),
         ({"completion": "partial"}, "the team stopped before every role finished"),
         ({"completion": "failed"}, "the team run failed"),
         (team(CompletionState.COMPLETE, None), "the agent finished"),

@@ -117,6 +117,32 @@ def test_a_complex_change_runs_the_team_with_haiku_helpers_and_a_sonnet_senior(
         built.close()
 
 
+def test_an_explicit_team_without_pins_takes_the_team_defaults_not_opus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built = container(tmp_path, monkeypatch)
+    monkeypatch.setattr(built, "launch_scope", lambda request: NORMAL)
+    try:
+        options, _ = built.shaped_options(REQUEST, MandateOptions(shape="pipeline"))
+        assert options.profile == "balanced" and not options.model
+        assert dict(options.route.role_models) == {
+            "analyst": "claude-haiku-5-5",
+            "senior": "claude-sonnet-5-5",
+            "tester": "claude-haiku-5-5",
+        }
+        assert built.launch_decision is None
+        pinned, _ = built.shaped_options(
+            REQUEST, MandateOptions(shape="pipeline", model="claude-opus-5-5")
+        )
+        assert pinned.model == "claude-opus-5-5" and not pinned.route.role_models
+        chosen, _ = built.shaped_options(
+            REQUEST, MandateOptions(shape="pipeline", profile="balanced")
+        )
+        assert not chosen.route.role_models
+    finally:
+        built.close()
+
+
 def test_the_scope_decision_reads_the_plan_the_cited_ranges_and_the_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1432,6 +1432,8 @@ improve = "Un modelo económico reescribe tu solicitud. Muestra el costo antes y
 "chip.split" = "Parecen dos tareas: separar"
 "cross.step" = "{role} en {engine} ({model})"
 "cross.done" = "ejecución {run}"
+"cross.next_phase" = "{role} sigue: su relevo indica fases pendientes (lanzamiento {count} de {limit} como máximo)"
+"cross.phases_stopped" = "{role} aún indica fases pendientes, pero el presupuesto, el tiempo o el límite de lanzamientos del equipo lo detienen aquí"
 "cross.skipped" = "{role}: sin modelo asignado, se omite"
 "cross.budget" = "se agotó el presupuesto entre motores"
 "cross.role_budget" = "{role} no tiene presupuesto reservado disponible"
@@ -1816,6 +1818,7 @@ running = "sigue en curso"
 failed = "la ejecución falló"
 team_partial = "el equipo se detuvo antes de que terminaran todos los roles"
 team_failed = "la ejecución del equipo falló"
+team_error = "el equipo se detuvo porque un rol terminó con un error"
 
 [msg.engine]
 cost_unknown = "Se detuvo porque el motor no informó el costo del paso necesario para aplicar el presupuesto."
@@ -2115,6 +2118,7 @@ feed_handoff = "turno de {agent}"
 
 [msg.verify]
 in_session = "en la sesión del agente"
+tool_missing = "{command} se omitió: el módulo {module} no está instalado"
 skipped = "omitida"
 label = "Verificación"
 off = "desactivada"

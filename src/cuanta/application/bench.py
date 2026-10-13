@@ -18,6 +18,7 @@ from cuanta.domain.anatomy import (
 from cuanta.domain.bench import (
     LEAN_SESSION,
     BenchMeta,
+    BenchNotLaunched,
     BenchTask,
     Condition,
     PlannedRun,
@@ -197,6 +198,9 @@ class BenchExecutor:
                 began = self._monotonic()
                 try:
                     done = self._arm_attempt(task, run, root)
+                except BenchNotLaunched as error:
+                    found.append(_unlaunched(empty, error.message))
+                    continue
                 except CuantaError as error:
                     failed = error.message
                     found.append(

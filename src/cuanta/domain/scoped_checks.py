@@ -10,6 +10,7 @@ DMYPY_STATUS = ".cuanta/tmp/dmypy.json"
 PYTEST_SCOPE = ("-x", "-q", "-p", "no:cacheprovider")
 PYTEST_PARALLEL = ("-n", "auto")
 PATH_RUNNERS = ("pytest", "vitest", "jest")
+PARALLEL_FILES = 6
 STRONG_TARGET = 0.9
 WEAK_SOURCES = 3
 TOO_MANY = "affected.too_many"
@@ -57,14 +58,18 @@ def runner_of(command: str) -> str:
 
 
 def scoped_test_command(
-    command: str, runner: str, tests: tuple[str, ...], parallel: bool
+    command: str, runner: str, tests: tuple[str, ...], parallel: bool, marks: str = ""
 ) -> str | None:
     if runner not in PATH_RUNNERS:
         return None
     quoted = " ".join(f'"{test}"' if " " in test else test for test in tests)
     flags: tuple[str, ...] = ()
     if runner == "pytest":
-        flags = (*PYTEST_SCOPE, *(PYTEST_PARALLEL if parallel else ()))
+        flags = (
+            *PYTEST_SCOPE,
+            *(PYTEST_PARALLEL if parallel else ()),
+            *(("-m", f'"{marks}"') if marks else ()),
+        )
     return " ".join(part for part in (command, " ".join(flags), quoted) if part)
 
 
@@ -94,6 +99,10 @@ def affected_tests(
     if selection.full:
         return (), selection.reason.key == TOO_MANY
     return selection.tests, False
+
+
+def parallel_selection(tests: tuple[str, ...], full: bool) -> bool:
+    return full or len(tests) >= PARALLEL_FILES
 
 
 def check_workers(count: int, cores: int | None) -> int:

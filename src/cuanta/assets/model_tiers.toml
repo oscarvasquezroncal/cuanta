@@ -1,4 +1,4 @@
-version = 1
+version = 2
 verified_on = "2026-10-13"
 sources = [
     "https://code.claude.com/docs/en/model-config (aliases opus, sonnet, fable, haiku)",

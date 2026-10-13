@@ -42,6 +42,7 @@ from cuanta.domain.implementation import (
     fast_choice,
     implementation_fingerprint,
     large_feature,
+    missing_tools,
     planned_steps,
     project_rules,
     repair_feedback,
@@ -1393,6 +1394,64 @@ def test_a_broken_tool_baseline_names_its_exception_in_both_languages_and_logs_t
     assert "verification unusable, so the writer was not started" in logged
     assert "$ uv run mypy (exit 1)" in logged
     assert cause in logged
+
+
+def test_a_check_whose_own_python_module_is_missing_is_skipped_and_logged(
+    tmp_path: Path,
+) -> None:
+    from cuanta.bootstrap import Container
+
+    absent = "C:\\venv\\Scripts\\python.EXE: No module named build"
+    runner = FakeRunner(streams={"python -m build": FakeStream([], 1, error=absent)})
+    container = Container(tmp_path, Config(), runner=runner, home=tmp_path / "home")
+    try:
+        spec = LaunchSpec(
+            "mandate",
+            "fix",
+            str(tmp_path),
+            (),
+            verify_commands=("python -m build", "npm run check"),
+        )
+        session = container.implementation_session(spec, MemoryLedger())
+        assert session is not None
+        assert [result.command for result in session.baseline] == ["npm run check"]
+        alone = replace(spec, verify_commands=("python -m build",))
+        assert container.implementation_session(alone, MemoryLedger()) is None
+    finally:
+        container.close()
+    logs = (tmp_path / ".cuanta" / "logs").glob("*-*-*.log")
+    logged = "".join(path.read_text(encoding="utf-8") for path in logs)
+    assert "python -m build skipped: the build module is not installed" in logged
+    assert "No module named build" in logged
+    other = VerifyResult("uv run mypy", 1, tail=("No module named build",))
+    assert missing_tools((other,)) == {}
+    pytest_absent = VerifyResult(
+        "python3 -m pytest -q", 1, tail=("/usr/bin/python3: No module named pytest",)
+    )
+    assert missing_tools((pytest_absent,)) == {"python3 -m pytest -q": "pytest"}
+    broken = VerifyResult("python -m build", 1, tail=("No module named 'tomllib'",))
+    assert missing_tools((broken,)) == {}
+    assert missing_tools((VerifyResult("python -m build", 0),)) == {}
+    assert "no está instalado" in Catalog("es").message(
+        msg("verify.tool_missing", command="python -m build", module="build")
+    )
+
+
+def test_the_docs_role_writes_without_a_verification_session(tmp_path: Path) -> None:
+    from cuanta.bootstrap import Container
+
+    runner = FakeRunner()
+    container = Container(tmp_path, Config(), runner=runner, home=tmp_path / "home")
+    try:
+        spec = LaunchSpec(
+            "cross", "feature", str(tmp_path), (), verify_commands=("npm run check",), role="docs"
+        )
+        assert container.implementation_session(spec, MemoryLedger()) is None
+        assert ("npm", "run", "check") not in runner.calls
+        senior = replace(spec, role="senior")
+        assert container.implementation_session(senior, MemoryLedger()) is not None
+    finally:
+        container.close()
 
 
 def test_every_unusable_reason_reads_in_spanish() -> None:

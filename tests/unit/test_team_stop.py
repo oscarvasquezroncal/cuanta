@@ -41,3 +41,6 @@ def test_the_team_stop_applies_only_when_the_team_did_not_complete() -> None:
     assert spanish.message(team_stop("partial", None)) == (
         "el equipo se detuvo antes de que terminaran todos los roles"
     )
+    assert spanish.message(team_stop("partial", msg("stop.team_error"))) == (
+        "el equipo se detuvo porque un rol terminó con un error"
+    )

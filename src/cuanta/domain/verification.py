@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from dataclasses import dataclass
 from cuanta.domain.errors import DomainFailure
 from cuanta.domain.messages import Message, msg
 
+SPEED_MARKERS = ("perf", "performance", "benchmark", "slow")
 VERIFY_MODES = ("auto", "affected", "full", "off")
 
 
@@ -72,6 +74,45 @@ def pytest_parallel(manifest: str, runner: str) -> tuple[str, ...]:
         for value in dependencies
     )
     return ("-n", "auto") if runner == "pytest" and declared else ()
+
+
+def pytest_speed_filter(manifest: str) -> str:
+    try:
+        data = tomllib.loads(manifest)
+    except ValueError:
+        return ""
+    tool = data.get("tool", {})
+    pytest = tool.get("pytest", {}) if isinstance(tool, dict) else {}
+    options = pytest.get("ini_options", {}) if isinstance(pytest, dict) else {}
+    if not isinstance(options, dict):
+        return ""
+    markers = options.get("markers", [])
+    names = (
+        [item.split(":", 1)[0].strip() for item in markers if isinstance(item, str)]
+        if isinstance(markers, list)
+        else []
+    )
+    speed = [name for name in names if name in SPEED_MARKERS]
+    if not speed:
+        return ""
+    added = " and ".join(f"not {name}" for name in speed)
+    base = _addopts_marks(options.get("addopts", ""))
+    return f"({base}) and {added}" if base else added
+
+
+def _addopts_marks(addopts: object) -> str:
+    text = " ".join(str(item) for item in addopts) if isinstance(addopts, list) else str(addopts)
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        return ""
+    found = ""
+    for index, part in enumerate(parts):
+        if part == "-m" and index + 1 < len(parts):
+            found = parts[index + 1]
+        elif part.startswith("-m") and len(part) > 2:
+            found = part[2:].lstrip("=")
+    return found
 
 
 def timing_message(meta: Mapping[str, object]) -> Message | None:

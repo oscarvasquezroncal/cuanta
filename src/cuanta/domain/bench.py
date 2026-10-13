@@ -10,9 +10,14 @@ from cuanta.domain.anatomy import ANATOMY_HEURISTIC, AnatomyReport, Phase
 from cuanta.domain.answer_check import AnswerSpec
 from cuanta.domain.change_plan import ChangePlan, guarded, path_matches
 from cuanta.domain.costs import sum_costs
+from cuanta.domain.errors import DomainFailure
 from cuanta.domain.mandate import MandateRequest
 from cuanta.domain.read_efficiency import ReadEfficiency
 from cuanta.domain.routing import percentile
+
+
+class BenchNotLaunched(DomainFailure):
+    pass
 
 
 class Condition(StrEnum):
