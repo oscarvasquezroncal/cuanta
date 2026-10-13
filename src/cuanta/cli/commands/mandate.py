@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from cuanta.cli.document import Block, Document
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.governor_report import BlockedCalls
+    from cuanta.domain.launch_choice import LaunchScope
     from cuanta.domain.limits import RunLimits
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
@@ -73,6 +74,9 @@ class MandateArgs:
     type_stated: bool = True
     sources: tuple[Path, ...] = ()
     verify: str = ""
+    advisor: str = ""
+    role_efforts: tuple[str, ...] = ()
+    fast: bool = False
 
 
 def mandate_command(
@@ -158,6 +162,18 @@ def mandate_command(
         bool,
         typer.Option(
             "--pure", help="Pin helpers and subagents to the model.", rich_help_panel=ADVANCED
+        ),
+    ] = False,
+    advisor: Annotated[
+        str,
+        typer.Option(
+            "--advisor", help="Advisor: auto, opus, fable or off.", rich_help_panel=ADVANCED
+        ),
+    ] = "",
+    fast: Annotated[
+        bool,
+        typer.Option(
+            "--fast", help="Fast output on Opus 5.5 (about 2× its price).", rich_help_panel=ADVANCED
         ),
     ] = False,
     depth: Annotated[
@@ -329,6 +345,8 @@ def mandate_command(
         profile=profile,
         variant=variant,
         pure=pure,
+        advisor=advisor,
+        fast=fast,
         budget=budget,
         hu=hu,
         dry_run=dry_run,
@@ -537,6 +555,7 @@ def _options(args: MandateArgs) -> "MandateOptions":
     from cuanta.application.mandate_flow import MandateOptions
     from cuanta.application.route_apply import RouteOptions
     from cuanta.cli.commands.route import PRESETS, ROUTE_MODES, check_choice, parse_role_models
+    from cuanta.domain.advisor import ADVISOR_MODES
     from cuanta.domain.claude_variants import VARIANTS
     from cuanta.domain.config import DOCS_MODES
     from cuanta.domain.depth import DEPTHS
@@ -558,11 +577,16 @@ def _options(args: MandateArgs) -> "MandateOptions":
     check_choice(args.shape, tuple(shape.value for shape in Shape), "--shape")
     check_choice(args.docs, DOCS_MODES, "--docs")
     check_choice(args.verify, VERIFY_MODES, "--verify")
+    check_choice(args.advisor, ADVISOR_MODES, "--advisor")
     if args.keep and not args.sandbox:
         raise DomainFailure("--keep only applies to --sandbox runs", "add --sandbox")
     if args.classic and args.shape == Shape.SCOUT.value:
         raise DomainFailure("--classic runs without a scout", "drop --shape scout or --classic")
     role_models = parse_role_models(list(args.role_models))
+    efforts = tuple(
+        (role.strip(), effort.strip())
+        for role, _, effort in (item.partition("=") for item in args.role_efforts)
+    )
     refused = docs_refusal(
         args.docs,
         args.type,
@@ -575,9 +599,9 @@ def _options(args: MandateArgs) -> "MandateOptions":
         raise DomainFailure(english(refused[0]), refused[1])
     return MandateOptions(
         engine=args.engine,
-        model=args.model,
+        model=args.model or (FAST_MODEL if args.fast else ""),
         profile=args.profile,
-        variant=args.variant,
+        variant=fast_variant(args.variant) if args.fast else args.variant,
         pure=args.pure,
         budget_usd=args.budget,
         hu=args.hu,
@@ -587,6 +611,7 @@ def _options(args: MandateArgs) -> "MandateOptions":
             preset=args.preset,
             role_models=tuple(role_models.items()),
             keep_env_model=args.keep_env_model,
+            role_efforts=efforts,
         ),
         simple=args.simple,
         session=args.session,
@@ -601,7 +626,18 @@ def _options(args: MandateArgs) -> "MandateOptions":
         required=ESSENTIAL_FIELDS,
         type_stated=args.type_stated,
         verify=args.verify,
+        advisor=args.advisor,
+        role_efforts=efforts,
     )
+
+
+FAST_MODEL = "claude-opus-5-5"
+
+
+def fast_variant(variant: str) -> str:
+    if not variant or variant.startswith("fast"):
+        return variant or "fast"
+    return f"fast-{variant}"
 
 
 def mandate_options(args: MandateArgs) -> "MandateOptions":
@@ -640,6 +676,7 @@ def run_mandate_core(
     with RunProgress(session.presenter, session.options.verbose) as progress:
         progress.watch(container.spend_watch(prepared.forecast))
         report = flow.run(prepared, progress, observer=progress.observe, verdict=verdict)
+    publish_launch_record(session, container, (report.run.id,), prepared.spec.advisor)
     status = Status.OK if report.ok else Status.FAIL
     session.presenter.publish(
         StepFinished(
@@ -657,9 +694,10 @@ def run_mandate(
     from cuanta.application.mandate_flow import display_command, template_note
     from cuanta.bootstrap import Container
     from cuanta.cli.document import Document, Line, Verbatim
+    from cuanta.domain.launch_choice import scope_payload
     from cuanta.domain.limits import limits_payload
     from cuanta.domain.messages import english
-    from cuanta.domain.progress import Note, Status, note
+    from cuanta.domain.progress import Note, Status
 
     args, sourced = from_source(args)
     stated = [session.catalog.message(message) for message in (*request_notes, *sourced)]
@@ -676,7 +714,9 @@ def run_mandate(
         if args.classic:
             args, options = _classic(session, container, args, options, request.type)
         options, choice = container.shaped_options(request, options, args.cross_engine)
-        args = replace(args, shape=options.shape, scout_mode=options.scout_mode)
+        args = shaped_args(args, options)
+        decided = container.launch_decision
+        costly = launch_costs(session, container, options, args.dry_run)
         per_role = _per_role(container, args, options, request.type)
         if args.dry_run and per_role:
             return preview_per_role(container, args, request, choice, stated)
@@ -725,6 +765,9 @@ def run_mandate(
                     "shape": choice.payload(),
                     "docs": docs_json(prepared.docs),
                     "limits": limits_payload(prepared.limits),
+                    "instinct": scope_payload(decided) if decided is not None else None,
+                    "opt_in": [english(item) for item in costly],
+                    "advisor": prepared.spec.advisor or None,
                     "pack_notes": notes,
                     "request_notes": stated,
                     "template_note": planned.text if planned is not None else None,
@@ -732,8 +775,7 @@ def run_mandate(
             )
         for line in stated:
             session.presenter.publish(Note(Status.INFO, line))
-        if warned is not None:
-            session.presenter.publish(note(Status.WARN, warned))
+        publish_launch_notes(session, warned, decided)
         if per_role:
             return run_cross_engine(session, container, args, request, choice)
         if args.sandbox:
@@ -744,6 +786,73 @@ def run_mandate(
         raise interrupted(interrupt, container.recorded_run()) from interrupt
     finally:
         container.close()
+
+
+def publish_launch_notes(
+    session: Session, warned: "Message | None", decided: "LaunchScope | None"
+) -> None:
+    from cuanta.domain.launch_choice import scope_message
+    from cuanta.domain.progress import Status, note
+
+    if warned is not None:
+        session.presenter.publish(note(Status.WARN, warned))
+    if decided is not None:
+        session.presenter.publish(note(Status.INFO, scope_message(decided)))
+
+
+def shaped_args(args: MandateArgs, options: "MandateOptions") -> MandateArgs:
+    from dataclasses import replace
+
+    return replace(
+        args,
+        shape=options.shape,
+        scout_mode=options.scout_mode,
+        profile=options.profile,
+        model=options.model,
+        variant=options.variant,
+        role_models=tuple(f"{role}={model}" for role, model in options.route.role_models),
+        role_efforts=tuple(f"{role}={effort}" for role, effort in options.role_efforts),
+    )
+
+
+def launch_costs(
+    session: Session, container: "Container", options: "MandateOptions", dry_run: bool
+) -> "tuple[Message, ...]":
+    from cuanta.domain.implementation import ImplementationProfile
+    from cuanta.domain.launch_choice import opt_ins
+
+    costly = opt_ins(
+        options.model,
+        options.pure,
+        options.variant,
+        options.profile != ImplementationProfile.FAST.value,
+        container.prices(),
+    )
+    if costly and not dry_run:
+        accept_costly(session, costly)
+    return costly
+
+
+def publish_launch_record(
+    session: Session, container: "Container", run_ids: "Sequence[str]", advisor: str
+) -> None:
+    from cuanta.domain.progress import Status, note
+
+    for message in container.record_launch(tuple(run for run in run_ids if run), advisor):
+        session.presenter.publish(note(Status.INFO, message))
+
+
+def accept_costly(session: Session, costly: "Sequence[Message]") -> None:
+    from cuanta.domain.errors import DomainFailure
+    from cuanta.domain.messages import english, msg
+    from cuanta.domain.progress import Status, note
+
+    for item in costly:
+        session.presenter.publish(note(Status.WARN, item))
+    question = session.catalog.message(msg("optin.confirm"))
+    if session.options.yes or (session.interactive and typer.confirm(question, default=False)):
+        return
+    raise DomainFailure(english(msg("optin.refused")), english(msg("optin.refused_hint")))
 
 
 def _classic(
@@ -797,6 +906,8 @@ def run_sandbox(
     report = result.report
     if report is None:
         raise RuntimeError("sandbox run ended without a report")
+    advisor = container.advisor_choice(args.advisor, args.model) if args.model else ""
+    publish_launch_record(session, container, (report.run.id,), advisor)
     status = Status.OK if report.ok else Status.FAIL
     session.presenter.publish(
         StepFinished(

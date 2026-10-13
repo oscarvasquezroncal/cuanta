@@ -592,6 +592,7 @@ profile_auto = "Auto"
 implementation_model = "Un modelo para toda la ejecución"
 implementation_opus = "Opus 5.5"
 implementation_sonnet = "Sonnet 5"
+implementation_sonnet_latest = "Sonnet 5.5"
 implementation_variant = "Variante de Claude"
 implementation_pure = "El implementador, los auxiliares y subagentes usan este modelo."
 implementation_by_kind = "Según el tipo de cambio"
@@ -1713,6 +1714,25 @@ unknown_telemetry = "el motor no tiene una garantía de telemetría verificada"
 cap_warning = "{engine} no puede aplicar el tope de gasto. El costo se comprueba al terminar; la ejecución puede superar el tope."
 step_cap_warning = "OpenCode se detiene cuando el costo declarado de los pasos alcanza el tope. Un paso en curso puede superarlo; un paso sin costo declarado detiene la ejecución."
 opencode_refused = "Las investigaciones y los roles de analista no están disponibles en OpenCode: esta integración no puede garantizar solo lectura y permitir comandos de graphify a la vez. Elige Codex o Claude para este rol."
+
+[msg.instinct]
+launch = "Instinct ({backend}): cambio {scope}, p={probability} → {shape} · plan de {files} archivos, {anchors} rangos citados, {history} corridas anteriores de este tipo"
+launch_fallback = "Instinct ({backend}; {configured} no disponible): cambio {scope}, p={probability} → {shape} · plan de {files} archivos, {anchors} rangos citados, {history} corridas anteriores de este tipo"
+launch_single = "una sesión (Sonnet)"
+launch_team = "equipo (analista y tester en Haiku, senior en Sonnet)"
+
+[msg.advisor]
+spend = "advisor {advisor}: {requests} consultas, {cost} (cuentan en el gasto y el tope de la corrida)"
+
+[msg.optin]
+model = "{model} como modelo principal: cerca de {factor}× el precio de Sonnet 5.5, el predeterminado"
+pure = "--pure fija cada ayudante y subagente en {model}: cerca de {factor}× el precio predeterminado para ellos"
+fast = "modo rápido: cerca de {factor}× el precio de {model}"
+effort = "esfuerzo {effort}: más tokens de pensamiento que el predeterminado; aún sin multiplicador medido"
+ultracode_team = "ultracode con equipo: esfuerzo xhigh y workflows en cada rol; aún sin multiplicador medido"
+confirm = "Estas opciones suben el costo de la corrida. ¿Continuar?"
+refused = "estas opciones suben el costo de la corrida y necesitan confirmación"
+refused_hint = "añade --yes para aceptarlas, o quítalas para correr con los valores predeterminados"
 
 [msg.launch]
 self_edit = "cuanta se ejecuta desde una instalación editable dentro de este proyecto, así que la corrida puede cambiar el cuanta que la ejecuta; usa --sandbox o un cuanta instalado (npm o uv tool)"

@@ -144,6 +144,8 @@ class MandateOptions:
     required: tuple[str, ...] | None = None
     type_stated: bool = True
     verify: str = ""
+    advisor: str = ""
+    role_efforts: tuple[tuple[str, str], ...] = ()
 
 
 def scout_launch(options: MandateOptions, task_type: str) -> bool:
@@ -193,13 +195,18 @@ def resolved_profile(
     return found
 
 
-def fast_defaults(options: MandateOptions, task_type: str, large: bool) -> MandateOptions:
+def fast_defaults(
+    options: MandateOptions,
+    task_type: str,
+    large: bool,
+    resolve: Callable[[str], str] = lambda alias: alias,
+) -> MandateOptions:
     if options.profile != ImplementationProfile.FAST or options.model:
         return options
     choice = fast_choice(task_type, large)
     if choice is None:
         return options
-    return replace(options, model=choice.model, variant=options.variant or choice.variant)
+    return replace(options, model=resolve(choice.model), variant=options.variant or choice.variant)
 
 
 def per_role_run(options: MandateOptions, task_type: str, default_engine: str) -> bool:
@@ -444,7 +451,11 @@ class MandateFlow:
         verification: Callable[[str, VerificationPolicy, ProgressSink], VerificationResult]
         | None = None,
         verify_policy: VerificationPolicy = DEFAULT_VERIFICATION,
+        resolve_model: Callable[[str], str] | None = None,
+        advisor_for: Callable[[str, str], str] | None = None,
     ) -> None:
+        self._resolve_model = resolve_model or (lambda alias: alias)
+        self._advisor_for = advisor_for
         self._verification = verification
         self._verify_policy = verify_policy
         self._steps = steps if steps is not None else SlowSteps(None)
@@ -582,7 +593,7 @@ class MandateFlow:
             and request.type == MandateType.FEATURE
             and large_feature(request.type, self._edit_tokens(protection))
         )
-        options = fast_defaults(options, request.type, large)
+        options = fast_defaults(options, request.type, large, self._resolve_model)
         engine_name = options.engine or self._default_engine
         engine = self._engines(engine_name)
         if engine is None:
@@ -683,6 +694,13 @@ class MandateFlow:
             verify_commands=protection.verify
             if protection is not None and not investigation
             else (),
+            advisor=(
+                self._advisor_for(
+                    options.advisor, options.model or (applied.single if applied else "")
+                )
+                if self._advisor_for is not None and claude and single and not investigation
+                else ""
+            ),
         )
         base = implementation_spec(base, claude)
         sandbox = self._launch(options)

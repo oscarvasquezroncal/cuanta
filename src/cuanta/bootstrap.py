@@ -135,6 +135,7 @@ if TYPE_CHECKING:
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.governor_report import BlockedCalls
     from cuanta.domain.instinct import Choice
+    from cuanta.domain.launch_choice import LaunchScope
     from cuanta.domain.ledger import LedgerEvent, Run
     from cuanta.domain.limits import LimitSettings, RunLimits
     from cuanta.domain.live_run import SpendWatch
@@ -181,6 +182,7 @@ class Container:
     verbose: bool = False
     request_files: tuple[str, ...] = ()
     untyped_request: bool = False
+    launch_decision: LaunchScope | None = None
     _shared: Ledger | None = field(default=None, repr=False)
     _opened: list[Ledger] = field(default_factory=list, repr=False)
     decision_scope: DecisionScope = field(default_factory=_new_scope, repr=False)
@@ -1440,11 +1442,15 @@ class Container:
         self, request: MandateRequest, options: MandateOptions, cross_engine: bool = False
     ) -> tuple[MandateOptions, ShapeChoice]:
         from cuanta.application.mandate_flow import refuse_read_only_conflict, resolved_profile
-        from cuanta.domain.implementation import ImplementationProfile
-        from cuanta.domain.mandate import Shape
+        from cuanta.domain.implementation import AUTO_PROFILE, ImplementationProfile
+        from cuanta.domain.launch_choice import SINGLE_MODEL, single_effort
+        from cuanta.domain.mandate import MandateType, Shape
         from cuanta.domain.scout import ShapeChoice
 
         refuse_read_only_conflict(request, options)
+        automatic = (
+            options.profile or self.config.implementation_profile or AUTO_PROFILE
+        ) == AUTO_PROFILE
         profile = resolved_profile(
             options,
             self.config.implementation_profile,
@@ -1455,12 +1461,119 @@ class Container:
             self.routing_pinned(options.route.mode),
         )
         options = replace(options, profile=profile.value)
+        if (
+            profile is ImplementationProfile.FAST
+            and automatic
+            and not options.model
+            and request.type in {MandateType.FEATURE, MandateType.BUG}
+        ):
+            scope = self.launch_scope(request)
+            self.launch_decision = scope
+            if scope.team:
+                profile = ImplementationProfile.BALANCED
+                options = self.team_defaults(replace(options, profile=profile.value))
+            else:
+                options = replace(
+                    options,
+                    model=self.claude_model(SINGLE_MODEL),
+                    variant=options.variant or single_effort(request.type),
+                )
         if profile is ImplementationProfile.FAST:
             return options, ShapeChoice(Shape.SINGLE)
         choice = self.team_shape(request, options, cross_engine)
         if not choice.scout:
             return options, choice
         return replace(options, shape=choice.shape.value, scout_mode=choice.mode.value), choice
+
+    def launch_scope(self, request: MandateRequest) -> LaunchScope:
+        from cuanta.domain.affected import is_test_file
+        from cuanta.domain.anchors import request_anchors
+        from cuanta.domain.errors import CuantaError
+        from cuanta.domain.instinct import SCOPES
+        from cuanta.domain.launch_choice import LaunchScope, scope_context
+        from cuanta.domain.messages import english, msg
+
+        try:
+            plan = self.change_plan(request)
+            files = sum(1 for target in plan.edit if not is_test_file(target.path))
+        except (CuantaError, OSError, ValueError):
+            files = 0
+        ledger = self.shared_ledger()
+        history = sum(1 for run in ledger.runs() if run.task_type == request.type)
+        anchors = len(request_anchors(request))
+        decisions = self.decisions(ledger)
+        context = scope_context(request.type, request.what, request.where, files, anchors, history)
+        choice, decided = decisions.choose(english(msg("question.mandate_scope")), SCOPES, context)
+        return LaunchScope(
+            choice.option,
+            choice.probability,
+            decided.receipt.backend,
+            decisions.last_fallback_error,
+            files,
+            anchors,
+            history,
+            decisions.configured_backend.name,
+        )
+
+    def team_defaults(self, options: MandateOptions) -> MandateOptions:
+        from cuanta.application.route_apply import RouteOptions
+        from cuanta.domain.launch_choice import TEAM_DEFAULTS
+        from cuanta.domain.routing import Role
+
+        pinned = dict(options.route.role_models)
+        pins = {
+            role.value: self.claude_model(default.model)
+            for role, default in TEAM_DEFAULTS.items()
+            if role is not Role.DOCS and role.value not in pinned
+        }
+        efforts = tuple((role.value, default.effort) for role, default in TEAM_DEFAULTS.items())
+        route: RouteOptions = replace(
+            options.route,
+            role_models=(*options.route.role_models, *pins.items()),
+            role_efforts=efforts,
+        )
+        return replace(options, route=route, role_efforts=efforts)
+
+    def record_launch(self, run_ids: Sequence[str], advisor: str) -> tuple[Message, ...]:
+        from cuanta.application.run_reports import RunReports
+        from cuanta.domain.advisor import advisor_message, advisor_spend
+        from cuanta.domain.launch_choice import scope_payload
+        from cuanta.ports.ledger import EventQuery
+
+        reports = RunReports(self.state_workspace())
+        ledger = self.shared_ledger()
+        table = self.prices()
+        requests, cost = 0, 0.0
+        for run_id in run_ids if advisor else ():
+            found, spent = advisor_spend(ledger.events(EventQuery(run_id=run_id)), advisor, table)
+            requests += found
+            cost += spent
+        extra: dict[str, object] = {}
+        if self.launch_decision is not None:
+            extra["instinct"] = scope_payload(self.launch_decision)
+        if advisor:
+            extra["advisor"] = {"model": advisor, "requests": requests, "cost_usd": round(cost, 6)}
+        for run_id in run_ids if extra else ():
+            reports.save_meta(run_id, {**(reports.meta(run_id) or {}), **extra})
+        return (advisor_message(advisor, requests, cost),) if advisor else ()
+
+    def prices(self) -> PriceTable:
+        from cuanta.adapters.system.prices import load_prices
+
+        return load_prices()
+
+    def claude_model(self, alias: str) -> str:
+        from cuanta.adapters.models.tiers import claude_facts, supported_fact
+
+        fact = next((item for item in claude_facts() if item.alias == alias), None)
+        if fact is None:
+            return alias
+        return supported_fact(fact, self.claude_version()).resolves
+
+    def advisor_choice(self, mode: str, model: str) -> str:
+        from cuanta.domain.advisor import advisor_for
+
+        return advisor_for(mode, model, self.claude_version())
 
     def prompt_assistant(self, ledger: Ledger) -> PromptAssistant:
         from cuanta.application.assistant import PromptAssistant
@@ -1742,10 +1855,11 @@ class Container:
         implementation: MandateOptions | None = None,
         wall_s: float = 0.0,
     ) -> CrossEnginePipeline:
-        from cuanta.application.cross_engine import CrossEnginePipeline
+        from cuanta.application.cross_engine import CrossEnginePipeline, RoleTuning
         from cuanta.application.run_reports import RunReports
         from cuanta.application.timing import PhaseRecorder
         from cuanta.domain.implementation import AUTO_PROFILE, ImplementationProfile
+        from cuanta.domain.launch_choice import TEAM_DEFAULTS
         from cuanta.domain.run_mode import classic_meta
         from cuanta.domain.scout import docs_setting, parse_docs_mode
 
@@ -1769,7 +1883,13 @@ class Container:
                 return None
             return self.launcher(engine, ledger, telemetry=True)
 
+        advisor = implementation.advisor if implementation is not None else ""
         return CrossEnginePipeline(
+            tuning=RoleTuning(
+                dict(implementation.role_efforts) if implementation is not None else {},
+                lambda model: self.advisor_choice(advisor, model),
+                frozenset(role.value for role, default in TEAM_DEFAULTS.items() if default.advisor),
+            ),
             launchers=launcher,
             definitions=lambda: self.mandate_routing(ledger).definitions(),
             capsules=self.capsule_store(),
@@ -2367,6 +2487,8 @@ class Container:
             implementation_tools=self.config.implementation_tools,
             fast_ready=self.fast_ready,
             steps=self.slow_steps(),
+            resolve_model=self.claude_model,
+            advisor_for=self.advisor_choice,
         )
 
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
@@ -2815,6 +2937,12 @@ class Container:
             remember=self.state_root is None,
         )
 
+    def claude_version(self) -> str:
+        claude = self.engine("claude")
+        if claude is None or not claude.available():
+            return ""
+        return claude.version()
+
     def model_service(self) -> ModelService:
         from cuanta.adapters.models.claude_catalog import ClaudeCatalog
         from cuanta.adapters.models.codex_catalog import CodexCatalog
@@ -2839,6 +2967,7 @@ class Container:
                     os.environ,
                     prices,
                     installed=claude is not None and claude.available(),
+                    version=self.claude_version,
                 ),
                 CodexCatalog(self.runner, self.home, os.environ, prices),
                 OpenCodeCatalog(self.runner, self.home, self.project),

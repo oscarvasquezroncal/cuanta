@@ -84,6 +84,7 @@ class LaunchSpec:
     profile: str = "balanced"
     variant: str = ""
     pure: bool = False
+    advisor: str = ""
     verify_commands: tuple[str, ...] = ()
     implementation_steps: bool = False
     max_wall_s: float = 0.0
@@ -308,6 +309,7 @@ class EngineLauncher:
             resume_session=spec.resume_session,
             pure=spec.pure,
             variant=spec.variant,
+            advisor=spec.advisor,
         )
 
     def owns_profile(self, spec: LaunchSpec) -> bool:

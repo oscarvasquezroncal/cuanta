@@ -19,6 +19,14 @@ class Price:
     output: float
     cache_write: float | None
     cache_read: float | None
+    long_above: int = 0
+    long: Price | None = None
+    fast: Price | None = None
+
+    def for_prompt(self, tokens: int) -> Price:
+        if self.long is not None and self.long_above > 0 and tokens > self.long_above:
+            return self.long
+        return self
 
 
 def base_model(model: str) -> str:
@@ -47,6 +55,9 @@ class PriceTable:
 
 
 def event_cost(event: LedgerEvent, price: Price) -> float | None:
+    price = price.for_prompt(
+        event.input_tokens + event.cache_read_tokens + event.cache_write_tokens
+    )
     buckets = (
         (event.input_tokens, price.input),
         (event.output_tokens + event.reasoning_tokens, price.output),

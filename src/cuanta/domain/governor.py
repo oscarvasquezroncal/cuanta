@@ -235,6 +235,9 @@ def read_rate(price: Price) -> float:
 
 def step_usd(step: StepUsage, price: Price, provider: Provider, ttl_s: int = 0) -> float:
     usage = step.usage
+    price = price.for_prompt(
+        usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
+    )
     five = price.cache_write if price.cache_write is not None else price.input
     split = step.write_5m_tokens + step.write_1h_tokens
     rest = max(usage.cache_write_tokens - split, 0)

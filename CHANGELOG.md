@@ -13,6 +13,20 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   and `hard_p90` set the factors (0 turns either off); `--max-budget-usd`, `[limits]
   budget_usd` and `--limits off` still win. The launch card shows both caps. This partly
   reverts H1's no-cap default (CC-05).
+- **Models and effort chosen per role.** Under `runs.profile = auto`, Instinct (Jev with a key and
+  consent, the heuristic otherwise) sizes a feature or bug from its type, the change plan, the
+  cited ranges and the ledger history. A trivial or normal change runs one Sonnet 5.5 session
+  (medium effort for features, high for bugs) with an Opus 5.5 advisor; a complex one runs the
+  team with Haiku 5.5 analyst and tester (medium), a Sonnet 5.5 senior (high) with the Opus
+  advisor, and Haiku 5.5 docs (low). The launch says what Instinct decided, with which backend
+  and why, and never claims Jev when the heuristic answered. Haiku 5.5 and Sonnet 5.5 replace
+  Haiku 4.5 and Sonnet 5 in the tiers, with a fallback for Claude Code versions that predate
+  them. `--advisor auto|opus|fable|off` and `--fast` are new; Opus or Fable as the main model,
+  `--pure`, xhigh effort, ultracode on a team and fast mode show their multiplier and need a
+  confirmation or `--yes`.
+- **Tiered prices.** Sonnet 5.5 and Haiku 5.5 are priced, Haiku 5.5 with its long-prompt tier
+  (each request picks its tier by its own prompt size, cache included), and Opus 5.5 has its
+  fast-mode price.
 - **Dollars on the live line.** The live line shows the spend in dollars beside the forecast
   P50–P90 and warns once when the spend passes each.
 - **Editable install warning.** When cuanta runs from an editable install inside the project it

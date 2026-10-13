@@ -1,5 +1,5 @@
 version = 1
-verified_on = "2026-09-27"
+verified_on = "2026-10-13"
 sources = [
     "https://code.claude.com/docs/en/model-config (aliases opus, sonnet, fable, haiku)",
     "codex debug models --bundled, Codex CLI 0.156.1",
@@ -37,12 +37,26 @@ context = 1000000
 efforts = ["low", "medium", "high", "xhigh", "max"]
 
 [claude.models.sonnet]
+resolves = "claude-sonnet-5-5"
+display = "Sonnet 5.5"
+context = 1000000
+efforts = ["low", "medium", "high", "xhigh", "max"]
+min_version = "2.1.296"
+
+[claude.models.sonnet.fallback]
 resolves = "claude-sonnet-5"
 display = "Sonnet 5"
 context = 1000000
 efforts = ["low", "medium", "high", "xhigh", "max"]
 
 [claude.models.haiku]
+resolves = "claude-haiku-5-5"
+display = "Haiku 5.5"
+context = 1000000
+efforts = ["low", "medium", "high", "xhigh", "max"]
+min_version = "2.1.293"
+
+[claude.models.haiku.fallback]
 resolves = "claude-haiku-4-5"
 display = "Haiku 4.5"
 context = 200000

@@ -149,6 +149,7 @@ class EngineRequest:
     pure: bool = False
     variant: str = ""
     continue_results: bool = False
+    advisor: str = ""
 
 
 @dataclass(frozen=True, slots=True)

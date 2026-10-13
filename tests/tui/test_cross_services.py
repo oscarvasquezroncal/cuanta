@@ -197,8 +197,8 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
 @pytest.mark.parametrize(
     ("kind", "ready", "pinned", "seen"),
     [
-        ("bug", True, False, ("fast", "claude-opus-5-5", "high")),
-        ("feature", True, False, ("fast", "claude-opus-5-5", "low")),
+        ("bug", True, False, ("fast", "claude-sonnet-5-5", "high")),
+        ("feature", True, False, ("fast", "claude-sonnet-5-5", "medium")),
         ("refactor", True, False, ("balanced", "", "")),
         ("bug", False, False, ("balanced", "", "")),
         ("bug", True, True, ("balanced", "", "")),
@@ -231,6 +231,7 @@ def test_the_team_step_forecasts_the_auto_profile_with_the_default_of_its_kind(
         shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
         fast_ready=lambda name: ready,
         routing_pinned=lambda mode: pinned,
+        claude_model=lambda alias: {"sonnet": "claude-sonnet-5-5"}.get(alias, alias),
         docs_choice=lambda request, options: None,
         shape_plan=lambda plan, shape, docs: plan,
         close=lambda: None,

@@ -6,6 +6,7 @@ from functools import cache
 from importlib import resources
 
 from cuanta.domain.models import Tier, TierTable, parse_tier, tier_defaults
+from cuanta.domain.versions import leading_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +16,16 @@ class ClaudeFacts:
     display: str
     context: int
     efforts: tuple[str, ...]
+    min_version: str = ""
+    fallback: ClaudeFacts | None = None
+
+
+def supported_fact(fact: ClaudeFacts, version: str) -> ClaudeFacts:
+    installed = leading_version(version)
+    needed = leading_version(fact.min_version)
+    if fact.fallback is None or installed is None or needed is None or installed >= needed:
+        return fact
+    return fact.fallback
 
 
 @cache
@@ -47,19 +58,21 @@ def claude_facts() -> tuple[ClaudeFacts, ...]:
     models = claude.get("models") if isinstance(claude, dict) else None
     if not isinstance(models, dict):
         return ()
-    facts: list[ClaudeFacts] = []
-    for alias, values in models.items():
-        if not isinstance(values, dict):
-            continue
-        context = values.get("context")
-        efforts = values.get("efforts")
-        facts.append(
-            ClaudeFacts(
-                alias=str(alias),
-                resolves=str(values.get("resolves", alias)),
-                display=str(values.get("display", alias)),
-                context=context if isinstance(context, int) else 0,
-                efforts=tuple(str(item) for item in efforts) if isinstance(efforts, list) else (),
-            )
-        )
-    return tuple(facts)
+    return tuple(
+        _fact(str(alias), values) for alias, values in models.items() if isinstance(values, dict)
+    )
+
+
+def _fact(alias: str, values: dict[str, object]) -> ClaudeFacts:
+    context = values.get("context")
+    efforts = values.get("efforts")
+    fallback = values.get("fallback")
+    return ClaudeFacts(
+        alias=alias,
+        resolves=str(values.get("resolves", alias)),
+        display=str(values.get("display", alias)),
+        context=context if isinstance(context, int) else 0,
+        efforts=tuple(str(item) for item in efforts) if isinstance(efforts, list) else (),
+        min_version=str(values.get("min_version", "")),
+        fallback=_fact(alias, fallback) if isinstance(fallback, dict) else None,
+    )

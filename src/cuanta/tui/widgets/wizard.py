@@ -102,6 +102,7 @@ MODEL_LABELS = {
     "claude-opus-5-5": "wizard.implementation_opus",
     "claude-sonnet-5": "wizard.implementation_sonnet",
 }
+CHOICE_LABELS = {**MODEL_LABELS, "sonnet": "wizard.implementation_sonnet_latest"}
 NAV_KEYS = ("wizard.next", "wizard.understand", "wizard.launch", "wizard.back")
 NAV_PADDING = 6
 PLAN_ROLES = ("edit", "read", "guard")
@@ -1877,7 +1878,7 @@ class MandateWizard(Vertical):
     def _choice_label(self, choice: FastChoice | None) -> str:
         if choice is None:
             return self._t("wizard.engine_default")
-        model = self._t(MODEL_LABELS.get(choice.model, "wizard.engine_default"))
+        model = self._t(CHOICE_LABELS.get(choice.model, "wizard.engine_default"))
         variant = self.implementation_variant or choice.variant
         return f"{model} · {self._t(f'wizard.variant_{variant}')}"
 

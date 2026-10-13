@@ -17,6 +17,34 @@ def _number(value: object) -> float | None:
     return number if isfinite(number) and number >= 0 else None
 
 
+def _plain(values: dict[str, object]) -> Price | None:
+    input_price = _number(values.get("input"))
+    output_price = _number(values.get("output"))
+    if input_price is None or output_price is None:
+        return None
+    return Price(
+        input=input_price,
+        output=output_price,
+        cache_write=_number(values.get("cache_write")),
+        cache_read=_number(values.get("cache_read")),
+    )
+
+
+def _price(values: dict[str, object], input_price: float, output_price: float) -> Price:
+    long = values.get("long")
+    fast = values.get("fast")
+    above = values.get("long_above")
+    return Price(
+        input=input_price,
+        output=output_price,
+        cache_write=_number(values.get("cache_write")),
+        cache_read=_number(values.get("cache_read")),
+        long_above=above if isinstance(above, int) and not isinstance(above, bool) else 0,
+        long=_plain(long) if isinstance(long, dict) else None,
+        fast=_plain(fast) if isinstance(fast, dict) else None,
+    )
+
+
 def load_prices() -> PriceTable:
     text = resources.files("cuanta").joinpath("assets", "prices.toml").read_text(encoding="utf-8")
     data = tomllib.loads(text)
@@ -29,12 +57,7 @@ def load_prices() -> PriceTable:
                 output_price = _number(values.get("output"))
                 if input_price is None or output_price is None:
                     continue
-                models[str(name).lower()] = Price(
-                    input=input_price,
-                    output=output_price,
-                    cache_write=_number(values.get("cache_write")),
-                    cache_read=_number(values.get("cache_read")),
-                )
+                models[str(name).lower()] = _price(values, input_price, output_price)
     version = data.get("version")
     return PriceTable(
         models=models,

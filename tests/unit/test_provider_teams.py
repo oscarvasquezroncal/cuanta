@@ -116,7 +116,7 @@ def test_role_tiers_follow_the_team_spec() -> None:
 
 
 def test_the_shipped_tier_table_has_current_defaults_for_both_providers() -> None:
-    assert TABLE.verified_on == "2026-09-27"
+    assert TABLE.verified_on == "2026-10-13"
     assert TABLE.defaults == {
         "claude": {Tier.ECONOMY: "haiku", Tier.STANDARD: "sonnet", Tier.PREMIUM: "opus"},
         "codex": {

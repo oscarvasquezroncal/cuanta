@@ -69,6 +69,8 @@ GROUPED = (
     ("--max-budget-usd", "--max-turns", "--max-wall"),
     (
         "--pure",
+        "--advisor",
+        "--fast",
         "--from-failure",
         "--hu",
         "--shape",

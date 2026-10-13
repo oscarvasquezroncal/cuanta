@@ -389,13 +389,13 @@ def test_fast_output_variants_are_offered_only_on_an_opus_main_session() -> None
         assert shown(wizard, MODEL) == "Sonnet 5"
         assert not FAST_OUTPUT & set(values(wizard, VARIANT))
         model.value = values(wizard, MODEL)[0]
-        await wait_for(pilot, lambda: set(values(wizard, VARIANT)) >= FAST_OUTPUT)
-        assert shown(wizard, MODEL) == "By kind of change"
+        await wait_for(pilot, lambda: shown(wizard, MODEL) == "By kind of change")
+        assert not FAST_OUTPUT & set(values(wizard, VARIANT))
 
     drive(make_app(services), scenario, size=(120, 50))
 
 
-def test_fast_by_kind_offers_fast_output_only_for_a_kind_whose_choice_is_opus() -> None:
+def test_fast_by_kind_never_offers_fast_output_on_the_sonnet_default() -> None:
     services = FakeServices()
 
     async def scenario(app: CuantaApp, pilot: Pilot[None]) -> None:
@@ -416,8 +416,8 @@ def test_fast_by_kind_offers_fast_output_only_for_a_kind_whose_choice_is_opus() 
         await wait_for(pilot, lambda: not FAST_OUTPUT & set(values(wizard, VARIANT)))
         assert not wizard.options().variant.startswith("fast")
         await choose(wizard, pilot, "bug")
-        await wait_for(pilot, lambda: set(values(wizard, VARIANT)) >= FAST_OUTPUT)
-        assert shown(wizard, MODEL) == "By kind of change"
+        await wait_for(pilot, lambda: shown(wizard, MODEL) == "By kind of change")
+        assert not FAST_OUTPUT & set(values(wizard, VARIANT))
 
     drive(make_app(services), scenario, size=(120, 50))
 

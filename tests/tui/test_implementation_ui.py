@@ -61,6 +61,7 @@ def test_fast_chip_preserves_the_selected_model_and_variant() -> None:
         wizard.query_one("#implementation-fast", Button).press()
         await pilot.pause()
         wizard.query_one("#wiz-implementation-model", Select).value = "claude-opus-5-5"
+        await pilot.pause()
         wizard.query_one("#wiz-implementation-variant", Select).value = "fast-low"
         await pilot.pause()
         options = wizard.options()
@@ -154,12 +155,12 @@ def test_auto_profile_shows_fast_for_a_claude_change_and_the_default_of_its_kind
         options = wizard.options()
         assert (options.profile, options.model, options.variant) == ("auto", "", "")
         depth = str(wizard.query_one("#wiz-depth-note", Static).render())
-        assert "Opus 5.5 · Low effort for features" in depth
+        assert "Sonnet 5.5 · Medium effort for features" in depth
         wizard.query_one("#wiz-implementation-variant", Select).value = "high"
         await pilot.pause()
         assert wizard.options().variant == "high"
         depth = str(wizard.query_one("#wiz-depth-note", Static).render())
-        assert "Opus 5.5 · High effort for features" in depth
+        assert "Sonnet 5.5 · High effort for features" in depth
         wizard.kind = "refactor"
         assert not fast()
         wizard.kind = "bug"

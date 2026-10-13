@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from cuanta.adapters.models.tiers import ClaudeFacts, claude_facts
+from cuanta.adapters.models.tiers import ClaudeFacts, claude_facts, supported_fact
 from cuanta.domain.models import Access, Availability, ModelEntry
 from cuanta.domain.pricing import PriceTable
 
@@ -69,7 +69,9 @@ class ClaudeCatalog:
         prices: PriceTable,
         installed: bool,
         managed: tuple[Path, ...] = MANAGED_SETTINGS,
+        version: Callable[[], str] = lambda: "",
     ) -> None:
+        self._version = version
         self._layers = (
             *managed,
             project / ".claude" / "settings.local.json",
@@ -105,7 +107,14 @@ class ClaudeCatalog:
         default = (configured or DEFAULT_ALIAS).lower()
         access = Access.API if self._environ.get(API_KEY_ENV) else Access.UNKNOWN
         entries: list[ModelEntry] = []
-        for fact in claude_facts():
+        installed = self._version()
+        unknown = {
+            found.resolves.lower()
+            for found in claude_facts()
+            if supported_fact(found, installed) is not found
+        }
+        for found in claude_facts():
+            fact = supported_fact(found, installed)
             resolved = self._resolved(fact)
             if not allowed(fact.alias, resolved, allowlist):
                 continue
@@ -130,7 +139,7 @@ class ClaudeCatalog:
             )
         aliased = {entry.resolved.lower() for entry in entries}
         for name in self._prices.names():
-            if not name.startswith("claude-") or name in aliased:
+            if not name.startswith("claude-") or name in aliased or name in unknown:
                 continue
             if not allowed(name, name, allowlist):
                 continue

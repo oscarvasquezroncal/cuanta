@@ -200,7 +200,15 @@ def test_a_sandboxed_native_run_keeps_the_live_observer(tmp_path: Path) -> None:
         seen.append(kwargs.get("observer"))
         return SandboxResult(None, "fixture", True, report=mandate_report())
 
-    container = cast(Container, SimpleNamespace(shared_ledger=lambda: None, run_sandboxed=run))
+    container = cast(
+        Container,
+        SimpleNamespace(
+            shared_ledger=lambda: None,
+            run_sandboxed=run,
+            advisor_choice=lambda mode, model: "",
+            record_launch=lambda run_ids, advisor: (),
+        ),
+    )
     settings = OutputSettings(OutputMode.PLAIN, ThemeName.DARK, False, False, False)
     session = Session(GlobalOptions(), settings, PlainPresenter(io.StringIO()), tmp_path)
     run_sandbox(session, container, MandateArgs(), (MandateRequest("bug", "Fix", "Evidence"), 0))

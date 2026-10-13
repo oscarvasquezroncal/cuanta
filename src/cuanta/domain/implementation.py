@@ -65,9 +65,9 @@ class FastChoice:
     variant: str
 
 
-SMALL_FEATURE_CHOICE = FastChoice("claude-opus-5-5", "low")
-STEPPED_FEATURE_CHOICE = FastChoice("claude-opus-5-5", "low")
-FIX_CHOICE = FastChoice("claude-opus-5-5", "high")
+SMALL_FEATURE_CHOICE = FastChoice("sonnet", "medium")
+STEPPED_FEATURE_CHOICE = FastChoice("sonnet", "medium")
+FIX_CHOICE = FastChoice("sonnet", "high")
 
 
 def large_feature(task_type: str, edit_tokens: int) -> bool:

@@ -183,6 +183,35 @@ ENGLISH: dict[str, str] = {
     "limits.none": "no limits",
     "limits.active": "limits: {items}",
     "limits.join": "{first} · {rest}",
+    "instinct.launch": (
+        "Instinct ({backend}): {scope} change, p={probability} → {shape} · plan {files} files, "
+        "{anchors} cited ranges, {history} earlier runs of this type"
+    ),
+    "instinct.launch_fallback": (
+        "Instinct ({backend}; {configured} unavailable): {scope} change, p={probability} → "
+        "{shape} · plan {files} files, {anchors} cited ranges, {history} earlier runs of this type"
+    ),
+    "instinct.launch_single": "one session (Sonnet)",
+    "instinct.launch_team": "team (Haiku analyst and tester, Sonnet senior)",
+    "advisor.spend": (
+        "advisor {advisor}: {requests} consultations, {cost} (counted in the run's spend and cap)"
+    ),
+    "optin.model": "{model} as the main model: about {factor}× the default Sonnet 5.5 price",
+    "optin.pure": (
+        "--pure pins every helper and subagent to {model}: about {factor}× the default price "
+        "for them"
+    ),
+    "optin.fast": "fast mode: about {factor}× the {model} price",
+    "optin.effort": (
+        "effort {effort}: more thinking tokens than the default; no measured multiplier yet"
+    ),
+    "optin.ultracode_team": (
+        "ultracode with a team: xhigh effort and workflows in every role; no measured "
+        "multiplier yet"
+    ),
+    "optin.confirm": "These choices raise the cost of the run. Continue?",
+    "optin.refused": "these choices raise the cost of the run and need a confirmation",
+    "optin.refused_hint": "add --yes to accept them, or drop them to run on the defaults",
     "launch.self_edit": (
         "cuanta runs from an editable install inside this project, so the run can change the "
         "cuanta that runs it; use --sandbox, or run an installed cuanta (npm or uv tool)"

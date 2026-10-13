@@ -1062,7 +1062,12 @@ class ContainerServices:
             )
             if fast and not options.model:
                 edits = sum(container.plan_sizes(protection).edit)
-                options = fast_defaults(options, request.type, large_feature(request.type, edits))
+                options = fast_defaults(
+                    options,
+                    request.type,
+                    large_feature(request.type, edits),
+                    container.claude_model,
+                )
             writer = plan.route(Role.SENIOR) or single_model(plan.routes)
             model = options.model
             if fast and not model and writer is not None and writer.model is not None:

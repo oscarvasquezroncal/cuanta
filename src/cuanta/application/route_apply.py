@@ -65,6 +65,7 @@ class RouteOptions:
     risk: float | None = None
     scout: bool = False
     docs: bool = True
+    role_efforts: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,8 +253,11 @@ class MandateRouting:
             single = chosen.model.id if chosen is not None and chosen.model is not None else ""
             return Applied(plan, engine, single=single, env_override=override, unset=unset)
         effort = profile(parse_depth(options.depth), request.type).effort if options.depth else ""
+        efforts = dict(options.role_efforts)
         routes: dict[Role, AgentRoute] = {
-            route.role: AgentRoute(route.model.resolved or route.model.id, effort)
+            route.role: AgentRoute(
+                route.model.resolved or route.model.id, efforts.get(route.role.value) or effort
+            )
             for route in plan.routes
             if route.model is not None and route.role is not Role.ORCHESTRATOR
         }

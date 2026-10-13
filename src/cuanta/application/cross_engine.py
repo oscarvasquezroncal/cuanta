@@ -552,6 +552,18 @@ class _Turn:
     future: tuple[Role, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class RoleTuning:
+    efforts: Mapping[str, str] = field(default_factory=dict)
+    advisor_for: Callable[[str], str] | None = None
+    advisor_roles: frozenset[str] = frozenset()
+
+    def advisor(self, role: Role, engine: str, model: str) -> str:
+        if self.advisor_for is None or engine != "claude" or role.value not in self.advisor_roles:
+            return ""
+        return self.advisor_for(model)
+
+
 class CrossEnginePipeline:
     def __init__(
         self,
@@ -594,7 +606,9 @@ class CrossEnginePipeline:
         model: str = "",
         wall_s: float = 0.0,
         monotonic: Callable[[], float] | None = None,
+        tuning: RoleTuning | None = None,
     ) -> None:
+        self._tuning = tuning or RoleTuning()
         self._wall_s = max(0.0, wall_s)
         self._monotonic = monotonic
         self._deadline: float | None = None
@@ -1192,7 +1206,9 @@ class CrossEnginePipeline:
             profile=self._implementation_profile,
             variant=self._variant,
             pure=self._pure,
-            effort=resolve_variant(self._variant, model).effort if self._variant else "",
+            effort=self._tuning.efforts.get(role.value)
+            or (resolve_variant(self._variant, model).effort if self._variant else ""),
+            advisor=self._tuning.advisor(role, engine, model),
         )
 
     def _scout_prompt(

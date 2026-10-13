@@ -116,11 +116,13 @@ floor. Preserve performance assertions, measured startup work and budgets.
 - `CUANTA_HELP_BUDGET_S` / `CUANTA_PAINT_BUDGET_S` loosen perf budgets in CI; locally the
   stricter defaults apply.
 - Pipeline roles (cross-engine, and native Claude pipelines with a generated profile) get the owned index server by default (`runs.pipeline_index_tools`); role pins are honored or rejected before launch, never ignored; when a spend limit is set, Claude role caps sit a learned margin below their share and a budget stop continues with a salvaged handoff.
-- `runs.profile` defaults to `auto`: Claude features and bug fixes run fast (one native writer, pinned model, same-session repair, no live governor) with the measured model of their kind when `--model` is absent (`fast_choice`); refactors, investigations, other engines, `--classic`, explicit shapes or routing, Claude without `--input-format` and projects without a typecheck or lint check stay balanced.
+- `runs.profile` defaults to `auto`: for Claude features and bug fixes Instinct sizes the change (`Container.launch_scope`); trivial or normal runs one Sonnet 5.5 session (medium/high effort, Opus advisor, `fast_choice`), complex runs the team with Haiku analyst/tester, Sonnet senior and Haiku docs (`domain/launch_choice.py`); refactors, investigations, other engines, `--classic`, explicit shapes or routing, a `--model`, Claude without `--input-format` and projects without a typecheck or lint check stay balanced.
 - `runs.session` defaults to lean for Claude launches; full restores user plugins, hooks and MCP except compiled protected/read-only mandates, whose generated profile isolates settings and removes unrestricted execution. Read-discipline hooks: team roles get them by default (`runs.pipeline_read_discipline`, on), single launches do not (`runs.read_discipline`, off); `runs.read_max_lines` (400) sets the Read limit. CC-10/CC-11 are verified on Claude Code 2.1.283 once hook commands use POSIX paths.
-- Limits are opt-in: no spend cap, turn limit or wall time unless `--max-budget-usd`, `--max-turns`,
-  `--max-wall`, `[limits]` or `[runs] limits = "depth"` sets one; `--depth` picks tiers, effort and
-  read budget only. `runs.repair_timeout_s` bounds repair rounds only, from the first repair turn.
+- Spend caps come from the forecast: without `--max-budget-usd`, `[limits] budget_usd` or
+  `--limits off`, a launch with a forecast P90 gets a closing turn at P90 and a native cap at 2×P90
+  (`[limits] soft_p90` / `hard_p90`, 0 turns either off); turn and wall limits stay opt-in
+  (`--max-turns`, `--max-wall`, `[limits]`, `[runs] limits = "depth"`); `--depth` picks tiers, effort
+  and read budget only. `runs.repair_timeout_s` bounds repair rounds only, from the first repair turn.
 - `runs.docs = auto` reads the evidence too (agent name, docs path, docs words); `--docs` overrides
   it per run; in WHY only headings count for docs words. Read-only words after the first numbered
   phase of any field no longer freeze a writing request; config role pins keep `auto` balanced.

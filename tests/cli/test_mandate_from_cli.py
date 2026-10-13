@@ -380,7 +380,17 @@ def test_the_short_commands_take_every_mandate_option(
     assert data["docs"] == {"on": False, "reason": "flag_off"}
     path = written(tmp_path, phased_mandate())
     run_data = dry(tmp_path, "run", str(path), "--max-turns", "9", "--docs", "on")
-    assert run_data["limits"] == {"budget_usd": None, "max_turns": 9, "wall_min": None}
+    envelope = run_data["envelope"]
+    assert isinstance(envelope, dict)
+    p90 = round(float(envelope["p90_usd"]), 2)
+    assert run_data["limits"] == {
+        "budget_usd": round(2 * float(envelope["p90_usd"]), 2),
+        "max_turns": 9,
+        "wall_min": None,
+        "soft_usd": p90,
+    }
+    capped = dry(tmp_path, "run", str(path), "--max-budget-usd", "0")
+    assert capped["limits"] == {"budget_usd": None, "max_turns": None, "wall_min": None}
 
 
 def test_tests_out_of_scope_and_why_are_optional_and_never_asked(
@@ -527,11 +537,12 @@ def test_a_fast_run_lists_one_session_and_no_pure_role_lines(
     data = dry(root, "run", str(path), "-t", "feature")
     team = data["team"]
     assert isinstance(team, list)
-    assert "team · single model for claude: claude-opus-5-5" in team
+    assert "team · single model for claude: claude-sonnet-5" in team
+    assert data["instinct"] is not None and data["advisor"] == "opus"
     assert not any("--pure" in line for line in team)
     assert not any(str(line).startswith("team · analyst") for line in team)
     pure = dry(root, "run", str(path), "-t", "feature", "--pure")
-    assert "team · single model for claude: claude-opus-5-5" in listed(pure["team"])
+    assert "team · single model for claude: claude-sonnet-5" in listed(pure["team"])
 
 
 def listed(value: object) -> list[str]:

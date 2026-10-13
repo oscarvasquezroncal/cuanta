@@ -273,7 +273,9 @@ def test_a_pure_premium_launch_card_says_the_scout_is_skipped(
     configure(tmp_path, "[runs]\nscout_threshold = 0.01\n")
     fake_runner.streams["claude -p"] = FakeStream([RESULT])
     result = invoke(
-        cross_args(tmp_path, "--route", "fixed", "--max-budget-usd", "1", *PURE, "--verbose")
+        cross_args(
+            tmp_path, "--route", "fixed", "--max-budget-usd", "1", *PURE, "--verbose", "--yes"
+        )
     )
     assert result.exit_code == 0, result.stdout
     output = " ".join(result.stdout.split())
@@ -547,9 +549,9 @@ def test_a_pin_in_the_routing_config_keeps_the_auto_profile_on_the_team(
     forge(tmp_path)
     monkeypatch.setattr(Container, "fast_ready", lambda self, name: True)
     assert preview(tmp_path)["agents_file"] is None
-    configure(tmp_path, '[routing.models]\ntester = "claude:sonnet"\n')
+    configure(tmp_path, '[routing.models]\ntester = "claude:haiku"\n')
     team = preview(tmp_path)
-    assert agents_of(team)["tester"]["model"] == "claude-sonnet-5"
+    assert agents_of(team)["tester"]["model"] == "claude-haiku-4-5"
     shape = team["shape"]
     assert isinstance(shape, dict) and shape["shape"] != "single"
     refused = invoke(
@@ -560,6 +562,6 @@ def test_a_pin_in_the_routing_config_keeps_the_auto_profile_on_the_team(
     assert isinstance(error, dict)
     assert (
         error["message"]
-        == "fast implementation runs one model (claude-opus-5-5), and a role pin names another"
+        == "fast implementation runs one model (claude-sonnet-5), and a role pin names another"
     )
     assert not fake_runner.stdins

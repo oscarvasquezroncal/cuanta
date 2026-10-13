@@ -42,6 +42,7 @@ REAL_RUN_FLAGS = (
     "100000",
     "--max-budget-usd",
     "500",
+    "--yes",
 )
 CODEX_FLAGS = ("--engine", "codex", "--depth", "deep", "--max-budget-usd", "500")
 

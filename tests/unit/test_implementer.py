@@ -1661,18 +1661,15 @@ def test_auto_profile_is_fast_only_for_claude_features_and_fixes_without_a_team(
     assert resolve_profile(value, default, engine, kind, team) is expected
 
 
-def test_fast_choice_follows_the_measured_winner_of_each_kind() -> None:
+def test_a_single_session_runs_on_sonnet_with_medium_features_and_high_fixes() -> None:
     assert fast_choice("bug", False) == fast_choice("bug", True) == FIX_CHOICE
-    assert (FIX_CHOICE.model, FIX_CHOICE.variant) == ("claude-opus-5-5", "high")
+    assert (FIX_CHOICE.model, FIX_CHOICE.variant) == ("sonnet", "high")
     assert fast_choice("feature", False) == SMALL_FEATURE_CHOICE
-    assert (SMALL_FEATURE_CHOICE.model, SMALL_FEATURE_CHOICE.variant) == (
-        "claude-opus-5-5",
-        "low",
-    )
+    assert (SMALL_FEATURE_CHOICE.model, SMALL_FEATURE_CHOICE.variant) == ("sonnet", "medium")
     assert fast_choice("feature", True) == STEPPED_FEATURE_CHOICE
     assert (STEPPED_FEATURE_CHOICE.model, STEPPED_FEATURE_CHOICE.variant) == (
-        "claude-opus-5-5",
-        "low",
+        "sonnet",
+        "medium",
     )
     assert fast_choice("refactor", False) is None and fast_choice("investigation", True) is None
     assert large_feature("feature", LARGE_EDIT_TOKENS)
@@ -1707,10 +1704,15 @@ def test_a_requested_team_keeps_the_auto_profile_balanced(
 @pytest.mark.parametrize(
     ("kind", "options", "model", "effort"),
     [
-        ("bug", MandateOptions(profile="fast"), "claude-opus-5-5", "high"),
-        ("feature", MandateOptions(profile="fast"), "claude-opus-5-5", "low"),
-        ("feature", MandateOptions(profile="fast", variant="high"), "claude-opus-5-5", "high"),
-        ("feature", MandateOptions(profile="fast", variant="fast-low"), "claude-opus-5-5", "low"),
+        ("bug", MandateOptions(profile="fast"), "sonnet", "high"),
+        ("feature", MandateOptions(profile="fast"), "sonnet", "medium"),
+        ("feature", MandateOptions(profile="fast", variant="high"), "sonnet", "high"),
+        (
+            "feature",
+            MandateOptions(profile="fast", model="claude-opus-5-5", variant="fast-low"),
+            "claude-opus-5-5",
+            "low",
+        ),
         ("bug", MandateOptions(profile="fast", model="claude-sonnet-5"), "claude-sonnet-5", ""),
     ],
 )
@@ -1763,11 +1765,11 @@ def test_a_large_fast_feature_runs_in_steps_on_the_stepped_default(tmp_path: Pat
     auto = large_flow(tmp_path, LARGE_EDIT_TOKENS, AUTO_PROFILE)
     large = auto.prepare(feature, 0, MandateOptions())
     assert large.spec.profile == "fast" and large.spec.implementation_steps
-    assert large.spec.model == "claude-opus-5-5" and large.spec.effort == "low"
+    assert large.spec.model == "sonnet" and large.spec.effort == "medium"
     small = large_flow(tmp_path, LARGE_EDIT_TOKENS - 1, AUTO_PROFILE).prepare(
         feature, 0, MandateOptions()
     )
-    assert small.spec.model == "claude-opus-5-5" and small.spec.effort == "low"
+    assert small.spec.model == "sonnet" and small.spec.effort == "medium"
     assert not small.spec.implementation_steps
     pinned = large_flow(tmp_path, LARGE_EDIT_TOKENS).prepare(
         feature, 0, MandateOptions(profile="fast", model="claude-sonnet-5", variant="high")
@@ -1865,20 +1867,20 @@ def test_a_configured_role_pin_keeps_the_auto_profile_on_the_team_that_honors_it
 def test_an_explicit_fast_profile_refuses_a_configured_pin_with_a_fast_reason(
     tmp_path: Path,
 ) -> None:
-    pinned = pinned_flow(tmp_path, {Role.TESTER: "claude:sonnet"})
+    pinned = pinned_flow(tmp_path, {Role.TESTER: "claude:haiku"})
     with pytest.raises(DomainFailure) as refused:
         pinned.prepare(FEATURE_REQUEST, 0, MandateOptions(profile="fast"), preview=True)
     assert (
         str(refused.value)
-        == "fast implementation runs one model (claude-opus-5-5), and a role pin names another"
+        == "fast implementation runs one model (claude-sonnet-5), and a role pin names another"
     )
-    assert str(refused.value) == english(msg("route.fast_pin_conflict", model="claude-opus-5-5"))
+    assert str(refused.value) == english(msg("route.fast_pin_conflict", model="claude-sonnet-5"))
     assert "pure" not in str(refused.value) and "--profile balanced" in str(refused.value.hint)
     with pytest.raises(DomainFailure, match="conflicts with the pure implementation model"):
         pinned.prepare(FEATURE_REQUEST, 0, MandateOptions(profile="fast", pure=True), preview=True)
-    same = pinned_flow(tmp_path / "same", {Role.SENIOR: "claude-opus-5-5"})
+    same = pinned_flow(tmp_path / "same", {Role.SENIOR: "claude-sonnet-5"})
     prepared = same.prepare(FEATURE_REQUEST, 0, MandateOptions(profile="fast"), preview=True)
-    assert prepared.spec.profile == "fast" and prepared.spec.model == "claude-opus-5-5"
+    assert prepared.spec.profile == "fast" and prepared.spec.model == "sonnet"
 
 
 def test_a_type_nobody_stated_never_picks_the_fast_profile() -> None:

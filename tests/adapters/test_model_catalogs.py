@@ -203,4 +203,17 @@ def test_claude_catalog_without_settings_lists_every_alias(tmp_path: Path) -> No
     assert {"fable", "opus", "sonnet", "haiku"} <= set(entries)
     assert entries["opus"].default
     assert entries["opus"].resolved == "claude-opus-5-5"
-    assert entries["haiku"].efforts == ()
+    assert entries["haiku"].resolved == "claude-haiku-5-5"
+    assert "medium" in entries["haiku"].efforts
+    older = ClaudeCatalog(
+        tmp_path,
+        tmp_path,
+        {},
+        load_prices(),
+        installed=True,
+        managed=(),
+        version=lambda: "2.1.280",
+    )
+    fallback = {entry.id: entry for entry in older.list()}
+    assert fallback["haiku"].resolved == "claude-haiku-4-5" and fallback["haiku"].efforts == ()
+    assert fallback["sonnet"].resolved == "claude-sonnet-5"

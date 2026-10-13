@@ -106,6 +106,9 @@ COMPLEX_WORDS = (
     "new module",
     "unclear",
 )
+PLAN_SMALL = 3
+PLAN_WIDE = 6
+MANY_ANCHORS = 4
 TRIVIAL_WORDS = ("typo", "rename", "comment", "wording", "one-line", "one line", "bump")
 
 
@@ -119,6 +122,9 @@ def heuristic_scope(context: Context) -> Choice:
     breadth += 1 if len(what) > 240 else 0
     breadth += min(signatures - 1, 3) if signatures > 1 else 0
     breadth += 1 if "," in where or " and " in where else 0
+    files = _int(context, "plan_files")
+    breadth += 2 if files > PLAN_WIDE else 1 if files > PLAN_SMALL else 0
+    breadth += 1 if _int(context, "anchors") > MANY_ANCHORS else 0
     points = breadth - sum(2 for word in TRIVIAL_WORDS if word in what)
     points += 1 if kind == "refactor" else 0
     if kind == "investigation" and breadth < 3:

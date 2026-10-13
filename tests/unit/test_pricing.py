@@ -23,8 +23,8 @@ def _event(model: str, cost: float | None = None) -> LedgerEvent:
 def test_price_table_is_versioned_and_dated() -> None:
     table = load_prices()
     assert table.version == 1
-    assert table.verified_on == "2026-09-23"
-    assert table.label == "price table v1, verified 2026-09-23"
+    assert table.verified_on == "2026-10-13"
+    assert table.label == "price table v1, verified 2026-10-13"
 
 
 def test_lookup_matches_exact_dated_and_bracketed_ids() -> None:
