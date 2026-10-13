@@ -40,6 +40,7 @@ from cuanta.cli.commands import (
 from cuanta.cli.group import hoist_globals
 from cuanta.cli.help_panels import PanelCommand
 from cuanta.cli.theme import ThemeName
+from cuanta.domain.python_home import drop_inherited_python_home
 
 QUOTING = (
     "Words that start with - are read as options: quote the request, and put -- before text "
@@ -208,6 +209,7 @@ def _prefer_utf8_when_piped() -> None:
 
 
 def main() -> None:
+    drop_inherited_python_home(os.environ, sys.base_prefix, os.name == "nt")
     arguments = sys.argv[1:]
     if not arguments and ui.interactive_terminal() and "NO_COLOR" not in os.environ:
         from cuanta.cli.output import GlobalOptions

@@ -36,6 +36,7 @@ from cuanta.domain.implementation import (
     SMALL_FEATURE_CHOICE,
     STEPPED_FEATURE_CHOICE,
     ImplementationProfile,
+    UnusableVerification,
     VerificationDelta,
     baseline_key,
     fast_choice,
@@ -46,6 +47,7 @@ from cuanta.domain.implementation import (
     repair_feedback,
     resolve_profile,
     unavailable_checks,
+    unusable_reasons,
     verification_delta,
 )
 from cuanta.domain.mandate import MandateRequest
@@ -53,10 +55,12 @@ from cuanta.domain.messages import english, msg
 from cuanta.domain.role_handoff import VerifyResult
 from cuanta.domain.routing import Role, RoutingPolicy
 from cuanta.ports.system import Completed
+from cuanta.tui.i18n import Catalog
 from tests.fakes import FakeRunner, FakeStream
 from tests.unit.test_engine_profiles import REQUEST, flow
 from tests.unit.test_forecast import COLD_CLOCK, PRICES
 from tests.unit.test_route_apply import AGENT, routing
+from tests.unit.test_verification import DLL_CAUSE, DLL_LOAD, SRE_MISMATCH
 
 COMMANDS = ("npx tsc --noEmit", "npm run lint")
 BASE_ERROR = "src/old.ts:2 error TS2322: old mismatch"
@@ -1001,7 +1005,7 @@ def test_summaries_count_only_when_nothing_else_parsed_and_exit_codes_stay_block
     assert not compared(tmp_path, "npm test", jest, worse).passed
     silent = compared(tmp_path, "npm test", ["done"], ["done"])
     assert unavailable_checks(silent.results, ("npm test",)) == (
-        "npm test (fails without diagnostics)",
+        "npm test (fails without diagnostics: done)",
     )
     broken = verification_delta((VerifyResult("npm test", 0),), silent.results, ("npm test",))
     assert broken.introduced == ("npm test: failed with exit code 1",)
@@ -1303,7 +1307,7 @@ def test_a_baseline_failing_without_diagnostics_refuses_before_the_writer_starts
     container = Container(tmp_path, Config(), runner=runner, home=tmp_path / "home")
     try:
         spec = LaunchSpec("mandate", "fix", str(tmp_path), (), verify_commands=("npm test",))
-        with pytest.raises(DomainFailure, match=r"npm test \(fails without diagnostics\)"):
+        with pytest.raises(DomainFailure, match=r"npm test \(fails without diagnostics: "):
             container.implementation_session(spec, MemoryLedger())
         assert not any("-p" in command for command in runner.calls)
     finally:
@@ -1322,7 +1326,7 @@ def test_a_refused_silent_baseline_is_not_cached_so_the_next_call_checks_again(
     container = Container(tmp_path, Config(), runner=runner, home=tmp_path / "home")
     try:
         spec = LaunchSpec("mandate", "fix", str(tmp_path), (), verify_commands=("npm test",))
-        with pytest.raises(DomainFailure, match=r"npm test \(fails without diagnostics\)"):
+        with pytest.raises(DomainFailure, match=r"npm test \(fails without diagnostics: jest: "):
             container.implementation_session(spec, MemoryLedger())
         session = container.implementation_session(spec, MemoryLedger())
         assert session is not None and session.baseline[0].passed
@@ -1351,6 +1355,71 @@ def test_a_new_diagnostics_version_ignores_cached_baselines(
         assert runner.calls.count(check) == 2
     finally:
         container.close()
+
+
+@pytest.mark.parametrize(
+    ("error", "cause"),
+    [(SRE_MISMATCH, "AssertionError: SRE module mismatch"), (DLL_LOAD, DLL_CAUSE)],
+    ids=["sre-mismatch", "dll-load"],
+)
+def test_a_broken_tool_baseline_names_its_exception_in_both_languages_and_logs_the_tail(
+    tmp_path: Path, error: str, cause: str
+) -> None:
+    from cuanta.bootstrap import Container
+
+    runner = FakeRunner(streams={"uv run mypy": FakeStream([], 1, error=error)})
+    container = Container(tmp_path, Config(), runner=runner, home=tmp_path / "home")
+    try:
+        spec = LaunchSpec("mandate", "fix", str(tmp_path), (), verify_commands=("uv run mypy",))
+        with pytest.raises(UnusableVerification) as raised:
+            container.implementation_session(spec, MemoryLedger())
+        assert not any("-p" in command for command in runner.calls)
+    finally:
+        container.close()
+    failure = raised.value
+    assert failure.message == (
+        "verification is unusable, so the writer was not started: "
+        f"uv run mypy (broken tool: {cause})"
+    )
+    _, why, now = Catalog("es").failure(failure)
+    assert (
+        "la verificación no sirve, así que el escritor no arrancó: "
+        f"uv run mypy (herramienta rota: {cause})"
+    ) in why
+    assert "instala o repara la herramienta" in now
+    _, english_why, english_now = Catalog("en").failure(failure)
+    assert f"uv run mypy (broken tool: {cause})" in english_why
+    assert "install or repair the tool" in english_now
+    logs = (tmp_path / ".cuanta" / "logs").glob("*-*-*.log")
+    logged = "".join(path.read_text(encoding="utf-8") for path in logs)
+    assert "verification unusable, so the writer was not started" in logged
+    assert "$ uv run mypy (exit 1)" in logged
+    assert cause in logged
+
+
+def test_every_unusable_reason_reads_in_spanish() -> None:
+    results = (
+        VerifyResult("npm run build", 1, timed_out=True),
+        VerifyResult("missing-tool", None, errors=("[WinError 2] not found",)),
+        VerifyResult("npm run e2e", None),
+        VerifyResult("npm test", 1, cause="jest: not found"),
+        VerifyResult("npm run quiet", 1),
+        VerifyResult("uv run mypy", 1, cause="AssertionError: SRE module mismatch", broken=True),
+    )
+    commands = ("npm run lint", *(result.command for result in results))
+    spanish = Catalog("es")
+    assert [spanish.message(reason) for reason in unusable_reasons(results, commands)] == [
+        "npm run lint (no se ejecutó)",
+        "npm run build (agotó el tiempo)",
+        "missing-tool (no pudo arrancar: [WinError 2] not found)",
+        "npm run e2e (no pudo arrancar)",
+        "npm test (falla sin diagnósticos: jest: not found)",
+        "npm run quiet (falla sin diagnósticos)",
+        "uv run mypy (herramienta rota: AssertionError: SRE module mismatch)",
+    ]
+    assert unavailable_checks(results, commands)[-1] == (
+        "uv run mypy (broken tool: AssertionError: SRE module mismatch)"
+    )
 
 
 def test_an_oversized_first_error_is_clipped_and_later_errors_still_reach_the_writer() -> None:

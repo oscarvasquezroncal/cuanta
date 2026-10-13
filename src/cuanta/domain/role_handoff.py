@@ -56,6 +56,9 @@ class VerifyResult:
     seconds: float = 0.0
     errors: tuple[str, ...] = ()
     timed_out: bool = False
+    cause: str = field(default="", compare=False)
+    broken: bool = False
+    tail: tuple[str, ...] = field(default=(), compare=False)
 
     @property
     def passed(self) -> bool:

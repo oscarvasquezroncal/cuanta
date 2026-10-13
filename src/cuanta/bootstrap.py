@@ -178,6 +178,7 @@ class Container:
     run_mode: str = ""
     verbose: bool = False
     request_files: tuple[str, ...] = ()
+    untyped_request: bool = False
     _shared: Ledger | None = field(default=None, repr=False)
     _opened: list[Ledger] = field(default_factory=list, repr=False)
     decision_scope: DecisionScope = field(default_factory=_new_scope, repr=False)
@@ -419,6 +420,12 @@ class Container:
             reports.save_meta(run_id, {**meta, "index_learning_error": type(error).__name__})
 
     def change_plan(self, request: MandateRequest) -> ChangePlan:
+        from cuanta.domain.change_plan import evidence_frozen
+
+        plan = self._compiled_plan(request)
+        return evidence_frozen(request, plan) if self.untyped_request else plan
+
+    def _compiled_plan(self, request: MandateRequest) -> ChangePlan:
         from cuanta.adapters.system.index_inventory import LocalIndexInventory
         from cuanta.application.change_plan import IndexChangePlan
         from cuanta.domain.change_plan import compile_change_plan
@@ -710,8 +717,10 @@ class Container:
         from cuanta.domain.errors import DomainFailure
         from cuanta.domain.implementation import (
             DIAGNOSTICS_VERSION,
+            UnusableVerification,
             baseline_key,
-            unavailable_checks,
+            unusable_reasons,
+            unusable_results,
         )
 
         if spec.read_only or spec.kind not in {"mandate", "cross"}:
@@ -748,14 +757,17 @@ class Container:
             baseline = VerificationBaselines(self.state_workspace()).get(
                 snapshot, commands, verifier.run_checks, lambda: False, context
             )
-        unavailable = unavailable_checks(baseline, commands)
-        if unavailable:
-            raise DomainFailure(
-                "verification is unusable, so the writer was not started: "
-                + "; ".join(unavailable),
-                "install the missing tool, or make the check pass or print its failures, "
-                "then run again",
+        reasons = unusable_reasons(baseline, commands)
+        if reasons:
+            record_details(
+                self.project,
+                "verification unusable, so the writer was not started",
+                "\n".join(
+                    f"$ {result.command} (exit {result.exit_code})\n" + "\n".join(result.tail)
+                    for result in unusable_results(baseline)
+                ),
             )
+            raise UnusableVerification(reasons)
         return ImplementationSession(
             commands,
             baseline,
@@ -1379,11 +1391,12 @@ class Container:
     def shaped_options(
         self, request: MandateRequest, options: MandateOptions, cross_engine: bool = False
     ) -> tuple[MandateOptions, ShapeChoice]:
-        from cuanta.application.mandate_flow import resolved_profile
+        from cuanta.application.mandate_flow import refuse_read_only_conflict, resolved_profile
         from cuanta.domain.implementation import ImplementationProfile
         from cuanta.domain.mandate import Shape
         from cuanta.domain.scout import ShapeChoice
 
+        refuse_read_only_conflict(request, options)
         profile = resolved_profile(
             options,
             self.config.implementation_profile,
@@ -2861,6 +2874,8 @@ class Container:
         )
 
     def doctor(self) -> Doctor:
+        import sys
+
         from cuanta.adapters.engines.claude_plugins import installed_plugins
         from cuanta.adapters.instinct.jev import JevInstinct
         from cuanta.adapters.storage.migrations import LATEST_VERSION
@@ -2872,6 +2887,7 @@ class Container:
             self.detector(),
             [
                 doctor.python_check,
+                doctor.python_home_check(os.environ, sys.base_prefix, os.name == "nt"),
                 doctor.engines_check,
                 doctor.verify_check,
                 doctor.graph_check,
@@ -2911,10 +2927,15 @@ class Container:
 
 def record_failure(project: Path, error: BaseException) -> str:
     import traceback
+
+    return record_details(project, "run failed", "".join(traceback.format_exception(error)))
+
+
+def record_details(project: Path, title: str, details: str) -> str:
     from datetime import datetime
 
     from cuanta.adapters.system.log_file import LogFile
 
     relative = f".cuanta/logs/{datetime.now().date().isoformat()}.log"
-    LogFile(project / relative).write("run failed", "".join(traceback.format_exception(error)))
+    LogFile(project / relative).write(title, details)
     return relative

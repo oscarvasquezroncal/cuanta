@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from cuanta.application.detect import DetectProject, read_forge_state
@@ -36,6 +36,7 @@ from cuanta.domain.overhead import (
 )
 from cuanta.domain.plugins import InstalledPlugin, older_forge
 from cuanta.domain.progress import Status
+from cuanta.domain.python_home import PYTHON_HOME, inherited_python_home
 from cuanta.domain.telemetry import WiringReport, WiringState
 from cuanta.domain.terminal import TerminalReport
 from cuanta.ports.engine import Engine
@@ -83,6 +84,16 @@ def python_status(version: tuple[int, ...]) -> CheckResult:
 
 def python_check(_: Detection) -> Sequence[CheckResult]:
     return [python_status(tuple(sys.version_info[:3]))]
+
+
+def python_home_check(environment: Mapping[str, str], base_prefix: str, windows: bool) -> Check:
+    def check(_: Detection) -> Sequence[CheckResult]:
+        home = environment.get(PYTHON_HOME, "")
+        if not home or PYTHON_HOME in inherited_python_home(environment, base_prefix, windows):
+            return []
+        return [result(PYTHON_HOME, Status.WARN, msg("doctor.python_home.set", path=home))]
+
+    return check
 
 
 ENGINE_FIXES = {

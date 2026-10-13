@@ -666,6 +666,7 @@ def run_mandate(
     container.config = replace(container.config, language=session.catalog.language)
     container.progress = session.presenter
     container.use_request_files(request_files(args))
+    container.untyped_request = not args.type_stated
     try:
         options = _options(args)
         built = _build_request(session, container.mandate_service(container.shared_ledger()), args)

@@ -85,11 +85,13 @@ OUT_OF_SCOPE_PHRASES = (
     r"sin\s+(?:tocar|cambiar|modificar)\b",
     r"(?:don'?t|do\s+not|never)\s+(?:change|modify|touch|edit|delete)\b",
     r"leave\s+\S+(?:\s+\S+)?\s+(?:alone|untouched|as\s+is)",
-    r"out\s+of\s+scope",
-    r"fuera\s+de\s+alcance",
+    r"(?!(?-i:OUT\s+OF\s+SCOPE)(?![\s*]*:))out\s+of\s+scope",
+    r"(?!(?-i:FUERA\s+DE\s+ALCANCE)(?![\s*]*:))fuera\s+de\s+alcance",
 )
 READ_ONLY_AT = re.compile("|".join(READ_ONLY_PHRASES), re.IGNORECASE)
 OUT_OF_SCOPE_AT = re.compile("|".join(OUT_OF_SCOPE_PHRASES), re.IGNORECASE)
+QUOTED = re.compile(r"```.*?```|`[^`\n]+`|«[^«»]*»|“[^“”]*”|\"[^\"\n]*\"", re.DOTALL)
+QUOTED_CHARACTER = re.compile(r"[^\n]")
 
 ERROR_LINE = re.compile(
     r"(?:\bTraceback \(most recent call last\))"
@@ -196,6 +198,23 @@ def sentences(text: str) -> list[str]:
     return [part.strip() for part in SENTENCE_END.split(text) if part.strip()]
 
 
+def unquoted(text: str) -> str:
+    return QUOTED.sub(lambda found: QUOTED_CHARACTER.sub("_", found.group(0)), text)
+
+
+def out_of_scope_flags(text: str) -> list[tuple[str, bool]]:
+    masked = unquoted(text)
+    bounds = [(found.start(), found.end()) for found in SENTENCE_END.finditer(text)]
+    flags: list[tuple[str, bool]] = []
+    start = 0
+    for end, after in (*bounds, (len(text), len(text))):
+        sentence = text[start:end].strip()
+        if sentence:
+            flags.append((sentence, OUT_OF_SCOPE_AT.search(masked[start:end]) is not None))
+        start = after
+    return flags
+
+
 def _dedupe(items: Iterable[str]) -> tuple[str, ...]:
     seen: dict[str, str] = {}
     for item in items:
@@ -265,12 +284,9 @@ def extract_errors(text: str) -> tuple[str, ...]:
 
 
 def extract_out_of_scope(text: str) -> tuple[str, ...]:
-    found = [
-        sentence.strip().rstrip(".!")
-        for sentence in sentences(text)
-        if OUT_OF_SCOPE_AT.search(sentence)
-    ]
-    return _dedupe(found)
+    return _dedupe(
+        sentence.rstrip(".!") for sentence, flagged in out_of_scope_flags(text) if flagged
+    )
 
 
 def extract_mentions(text: str) -> tuple[str, ...]:
@@ -296,7 +312,7 @@ def extract_words(text: str) -> tuple[str, ...]:
 
 
 def core_text(text: str) -> str:
-    kept = [sentence for sentence in sentences(text) if not OUT_OF_SCOPE_AT.search(sentence)]
+    kept = [sentence for sentence, flagged in out_of_scope_flags(text) if not flagged]
     return " ".join(kept).strip() or text.strip()
 
 
@@ -307,7 +323,7 @@ def extract(text: str) -> IntakeFacts:
         out_of_scope=extract_out_of_scope(text),
         mentions=extract_mentions(text),
         words=extract_words(text),
-        read_only=bool(READ_ONLY_AT.search(text)),
+        read_only=bool(READ_ONLY_AT.search(unquoted(text))),
         core=core_text(text),
     )
 

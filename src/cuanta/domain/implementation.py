@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -15,7 +15,9 @@ from cuanta.domain.engine import (
     WALL_LIMIT_SUBTYPE,
     cut_by_turns,
 )
+from cuanta.domain.errors import DomainFailure
 from cuanta.domain.mandate import MandateType
+from cuanta.domain.messages import Message, english, msg
 from cuanta.domain.role_handoff import VerifyResult, last_json_object
 from cuanta.domain.routing import Provider
 from cuanta.domain.stable import stable_json
@@ -28,7 +30,7 @@ REPAIR_FEEDBACK_BYTES = 8_000
 REPAIR_ENTRY_BYTES = 1_000
 REPAIR_NOTE_BYTES = 150
 CLIPPED = "..."
-DIAGNOSTICS_VERSION = "5"
+DIAGNOSTICS_VERSION = "6"
 DIAGNOSTIC_LOCATION = re.compile(r"^(.*?):\d+(?::\d+)?(?:\s+|$)")
 FAILURE_ORDINAL = re.compile(r"^\d+\) ")
 TRAILING_DURATION = re.compile(r"\s[\(\[]?\d+(?:\.\d+)?\s?m?s[\)\]]?$")
@@ -37,7 +39,6 @@ LIFECYCLE_LINE = re.compile(
     r'|\berror: script "[^"]*" exited with code\b|\bcommand finished with error\b'
     r"|\brun failed: command\b|^Failed:\s+\S+#\S+$"
 )
-SILENT_FAILURE = "fails without diagnostics"
 VERIFICATION_OUTPUTS = frozenset(
     {".nyc_output", ".turbo", "coverage", "htmlcov", "playwright-report", "test-results"}
 )
@@ -220,27 +221,56 @@ def verification_delta(
     return VerificationDelta(tuple(current), tuple(introduced), tuple(preexisting))
 
 
-def unavailable_checks(results: Sequence[VerifyResult], commands: Sequence[str]) -> tuple[str, ...]:
-    finished = {result.command for result in results}
-    missing = tuple(f"{command} (did not run)" for command in commands if command not in finished)
-    blocked = tuple(
-        f"{result.command} ({_unavailable_reason(result)})"
+def unusable_results(results: Sequence[VerifyResult]) -> tuple[VerifyResult, ...]:
+    return tuple(
+        result
         for result in results
-        if result.exit_code is None or result.timed_out or _silent(result)
+        if result.exit_code is None or result.timed_out or result.broken or _silent(result)
     )
-    return (*missing, *blocked)
+
+
+def unusable_reasons(
+    results: Sequence[VerifyResult], commands: Sequence[str]
+) -> tuple[Message, ...]:
+    finished = {result.command for result in results}
+    missing = tuple(
+        msg("verify.check_not_run", command=command)
+        for command in commands
+        if command not in finished
+    )
+    return (*missing, *(_unusable_reason(result) for result in unusable_results(results)))
+
+
+def unavailable_checks(results: Sequence[VerifyResult], commands: Sequence[str]) -> tuple[str, ...]:
+    return tuple(english(reason) for reason in unusable_reasons(results, commands))
 
 
 def _silent(result: VerifyResult) -> bool:
     return not result.passed and all(LIFECYCLE_LINE.search(error) for error in result.errors)
 
 
-def _unavailable_reason(result: VerifyResult) -> str:
+def _unusable_reason(result: VerifyResult) -> Message:
     if result.timed_out:
-        return "timed out"
-    if result.exit_code is not None:
-        return SILENT_FAILURE
-    return result.errors[0] if result.errors else "could not start"
+        return msg("verify.check_timed_out", command=result.command)
+    if result.exit_code is None:
+        if result.errors:
+            return msg("verify.check_start_error", command=result.command, error=result.errors[0])
+        return msg("verify.check_not_started", command=result.command)
+    if result.broken:
+        return msg("verify.check_broken", command=result.command, cause=result.cause)
+    if result.cause:
+        return msg("verify.check_silent_cause", command=result.command, cause=result.cause)
+    return msg("verify.check_silent", command=result.command)
+
+
+class UnusableVerification(DomainFailure):
+    def __init__(self, reasons: tuple[Message, ...]) -> None:
+        self.reasons = reasons
+        super().__init__(self.localized(english), english(msg("verify.unusable_hint")))
+
+    def localized(self, translate: Callable[[Message], str]) -> str:
+        checks = "; ".join(translate(reason) for reason in self.reasons)
+        return translate(msg("verify.unusable", checks=checks))
 
 
 def engine_stop_reason(subtype: str, terminal_reason: str = "") -> str:

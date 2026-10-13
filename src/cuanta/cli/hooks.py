@@ -13,6 +13,7 @@ from typing import cast
 
 from cuanta.application.session_profile import record_hook_event
 from cuanta.domain.ledger import LedgerEvent
+from cuanta.domain.python_home import drop_inherited_python_home
 from cuanta.domain.read_discipline import (
     POST_CONTEXT,
     READ_LINE_LIMIT,
@@ -159,6 +160,7 @@ def line_limit(arguments: list[str]) -> int | None:
 
 
 def main() -> int:
+    drop_inherited_python_home(os.environ, sys.base_prefix, os.name == "nt")
     if len(sys.argv) < 2 or sys.argv[1] not in {"pre", "post"}:
         return 2
     limit = line_limit(sys.argv[2:])

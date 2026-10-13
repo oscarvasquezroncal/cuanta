@@ -26,6 +26,7 @@ from cuanta.adapters.system.index_inventory import LocalIndexInventory
 from cuanta.adapters.system.process_runner import SubprocessRunner
 from cuanta.domain.code_index import IndexedFile, IndexStructure
 from cuanta.domain.detection import SizeTier, is_source_file, size_tier
+from cuanta.domain.python_home import drop_inherited_python_home
 from cuanta.ports.graph import GraphResult
 from cuanta.ports.system import ProcessRunner
 
@@ -312,4 +313,5 @@ def revalid_token(token: str) -> bool:
 
 
 if __name__ == "__main__":
+    drop_inherited_python_home(os.environ, sys.base_prefix, os.name == "nt")
     raise SystemExit(main())

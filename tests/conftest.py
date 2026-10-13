@@ -54,7 +54,11 @@ def isolated_user_dirs(
         append(log, path, text)
 
     monkeypatch.setattr(LogFile, "_append", isolated_append)
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
     for variable in (
+        "CUANTA_LANG",
+        "LC_MESSAGES",
+        "LANG",
         "CUANTA_THEME",
         "CUANTA_ENGINE",
         "CUANTA_RUN_ID",

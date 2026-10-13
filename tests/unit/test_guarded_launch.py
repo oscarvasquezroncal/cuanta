@@ -129,7 +129,7 @@ def test_readonly_move_clears_even_preexisting_invalid_edits() -> None:
 
 
 @pytest.mark.parametrize("phrase", ["Do not change anything", "No modifiques nada"])
-@pytest.mark.parametrize("field", ["what", "why", "where", "constraints", "out_of_scope"])
+@pytest.mark.parametrize("field", ["what", "where", "constraints", "out_of_scope"])
 def test_explicit_global_readonly_language_protects_all_files_in_a_feature_request(
     phrase: str, field: str
 ) -> None:

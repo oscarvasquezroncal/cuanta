@@ -459,7 +459,7 @@ def test_a_mandate_with_anchors_only_in_its_evidence_packs_them_for_the_session_
     assert not fake_runner.stdins
 
 
-def test_read_only_words_freeze_a_writing_mandate_only_outside_its_phases_and_it_says_why(
+def test_read_only_words_never_freeze_a_typed_writing_mandate_and_an_instruction_stops_it(
     tmp_path: Path, fake_runner: FakeRunner
 ) -> None:
     root = copy_repo("python_backend", tmp_path)
@@ -473,17 +473,30 @@ def test_read_only_words_freeze_a_writing_mandate_only_outside_its_phases_and_it
     assert writable["pack_notes"] == ANCHOR_NOTES
     senior = agents_of(writable)["python-senior"]
     assert "Write" not in listed(senior.get("disallowedTools", []))
-    frozen = backend_preview(
+    evidence = backend_preview(
         root, *BALANCED, "--why", "Solo lectura: revisar app/services/interpreter.py:287"
     )
-    notes = [
-        'Change plan: read-only, because the request says "Solo lectura"',
-        "Referenced files the change plan protects (context only, not editable): "
-        "app/services/interpreter.py:287",
-    ]
-    assert listed(frozen["pack_notes"]) == notes
-    assert [line for line in listed(frozen["team"]) if line in notes] == notes
-    assert "Write" in listed(agents_of(frozen)["python-senior"]["disallowedTools"])
+    assert not any("read-only, because" in line for line in listed(evidence["pack_notes"]))
+    assert "Write" not in listed(agents_of(evidence)["python-senior"].get("disallowedTools", []))
+    stopped = invoke(
+        [
+            "mandate",
+            "--type",
+            "feature",
+            "--what",
+            "Implementar el mandato adjunto",
+            "--constraints",
+            "Solo lectura",
+            "--project",
+            str(root),
+            "--dry-run",
+            "--json",
+            *BALANCED,
+        ]
+    )
+    assert stopped.exit_code == 1, stopped.stdout
+    assert 'CONSTRAINTS says "Solo lectura"' in json.loads(stopped.stdout)["error"]["message"]
+    assert not fake_runner.stdins
 
 
 def test_the_per_role_dry_run_names_the_anchors_that_did_not_resolve(

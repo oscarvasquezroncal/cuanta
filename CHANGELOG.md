@@ -149,6 +149,21 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   finished with problems`.
 
 ### Fixed
+- Writing runs work again on Windows when cuanta runs from the npm runtime: the `PYTHONHOME`
+  that uv's trampoline sets for cuanta's own Python (`UV_INTERNAL__PYTHONHOME`, or a home equal
+  to the base prefix on uv 0.8 to 0.9.28) no longer reaches checks, engines, graphify, hooks or
+  the listener, so a project on another Python no longer fails with `SRE module mismatch`. A
+  `PYTHONHOME` you set yourself stays, and `cuanta doctor` warns about it.
+- An unusable verification is never silent: each check names its cause in the session
+  language (the last exception line of a Python traceback, or the last three output lines),
+  the output tail goes to the daily log, and a check that crashed with a traceback and no
+  file:line diagnostic counts as a broken tool even when the traceback holds an error word.
+- Quoted text (fences, inline code, «», "", “”) and the WHY / EVIDENCE field no longer turn a
+  feature, bug or refactor into a read-only run, and no longer add Out of scope paths; naming
+  the OUT OF SCOPE field in a sentence, without a label colon, protects nothing. An unscoped
+  read-only phrase in WHAT, WHERE, CONSTRAINTS or OUT OF SCOPE of a typed writing mandate stops
+  before launch with a non-zero exit and proposes `TYPE: investigation` or removing the phrase;
+  `--dry-run` shows it as a blocking problem. Untyped free text keeps its old behavior.
 - A run is no longer killed after 15 minutes: `runs.repair_timeout_s` bounds the time spent in
   repair rounds only, counted from the first repair turn, and stops further repairs instead of
   halting the engine. This applies to the native team, fast runs and the per-role runner.

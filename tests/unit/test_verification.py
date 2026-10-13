@@ -13,12 +13,56 @@ from cuanta.application.verification import (
     Diagnostics,
     Verifier,
     command_argv,
+    crash_line,
     first_errors,
+    last_lines,
 )
-from cuanta.domain.implementation import diagnostic_identity, without_duration
+from cuanta.domain.implementation import (
+    diagnostic_identity,
+    unavailable_checks,
+    unusable_reasons,
+    without_duration,
+)
+from cuanta.domain.role_handoff import VerifyResult
 from tests.fakes import FakeRunner, FakeStream
 
 ROOT = "C:/work/copy"
+SRE_MISMATCH = "\n".join(
+    [
+        "Traceback (most recent call last):",
+        '  File "<frozen runpy>", line 198, in _run_module_as_main',
+        '  File "<frozen runpy>", line 88, in _run_code',
+        r'  File "C:\work\project\.venv\Scripts\mypy.exe\__main__.py", line 4, in <module>',
+        r'  File "C:\work\project\.venv\Lib\site-packages\mypy\__main__.py", line 7, in <module>',
+        "    import traceback",
+        r'  File "C:\py\cpython-3.13-windows-x86_64-none\Lib\traceback.py", line 7, in <module>',
+        "    import textwrap",
+        r'  File "C:\py\cpython-3.13-windows-x86_64-none\Lib\textwrap.py", line 8, in <module>',
+        "    import re",
+        r'  File "C:\py\cpython-3.13-windows-x86_64-none\Lib\re\__init__.py", line 126, in <module>',
+        "    from . import _compiler, _parser",
+        r'  File "C:\py\cpython-3.13-windows-x86_64-none\Lib\re\_compiler.py", line 18, in <module>',
+        '    assert _sre.MAGIC == MAGIC, "SRE module mismatch"',
+        "AssertionError: SRE module mismatch",
+    ]
+)
+DLL_LOAD = "\n".join(
+    [
+        "Traceback (most recent call last):",
+        r'  File "C:\work\project\.venv\Scripts\pytest.exe\__main__.py", line 4, in <module>',
+        r'  File "C:\py\cpython-3.13-windows-x86_64-none\Lib\re\__init__.py", line 125, in <module>',
+        "    from . import _compiler, _parser",
+        "ImportError: DLL load failed while importing _sre: The specified module could not be found.",
+    ]
+)
+DLL_CAUSE = (
+    "ImportError: DLL load failed while importing _sre: The specified module could not be found."
+)
+
+
+def verified(tmp_path: Path, stream: FakeStream, command: str = "uv run mypy") -> VerifyResult:
+    runner = FakeRunner(streams={command: stream})
+    return Verifier(runner, tmp_path, windows=True).run((command,))[0]
 
 
 def test_typescript_and_next_errors_become_relative_path_line_entries() -> None:
@@ -292,3 +336,149 @@ def test_an_unparseable_command_is_reported_without_running(tmp_path: Path) -> N
     assert results[0].exit_code is None
     assert results[0].errors == ("could not parse the command",)
     assert runner.calls == []
+
+
+def test_a_python_crash_before_the_tool_runs_is_a_broken_tool_named_by_its_exception(
+    tmp_path: Path,
+) -> None:
+    result = verified(tmp_path, FakeStream([], 1, error=SRE_MISMATCH))
+    assert result.errors == ()
+    assert result.broken
+    assert result.cause == "AssertionError: SRE module mismatch"
+    assert result.tail[0] == "Traceback (most recent call last):"
+    assert result.tail[-1] == "AssertionError: SRE module mismatch"
+    assert unavailable_checks((result,), ("uv run mypy",)) == (
+        "uv run mypy (broken tool: AssertionError: SRE module mismatch)",
+    )
+
+
+def test_a_crash_whose_exception_holds_an_error_word_is_still_a_broken_tool(
+    tmp_path: Path,
+) -> None:
+    result = verified(tmp_path, FakeStream([], 1, error=DLL_LOAD), "uv run pytest")
+    assert result.errors == (DLL_CAUSE,)
+    assert result.broken
+    assert result.cause == DLL_CAUSE
+    assert unavailable_checks((result,), ("uv run pytest",)) == (
+        f"uv run pytest (broken tool: {DLL_CAUSE})",
+    )
+
+
+def test_normal_mypy_errors_stay_a_usable_baseline(tmp_path: Path) -> None:
+    mypy = FakeStream(
+        [
+            "src\\app\\cart.py:3: error: Incompatible return value type  [return-value]",
+            "Found 1 error in 1 file (checked 2 source files)",
+        ],
+        1,
+    )
+    result = verified(tmp_path, mypy)
+    assert result.errors == (
+        "src/app/cart.py:3 error: Incompatible return value type [return-value]",
+    )
+    assert not result.broken
+    assert unusable_reasons((result,), ("uv run mypy",)) == ()
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        [
+            "tests\\test_cart.py F                                                    [100%]",
+            "================================== FAILURES ===================================",
+            "__________________________________ test_adds __________________________________",
+            "    def test_adds() -> None:",
+            ">       assert 1 + 1 == 3",
+            "E       assert (1 + 1) == 3",
+            "tests\\test_cart.py:2: AssertionError",
+            "---------------------------- Captured stderr call -----------------------------",
+            "Traceback (most recent call last):",
+            '  File "C:\\work\\project\\src\\app\\cart.py", line 4, in add',
+            "ValueError: logged and handled",
+            "=========================== short test summary info ===========================",
+            "FAILED tests/test_cart.py::test_adds - assert (1 + 1) == 3",
+            "============================== 1 failed in 0.05s ==============================",
+        ],
+        [
+            "================================== FAILURES ===================================",
+            "__________________________________ test_adds __________________________________",
+            "Traceback (most recent call last):",
+            '  File "C:\\work\\project\\tests\\test_cart.py", line 2, in test_adds',
+            "    assert 1 + 1 == 3",
+            "AssertionError: assert (1 + 1) == 3",
+            "=========================== short test summary info ===========================",
+            "FAILED tests/test_cart.py::test_adds - assert (1 + 1) == 3",
+            "============================== 1 failed in 0.05s ==============================",
+        ],
+        [
+            "F",
+            "======================================================================",
+            "FAIL: test_adds (tests.test_cart.CartTest.test_adds)",
+            "----------------------------------------------------------------------",
+            "Traceback (most recent call last):",
+            '  File "C:\\work\\project\\tests\\test_cart.py", line 6, in test_adds',
+            "    self.assertEqual(1 + 1, 3)",
+            "AssertionError: 2 != 3",
+            "",
+            "----------------------------------------------------------------------",
+            "Ran 1 test in 0.001s",
+            "",
+            "FAILED (failures=1)",
+        ],
+    ],
+    ids=["pytest", "pytest-native", "unittest"],
+)
+def test_normal_test_failures_with_a_traceback_stay_a_usable_baseline(
+    tmp_path: Path, output: list[str]
+) -> None:
+    result = verified(tmp_path, FakeStream(output, 1), "uv run pytest")
+    assert result.errors
+    assert not result.broken
+    assert unusable_reasons((result,), ("uv run pytest",)) == ()
+
+
+def test_a_failure_without_traceback_or_diagnostics_gives_its_last_lines(tmp_path: Path) -> None:
+    noisy = FakeStream(
+        ["starting", "done"], 1, error="warming up\n\nconfig not found\n  exit 4  \n"
+    )
+    result = verified(tmp_path, noisy, "npm test")
+    assert result.errors == ()
+    assert not result.broken
+    assert result.cause == "warming up | config not found | exit 4"
+    assert unavailable_checks((result,), ("npm test",)) == (
+        "npm test (fails without diagnostics: warming up | config not found | exit 4)",
+    )
+    quiet = verified(tmp_path, FakeStream(["one", "two", "three", "four"], 1), "npm test")
+    assert quiet.cause == "two | three | four"
+    empty = verified(tmp_path, FakeStream([], 1), "npm test")
+    assert empty.cause == ""
+    assert unavailable_checks((empty,), ("npm test",)) == ("npm test (fails without diagnostics)",)
+
+
+def test_a_passing_check_keeps_no_cause_or_tail(tmp_path: Path) -> None:
+    result = verified(tmp_path, FakeStream(["ok"], 0, error=SRE_MISMATCH))
+    assert result.passed
+    assert (result.cause, result.broken, result.tail) == ("", False, ())
+
+
+def test_the_last_traceback_names_the_cause_and_cause_lines_are_trimmed() -> None:
+    chained = [
+        "Traceback (most recent call last):",
+        '  File "a.py", line 1, in <module>',
+        "KeyError: 'price'",
+        "",
+        "During handling of the above exception, another exception occurred:",
+        "",
+        "Traceback (most recent call last):",
+        '  File "a.py", line 3, in <module>',
+        "    raise RuntimeError('checkout   failed')",
+        "RuntimeError: checkout   failed",
+        "exit status 1",
+    ]
+    assert crash_line(chained) == "RuntimeError: checkout failed"
+    assert crash_line(["Traceback (most recent call last):"]) == (
+        "Traceback (most recent call last):"
+    )
+    assert crash_line(["plain output", "AssertionError: not after a traceback"]) == ""
+    assert last_lines(["", "a", "  b   c ", "", "d", "e" * 400]) == ("b c", "d", "e" * 160)
+    assert last_lines(["", "  "]) == ()

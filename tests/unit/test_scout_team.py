@@ -561,7 +561,7 @@ def test_a_scout_cut_off_before_its_pack_still_hands_the_anchored_edit_set() -> 
     assert "app/services/interpreter.py" in shown["edit set"]
     assert not shown["evidence pack"].startswith("11/6,000 tokens")
     frozen = compile_change_plan(
-        replace(request, why="Solo lectura.\n" + request.why), files, (), (), (), (), (), ()
+        replace(request, constraints="Solo lectura."), files, (), (), (), (), (), ()
     )
     assert frozen.read_only and not frozen.edit
     assert rows(tuple(item.path for item in frozen.edit)) == {

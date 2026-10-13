@@ -79,6 +79,17 @@ ENGLISH: dict[str, str] = {
     "verify.timeout": "inconclusive: timed out after {time}. Run by hand: {command}",
     "verify.times": "Preparation {preparation} · Agent {agent} · Verification {verification}",
     "verify.in_session": "in agent session",
+    "verify.unusable": "verification is unusable, so the writer was not started: {checks}",
+    "verify.unusable_hint": (
+        "install or repair the tool, or make the check pass or print its failures, then run again"
+    ),
+    "verify.check_not_run": "{command} (did not run)",
+    "verify.check_timed_out": "{command} (timed out)",
+    "verify.check_not_started": "{command} (could not start)",
+    "verify.check_start_error": "{command} (could not start: {error})",
+    "verify.check_silent": "{command} (fails without diagnostics)",
+    "verify.check_silent_cause": "{command} (fails without diagnostics: {cause})",
+    "verify.check_broken": "{command} (broken tool: {cause})",
     "run_error.pack_depth": "Unknown pack depth",
     "run_error.pack_depth_hint": "use quick, normal or deep",
     "pipeline.feed_session": "session started with {model}",
@@ -297,6 +308,10 @@ ENGLISH: dict[str, str] = {
     "runs.none_yet_hint": "start one: cuanta run mandate.md",
     "doctor.python.ok": "{version}",
     "doctor.python.old": "{version} — cuanta needs Python 3.12+",
+    "doctor.python_home.set": (
+        "PYTHONHOME={path} — other Pythons cuanta starts (graphify, test runners) inherit it "
+        "and can load the wrong standard library; unset it unless they all use that Python"
+    ),
     "doctor.engine.missing": "not found",
     "doctor.engine.found": "{version}",
     "doctor.whiskers.strong": "VERIFY_TIER={tier} — {evidence}",
@@ -1053,6 +1068,13 @@ ENGLISH: dict[str, str] = {
         "Referenced files the change plan protects (context only, not editable): {anchors}"
     ),
     "change_plan.read_only_phrase": ('Change plan: read-only, because the request says "{phrase}"'),
+    "change_plan.read_only_conflict": (
+        'Stopped before launch: {field} says "{phrase}", which would turn this {type} mandate '
+        "into a run that writes nothing"
+    ),
+    "change_plan.read_only_conflict_fix": (
+        "use TYPE: investigation for a read-only run, or remove the phrase"
+    ),
     "change_plan.guard_released": (
         "Change plan: {paths} stays editable: a phase says not to touch it, but the request "
         "anchors or names it elsewhere; put it in Out of scope to protect it"

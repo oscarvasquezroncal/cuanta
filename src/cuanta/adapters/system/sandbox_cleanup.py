@@ -17,6 +17,7 @@ from cuanta.adapters.system.sandbox import MARKER, _alive, fingerprint
 from cuanta.adapters.system.warm_sandbox import WarmSandbox, _json
 from cuanta.domain.errors import EnvironmentFailure
 from cuanta.domain.ledger import LedgerEvent
+from cuanta.domain.python_home import drop_inherited_python_home
 from cuanta.ports.sandbox import SandboxCopy
 
 FINISHED = frozenset({"ready", "removed", "failed"})
@@ -176,4 +177,5 @@ def await_cleanup(project: Path, run_id: str, timeout: float = 60.0) -> bool:
 
 
 if __name__ == "__main__":
+    drop_inherited_python_home(os.environ, sys.base_prefix, os.name == "nt")
     raise SystemExit(0 if finish_cleanup(Path(sys.argv[1])) else 1)

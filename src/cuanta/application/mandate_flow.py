@@ -21,7 +21,12 @@ from cuanta.application.timing import PhaseRecorder
 from cuanta.domain.agents import role_of
 from cuanta.domain.anchors import anchor_notes
 from cuanta.domain.capsules import capsule_id
-from cuanta.domain.change_plan import ChangePlan, apply_overrides, plan_notes
+from cuanta.domain.change_plan import (
+    ChangePlan,
+    apply_overrides,
+    plan_notes,
+    read_only_conflict,
+)
 from cuanta.domain.claude_variants import (
     DELEGATION_TOOLS,
     resolve_variant,
@@ -347,6 +352,23 @@ class MissingRequestFields(DomainFailure):
         return translate(msg("mandate.missing_fields", fields=labels))
 
 
+class ReadOnlyConflict(DomainFailure):
+    def __init__(self, reason: Message) -> None:
+        self.reason = reason
+        super().__init__(
+            self.localized(english), english(msg("change_plan.read_only_conflict_fix"))
+        )
+
+    def localized(self, translate: Callable[[Message], str]) -> str:
+        return translate(self.reason)
+
+
+def refuse_read_only_conflict(request: MandateRequest, options: MandateOptions) -> None:
+    conflict = read_only_conflict(request) if options.type_stated else None
+    if conflict is not None:
+        raise ReadOnlyConflict(conflict)
+
+
 def validate(request: MandateRequest, required: tuple[str, ...] | None = None) -> None:
     missing = missing_fields(request, required)
     if missing:
@@ -485,6 +507,7 @@ class MandateFlow:
 
     def _validate(self, request: MandateRequest, options: MandateOptions) -> None:
         validate(request, options.required)
+        refuse_read_only_conflict(request, options)
         engine = options.engine or self._default_engine
         fast = options.profile == ImplementationProfile.FAST
         if fast and (engine != "claude" or request.type == INVESTIGATION):

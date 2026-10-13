@@ -15,15 +15,16 @@ from cuanta.domain.anchors import (
 from cuanta.domain.code_index import IndexedFile, IndexRow, index_path
 from cuanta.domain.index_search import rank_files, search_terms
 from cuanta.domain.intake import (
-    OUT_OF_SCOPE_AT,
     READ_ONLY_AT,
     core_text,
     extract_mentions,
     extract_out_of_scope,
-    sentences,
+    out_of_scope_flags,
+    unquoted,
 )
 from cuanta.domain.mandate import (
     INVESTIGATION,
+    LABELS,
     MIN_PARTS,
     MandateRequest,
     MandateType,
@@ -38,7 +39,7 @@ WRITERS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 EXECUTION = ("Bash", "PowerShell", "Computer", "ComputerUse")
 READ_TOOLS = ("Read", "Grep", "Glob", "Agent", "Task")
 WRITING_TYPES = frozenset({MandateType.FEATURE, MandateType.BUG, MandateType.REFACTOR})
-READ_ONLY_FIELDS = ("what", "why", "where", "constraints", "out_of_scope")
+READ_ONLY_FIELDS = ("what", "where", "constraints", "out_of_scope")
 _PATH = re.compile(r"(?<![\w.@*?-])(?:[\w.@*?-]+(?:/[\w.@*?-]+)+|[\w@*?-]+\.[\w*?-]+(?:/\*\*)?)")
 ROOTED = ("/", "~", "$", "%")
 PHASE_LOCAL = re.compile(
@@ -276,9 +277,7 @@ def _guard_paths(text: str, paths: tuple[str, ...]) -> set[str]:
 
 
 def _kept(text: str) -> str:
-    return " ".join(
-        sentence for sentence in sentences(text) if not OUT_OF_SCOPE_AT.search(sentence)
-    )
+    return " ".join(sentence for sentence, flagged in out_of_scope_flags(text) if not flagged)
 
 
 def _intended(request: MandateRequest, paths: tuple[str, ...]) -> tuple[str, ...]:
@@ -469,26 +468,47 @@ def _global_readonly(value: str, spans: tuple[Span, ...] = ()) -> str:
     return ""
 
 
-def read_only_phrase(request: MandateRequest) -> str:
-    values = {
-        "what": request.what,
-        "why": request.why,
-        "where": request.where,
-        "constraints": request.constraints,
-        "out_of_scope": request.out_of_scope,
-    }
-    for name in READ_ONLY_FIELDS:
-        phrase = _global_readonly(values[name], _phase_spans(request, values[name]))
+def read_only_hit(
+    request: MandateRequest, names: tuple[str, ...] = READ_ONLY_FIELDS
+) -> tuple[str, str] | None:
+    for name in names:
+        value: str = getattr(request, name)
+        phrase = _global_readonly(unquoted(value), _phase_spans(request, value))
         if phrase:
-            return phrase
-    return ""
+            return name, phrase
+    return None
+
+
+def read_only_phrase(request: MandateRequest) -> str:
+    hit = read_only_hit(request)
+    return hit[1] if hit is not None else ""
+
+
+def read_only_conflict(request: MandateRequest) -> Message | None:
+    hit = read_only_hit(request) if request.type in WRITING_TYPES else None
+    if hit is None:
+        return None
+    name, phrase = hit
+    return msg(
+        "change_plan.read_only_conflict",
+        field=LABELS[name].rstrip(":"),
+        phrase=phrase,
+        type=request.type,
+    )
+
+
+def evidence_frozen(request: MandateRequest, plan: ChangePlan) -> ChangePlan:
+    if plan.read_only or read_only_hit(request, ("why",)) is None:
+        return plan
+    read = {*plan.read, *(item.path for item in plan.edit)}
+    return replace(plan, edit=(), read=tuple(sorted(read)), read_only=True)
 
 
 def read_only_notes(request: MandateRequest, plan: ChangePlan | None) -> tuple[Message, ...]:
     if plan is None or not plan.read_only or request.type not in WRITING_TYPES:
         return ()
-    phrase = read_only_phrase(request)
-    return (msg("change_plan.read_only_phrase", phrase=phrase),) if phrase else ()
+    hit = read_only_hit(request, (*READ_ONLY_FIELDS, "why"))
+    return (msg("change_plan.read_only_phrase", phrase=hit[1]),) if hit is not None else ()
 
 
 def guard_notes(plan: ChangePlan | None) -> tuple[Message, ...]:

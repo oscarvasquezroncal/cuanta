@@ -17,6 +17,7 @@ from cuanta.domain.change_plan import (
     EditTarget,
     compile_change_plan,
     deny_rules,
+    evidence_frozen,
     mentioned_paths,
     move_plan,
     plan_metrics,
@@ -250,17 +251,17 @@ def test_read_only_words_inside_a_phase_leave_a_phased_writing_request_writable(
     ("request_", "phrase"),
     [
         (
-            MandateRequest("feature", "Implementar", why="Solo lectura al principio.\n" + PHASES),
+            MandateRequest("feature", "Implementar", why=PHASES, constraints="Solo lectura."),
             "Solo lectura",
         ),
         (MandateRequest("bug", "Corregir", why=PHASES, constraints="read-only"), "read-only"),
         (
-            MandateRequest("refactor", "Ordenar", why="## Fase 1 — Revisión (solo lectura)"),
+            MandateRequest("refactor", "Ordenar", why="Contexto.", where="solo lectura"),
             "solo lectura",
         ),
     ],
 )
-def test_read_only_words_outside_the_phases_still_freeze_the_plan_and_say_why(
+def test_read_only_words_in_an_instruction_field_still_freeze_the_plan_and_say_why(
     request_: MandateRequest, phrase: str
 ) -> None:
     plan = _backend(request_)
@@ -499,11 +500,13 @@ TRAILING_READ_ONLY = (
 
 
 @pytest.mark.parametrize("kind", ["feature", "bug", "refactor"])
-def test_read_only_words_after_the_phases_under_their_own_heading_freeze_the_plan(
+def test_read_only_words_after_the_phases_freeze_only_an_untyped_request(
     kind: str,
 ) -> None:
     request = MandateRequest(kind, "Revisar el intérprete", phased_mandate() + TRAILING_READ_ONLY)
-    plan = _backend(request)
+    typed = _backend(request)
+    assert not typed.read_only
+    plan = evidence_frozen(request, typed)
     assert plan.read_only and not plan.edit
     assert [english(message) for message in read_only_notes(request, plan)] == [
         'Change plan: read-only, because the request says "solo lectura"'
@@ -511,7 +514,8 @@ def test_read_only_words_after_the_phases_under_their_own_heading_freeze_the_pla
     inside = phased_mandate().replace(
         "## Cómo trabajar", TRAILING_READ_ONLY.strip().replace("## Reglas", "### Reglas")
     )
-    assert not _backend(MandateRequest(kind, "Revisar el intérprete", inside)).read_only
+    unfrozen = MandateRequest(kind, "Revisar el intérprete", inside)
+    assert not evidence_frozen(unfrozen, _backend(unfrozen)).read_only
 
 
 @pytest.mark.parametrize("kind", ["feature", "bug", "refactor"])
