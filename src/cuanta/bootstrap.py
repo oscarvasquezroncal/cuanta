@@ -117,6 +117,7 @@ if TYPE_CHECKING:
     from cuanta.application.results import ResultQuery
     from cuanta.application.route_apply import MandateRouting
     from cuanta.application.routing import RouteAdvisor, RoutePlan
+    from cuanta.application.run_next import NextMandate
     from cuanta.application.sandbox import SandboxResult, SandboxRunner
     from cuanta.application.session_profile import LeanProfile
     from cuanta.application.spectrum import SpectrumQuery
@@ -1556,6 +1557,20 @@ class Container:
             role_efforts=efforts,
         )
         return replace(options, route=route, role_efforts=efforts)
+
+    def next_mandate(self, reference: str) -> NextMandate:
+        from cuanta.application.run_next import write_next
+        from cuanta.domain.errors import DomainFailure
+        from cuanta.domain.messages import english, msg
+
+        try:
+            run_id = self.resolve_run(reference) if reference else self.last_run()
+        except DomainFailure as error:
+            raise DomainFailure(
+                english(msg("runs_next.unknown", run=reference or "-")),
+                english(msg("runs_next.unknown_hint")),
+            ) from error
+        return write_next(self.state_workspace(), run_id)
 
     def index_calls(self, run_id: str) -> tuple[IndexCall, ...]:
         from cuanta.domain.index_first import index_calls

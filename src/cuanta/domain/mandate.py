@@ -145,6 +145,56 @@ LABELS: dict[str, str] = {
     "tests": "EXPECTED TESTS:",
     "out_of_scope": "OUT OF SCOPE:",
 }
+SPOKEN_LABELS: dict[str, tuple[str, ...]] = {
+    "type": ("tipo", "request type", "tipo de solicitud", "tipo de pedido"),
+    "what": ("qué", "que"),
+    "why": (
+        "why",
+        "evidence",
+        "por qué / evidencia",
+        "por que / evidencia",
+        "por qué",
+        "por que",
+        "porqué",
+        "evidencia",
+        "evidencias",
+    ),
+    "where": ("dónde", "donde"),
+    "constraints": ("restricciones", "restricción", "restriccion"),
+    "tests": ("tests", "test", "pruebas esperadas", "pruebas", "prueba"),
+    "out_of_scope": ("fuera de alcance", "fuera del alcance"),
+}
+LABEL_WORDS: dict[str, tuple[str, ...]] = {
+    name: (label.rstrip(":").lower(), *SPOKEN_LABELS[name]) for name, label in LABELS.items()
+}
+
+
+def spoken(label: str) -> str:
+    joined = re.sub(r"[ \t]*/[ \t]*", " / ", label.lower())
+    return re.sub(r"[ \t_-]+", " ", joined).strip()
+
+
+FIELD_OF: dict[str, str] = {
+    spoken(word): name for name, words in LABEL_WORDS.items() for word in words
+}
+
+
+def label_field(label: str) -> str | None:
+    return FIELD_OF.get(spoken(label.strip().strip("*_")))
+
+
+def render_mandate(request: MandateRequest) -> str:
+    lines: list[str] = []
+    for name, label in LABELS.items():
+        value = str(getattr(request, name)).strip()
+        if not value:
+            continue
+        first, *rest = value.split("\n")
+        lines.append(f"{label} {first}".rstrip())
+        lines.extend(f"    {line}" if line.strip() else "" for line in rest)
+    return "\n".join(lines) + "\n"
+
+
 REQUIRED = ("type", "what", "why", "out_of_scope")
 ESSENTIAL_FIELDS = ("type", "what")
 NONE_STATED = "none stated"

@@ -24,6 +24,12 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   them. `--advisor auto|opus|fable|off` and `--fast` are new; Opus or Fable as the main model,
   `--pure`, xhigh effort, ultracode on a team and fast mode show their multiplier and need a
   confirmation or `--yes`.
+- **The next step with one command.** `cuanta runs next [RUN_ID]` turns the NEXT STEP block of a
+  run's report into `.cuanta/runs/<id>/next.md`, ready for `cuanta run`, and prints the exact
+  command (`--json` too). An audit whose answer has a next step ends with "Next step: cuanta
+  runs next <id>". One label vocabulary now serves the next step and mandate files, so
+  `REQUEST TYPE:` and `TIPO DE SOLICITUD:` are read; an untyped next step is an investigation
+  with a Note.
 - **Claude teams that cuanta runs.** A Claude team now runs one launch per role, one after
   another, with the per-role machinery GPT teams use: each role gets its share of the cap
   (soft and hard caps from the forecast), runs once, sees only its tools and starts no

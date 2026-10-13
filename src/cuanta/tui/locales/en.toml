@@ -1215,9 +1215,17 @@ unexpected = "An unexpected problem interrupted the request."
 log = " · log: {path}"
 close = "Close"
 
+[runs_next]
+type = "Type"
+what = "What"
+where = "Where"
+file = "File"
+run = "Run it: {command}"
+
 [run_output]
 report = "Report: {path} · cuanta runs show {run}"
 answer_complete = "… complete answer: cuanta runs show {run}"
+next_step = "Next step: cuanta runs next {run}"
 team_off = "team: routing off, the engine picks its default models"
 route_plan = "team · {role} → {model} ({tier}) · {reason}"
 single = "team · single model for {engine}: {model}"

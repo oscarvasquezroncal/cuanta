@@ -9,37 +9,17 @@ from pathlib import PurePath
 
 from cuanta.domain.errors import DomainFailure
 from cuanta.domain.mandate import (
+    FIELD_OF,
     LABELS,
     NUMBERED_PART,
     REQUEST_MARKER,
     MandateRequest,
     MandateType,
     fence_after,
+    spoken,
 )
 from cuanta.domain.messages import Message, english, msg
 
-SPOKEN_LABELS: dict[str, tuple[str, ...]] = {
-    "type": ("tipo",),
-    "what": ("qué", "que"),
-    "why": (
-        "why",
-        "evidence",
-        "por qué / evidencia",
-        "por que / evidencia",
-        "por qué",
-        "por que",
-        "porqué",
-        "evidencia",
-        "evidencias",
-    ),
-    "where": ("dónde", "donde"),
-    "constraints": ("restricciones", "restricción", "restriccion"),
-    "tests": ("tests", "test", "pruebas esperadas", "pruebas", "prueba"),
-    "out_of_scope": ("fuera de alcance", "fuera del alcance"),
-}
-LABEL_WORDS: dict[str, tuple[str, ...]] = {
-    name: (label.rstrip(":").lower(), *SPOKEN_LABELS[name]) for name, label in LABELS.items()
-}
 TYPE_SPELLINGS: dict[MandateType, tuple[str, ...]] = {
     MandateType.FEATURE: (
         "feature",
@@ -138,8 +118,7 @@ Segment = tuple[str, list[str]]
 
 
 def _spoken(label: str) -> str:
-    joined = re.sub(r"[ \t]*/[ \t]*", " / ", label.lower())
-    return re.sub(r"[ \t_-]+", " ", joined).strip()
+    return spoken(label)
 
 
 def _pattern(word: str) -> str:
@@ -153,9 +132,6 @@ def _placeholder_key(value: str) -> str:
     return " ".join(value.split()).lower()
 
 
-FIELD_OF: dict[str, str] = {
-    _spoken(word): name for name, words in LABEL_WORDS.items() for word in words
-}
 LABEL_LINE = re.compile(
     r"^[ ]{0,3}(?:#{1,6}[ \t]+)?(?:[-*+][ \t]+)?(?:\*\*|__)?(?P<label>"
     + "|".join(_pattern(word) for word in sorted(FIELD_OF, key=len, reverse=True))
@@ -163,7 +139,11 @@ LABEL_LINE = re.compile(
     re.IGNORECASE,
 )
 PLACEHOLDER_KEYS = frozenset(_placeholder_key(text) for text in TEMPLATE_PLACEHOLDERS)
-WRITTEN_TYPE = re.compile(r"^[ ]{0,3}(?:[-*+][ \t]+)?(?:\*\*|__)?(?:TYPE|TIPO)(?:\*\*|__)?[ \t]*:")
+WRITTEN_TYPE = re.compile(
+    r"^[ ]{0,3}(?:[-*+][ \t]+)?(?:\*\*|__)?"
+    r"(?:REQUEST[ \t]+TYPE|TIPO[ \t]+DE[ \t]+(?:SOLICITUD|PEDIDO)|TYPE|TIPO)"
+    r"(?:\*\*|__)?[ \t]*:"
+)
 
 
 @dataclass(frozen=True, slots=True)

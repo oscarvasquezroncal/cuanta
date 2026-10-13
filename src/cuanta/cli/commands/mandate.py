@@ -1750,6 +1750,24 @@ def guard_tripped(result: "SandboxResult | None") -> bool:
     )
 
 
+def answer_blocks(report: "MandateReport", t: "Catalog", verbose: bool) -> "list[Block]":
+    from cuanta.cli.document import Hint, MarkdownText
+    from cuanta.domain.report import next_request
+
+    run = report.run
+    blocks: list[Block] = []
+    if (verbose or report.task_type == "investigation") and report.text.strip():
+        lines = report.text.splitlines()
+        blocks.append(MarkdownText("\n".join(lines[:60])))
+        if len(lines) > 60:
+            blocks.append(Hint(t("run_output.answer_complete", run=run.id)))
+    path = report.report_path or f".cuanta/runs/{run.id}/report.md"
+    blocks.append(Hint(t("run_output.report", path=path, run=run.id)))
+    if report.task_type == "investigation" and next_request(report.text) is not None:
+        blocks.append(Hint(t("run_output.next_step", run=run.id)))
+    return blocks
+
+
 def _final(
     report: "MandateReport",
     isolated: "SandboxResult | None" = None,
@@ -1762,7 +1780,6 @@ def _final(
         Hint,
         KeyValues,
         Line,
-        MarkdownText,
         MascotBlock,
         Panel,
     )
@@ -1850,13 +1867,7 @@ def _final(
     timing = timing_message(report_payload(report))
     if timing is not None:
         blocks.append(Line(t.message(timing)))
-    if (verbose or report.task_type == "investigation") and report.text.strip():
-        lines = report.text.splitlines()
-        blocks.append(MarkdownText("\n".join(lines[:60])))
-        if len(lines) > 60:
-            blocks.append(Hint(t("run_output.answer_complete", run=run.id)))
-    path = report.report_path or f".cuanta/runs/{run.id}/report.md"
-    blocks.append(Hint(t("run_output.report", path=path, run=run.id)))
+    blocks.extend(answer_blocks(report, t, verbose))
     if isolated is not None:
         blocks.extend(sandbox_blocks(isolated))
     payload = {

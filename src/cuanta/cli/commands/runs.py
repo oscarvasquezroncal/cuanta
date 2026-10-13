@@ -49,6 +49,18 @@ def show_command(
     execute(ctx, lambda session: _show(session, run_id, markdown))
 
 
+@runs_app.command(
+    "next", help="Write a run's NEXT STEP as a mandate file; without an id, the last run."
+)
+def next_command(
+    ctx: typer.Context,
+    run_id: Annotated[
+        str, typer.Argument(help="Run id or a unique prefix; omitted, the last run.")
+    ] = "",
+) -> None:
+    execute(ctx, lambda session: _next(session, run_id))
+
+
 @runs_app.command("open", help="Open the app on a run's Result screen.")
 def open_command(
     ctx: typer.Context,
@@ -124,6 +136,40 @@ def _resolve(project: object, run_id: str) -> str:
         return container.resolve_run(run_id)
     finally:
         container.close()
+
+
+def _next(session: Session, run_id: str) -> "Document":
+    from dataclasses import asdict
+
+    from cuanta.bootstrap import Container
+    from cuanta.cli.document import Document, Hint, KeyValues, Line
+    from cuanta.domain.progress import Status
+
+    container = Container.for_project(session.project)
+    try:
+        found = container.next_mandate(run_id)
+    finally:
+        container.close()
+    t = session.catalog
+    request = found.request
+    rows = (
+        (t("runs_next.type"), t(f"wizard.intent_{request.type}")),
+        (t("runs_next.what"), request.what.splitlines()[0] if request.what else "-"),
+        (t("runs_next.where"), request.where or "-"),
+        (t("runs_next.file"), found.path),
+    )
+    blocks: list[Block] = [
+        *(Line(t.message(note), Status.WARN) for note in found.notes),
+        KeyValues(rows),
+        Hint(t("runs_next.run", command=found.command)),
+    ]
+    payload: dict[str, object] = {
+        "run_id": found.run_id,
+        "request": asdict(request),
+        "path": found.path,
+        "command": found.command,
+    }
+    return Document(blocks=tuple(blocks), payload=payload)
 
 
 def _list(session: Session, limit: int) -> "Document":

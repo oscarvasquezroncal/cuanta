@@ -1736,6 +1736,16 @@ over = "contexto por encima de su techo: {role} llegó a {tokens} tokens con un 
 [msg.index_first]
 ratio = "índice primero: {index} consultas al índice, {grep} Grep, {read} Read"
 
+[msg.runs_next]
+no_report = "la corrida {run} no tiene informe guardado, así que no tiene siguiente paso"
+none = "la corrida {run} no trae NEXT STEP en su informe"
+hint = "lo trae un audit o una corrida que termine con un bloque NEXT STEP"
+unknown = "ninguna corrida coincide con {run}"
+unknown_hint = "lístalas: cuanta runs list"
+
+[msg.next_step]
+untyped = "El NEXT STEP no decía su tipo, así que se ejecuta como investigación"
+
 [msg.advisor]
 spend = "advisor {advisor}: {requests} consultas, {cost} (cuentan en el gasto y el tope de la corrida)"
 
@@ -2026,9 +2036,17 @@ unexpected = "Un problema inesperado interrumpió la solicitud."
 log = " · registro: {path}"
 close = "Cerrar"
 
+[runs_next]
+type = "Tipo"
+what = "Qué"
+where = "Dónde"
+file = "Archivo"
+run = "Ejecútalo: {command}"
+
 [run_output]
 report = "Informe: {path} · cuanta runs show {run}"
 answer_complete = "… respuesta completa: cuanta runs show {run}"
+next_step = "Siguiente paso: cuanta runs next {run}"
 team_off = "equipo: sin asignación, el motor elige sus modelos predeterminados"
 route_plan = "equipo · {role} → {model} ({tier}) · {reason}"
 single = "equipo · modelo único en {engine}: {model}"

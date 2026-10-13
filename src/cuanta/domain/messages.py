@@ -193,6 +193,12 @@ ENGLISH: dict[str, str] = {
     ),
     "instinct.launch_single": "one session (Sonnet)",
     "instinct.launch_team": "team (Haiku analyst and tester, Sonnet senior)",
+    "runs_next.no_report": "run {run} has no saved report, so it has no next step",
+    "runs_next.none": "run {run} has no NEXT STEP in its report",
+    "runs_next.hint": "an audit or a run that ends with a NEXT STEP block has one",
+    "runs_next.unknown": "no run matches {run}",
+    "runs_next.unknown_hint": "list them: cuanta runs list",
+    "next_step.untyped": "The NEXT STEP did not state its type, so it runs as an investigation",
     "cross.docs_beside": "docs runs beside the tester in a copy of the project",
     "cross.docs_outside": (
         "docs changed files outside the documentation in its copy; not applied: {paths}"

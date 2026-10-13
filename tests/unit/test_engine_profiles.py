@@ -197,8 +197,9 @@ def test_cross_claude_readonly_roles_cannot_inherit_write_tools(tmp_path: Path, 
     request = MandateRequest(kind, "inspect addition", "incorrect sum", out_of_scope="docs")
     report = pipeline.run(request, all_roles("claude"), RecordingSink())
     assert report.ok
-    assert len(runner.calls) == len(CROSS_ORDER)
-    for role, command in zip(CROSS_ORDER, runner.calls, strict=True):
+    launches = [call for call in runner.calls if call[1:] != ("--help",)]
+    assert len(launches) == len(CROSS_ORDER)
+    for role, command in zip(CROSS_ORDER, launches, strict=True):
         assert "--max-turns" not in command
         allowed = command[command.index("--allowedTools") + 1].split(",")
         if kind == "investigation" or role is Role.ANALYST:

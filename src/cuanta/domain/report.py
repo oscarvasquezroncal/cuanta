@@ -3,11 +3,17 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from cuanta.domain.ledger import LedgerEvent
-from cuanta.domain.mandate import LABELS, MandateRequest
+from cuanta.domain.mandate import (
+    MandateRequest,
+    MandateType,
+    label_field,
+)
+from cuanta.domain.mandate_file import KNOWN_TYPES, mandate_type
+from cuanta.domain.messages import Message, msg
 
 SECTION_TITLES: dict[str, tuple[str, ...]] = {
     "done": ("WHAT WAS DONE",),
@@ -44,6 +50,7 @@ _REQUEST_LABEL = re.compile(
     r"^(?:TYPE|WHAT|WHY / EVIDENCE|WHERE|CONSTRAINTS|EXPECTED TESTS|OUT OF SCOPE):"
 )
 _HEADING_SHAPE = re.compile(r"^\s*(?:#{1,6}\s|\d+[.)]\s|\*\*|__)")
+_BARE_TITLE = re.compile(rf"^\s*(?:{_TITLE_PATTERN})\s*:?\s*$")
 _ATX_HEADING = re.compile(r"^ {0,3}#{1,6}\s+\S")
 _FILE_REF = re.compile(
     r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.[A-Za-z][\w]{0,7}):(\d{1,6})(?::\d{1,4})?(?!\d)"
@@ -90,7 +97,8 @@ def _key_of(title: str) -> str:
 
 
 def _section_heading(line: str) -> re.Match[str] | None:
-    return _HEADING.match(line) if _HEADING_SHAPE.match(line) else None
+    shaped = _HEADING_SHAPE.match(line) or _BARE_TITLE.match(line)
+    return _HEADING.match(line) if shaped else None
 
 
 def parse_sections(text: str) -> tuple[ReportSection, ...]:
@@ -131,18 +139,30 @@ def section(sections: Sequence[ReportSection], key: str) -> ReportSection | None
     return None
 
 
-def next_request(text: str) -> MandateRequest | None:
+@dataclass(frozen=True, slots=True)
+class NextStep:
+    request: MandateRequest
+    notes: tuple[Message, ...] = ()
+
+
+def _typed_step(request: MandateRequest) -> NextStep:
+    if request.type:
+        return NextStep(request)
+    untyped = replace(request, type=MandateType.INVESTIGATION.value)
+    return NextStep(untyped, (msg("next_step.untyped"),))
+
+
+def next_step(text: str) -> NextStep | None:
     sections = parse_sections(text)
     found = section(sections, "next")
     if found is None or not found.body.strip():
         return None
-    by_label = {label.rstrip(":").upper(): name for name, label in LABELS.items()}
     values: dict[str, list[str]] = {}
     current = ""
     for raw in found.body.splitlines():
         line = raw.strip().strip("`")
         label, colon, rest = line.partition(":")
-        name = by_label.get(label.strip().upper()) if colon else None
+        name = label_field(label) if colon else None
         if name is not None:
             current = name
             values[current] = [rest.strip()]
@@ -150,18 +170,25 @@ def next_request(text: str) -> MandateRequest | None:
             values[current].append(line)
     if "what" not in values:
         first = next((line.strip() for line in found.body.splitlines() if line.strip()), "")
-        return MandateRequest(what=first.lstrip("-* ").strip()) if first else None
+        return _typed_step(MandateRequest(what=first.lstrip("-* ").strip())) if first else None
     fields = {name: "\n".join(lines).strip() for name, lines in values.items()}
-    kind = fields.get("type", "").split("|")[0].strip().lower()
-    return MandateRequest(
-        type=kind,
-        what=fields.get("what", ""),
-        why=fields.get("why", ""),
-        where=fields.get("where", ""),
-        constraints=fields.get("constraints", ""),
-        tests=fields.get("tests", ""),
-        out_of_scope=fields.get("out_of_scope", ""),
+    kind = mandate_type(fields.get("type", "").split("|")[0])
+    return _typed_step(
+        MandateRequest(
+            type=kind if kind in KNOWN_TYPES else "",
+            what=fields.get("what", ""),
+            why=fields.get("why", ""),
+            where=fields.get("where", ""),
+            constraints=fields.get("constraints", ""),
+            tests=fields.get("tests", ""),
+            out_of_scope=fields.get("out_of_scope", ""),
+        )
     )
+
+
+def next_request(text: str) -> MandateRequest | None:
+    step = next_step(text)
+    return step.request if step is not None else None
 
 
 def file_refs(text: str) -> tuple[FileRef, ...]:
