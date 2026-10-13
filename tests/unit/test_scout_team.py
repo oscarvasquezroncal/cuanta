@@ -387,9 +387,15 @@ def test_a_claude_scout_launch_is_read_only_and_the_launch_mode_runs_per_role(
     assert "Edit" in scout.disallowed_tools and "Write" in scout.disallowed_tools
     launch = MandateOptions(engine="claude", shape="scout", scout_mode="launch")
     assert per_role_run(launch, "feature", "claude")
-    assert not per_role_run(MandateOptions(engine="claude", shape="scout"), "feature", "claude")
     assert not per_role_run(
-        MandateOptions(engine="claude", shape="scout", scout_mode="native"), "bug", "claude"
+        MandateOptions(engine="claude", shape="scout"), "feature", "claude", claude_native=True
+    )
+    assert per_role_run(MandateOptions(engine="claude", shape="scout"), "feature", "claude")
+    assert not per_role_run(
+        MandateOptions(engine="claude", shape="scout", scout_mode="native"),
+        "bug",
+        "claude",
+        claude_native=True,
     )
     assert not per_role_run(launch, "investigation", "claude")
     assert per_role_run(MandateOptions(engine="codex", shape="scout"), "feature", "claude")

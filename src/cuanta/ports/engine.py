@@ -33,6 +33,11 @@ class TurnInput(Protocol):
 
 
 @runtime_checkable
+class FlagHelp(Protocol):
+    def help_text(self) -> str: ...
+
+
+@runtime_checkable
 class RunStop(Protocol):
     def halt(self, subtype: str) -> None: ...
 

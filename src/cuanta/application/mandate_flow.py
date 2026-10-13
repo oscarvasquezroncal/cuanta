@@ -210,14 +210,18 @@ def fast_defaults(
     return replace(options, model=resolve(choice.model), variant=options.variant or choice.variant)
 
 
-def per_role_run(options: MandateOptions, task_type: str, default_engine: str) -> bool:
+def per_role_run(
+    options: MandateOptions, task_type: str, default_engine: str, claude_native: bool = False
+) -> bool:
     if options.profile == ImplementationProfile.FAST:
         return False
     single = single_context(task_type, options.simple, parse_shape(options.shape))
     pipeline = not options.simple and not single
     engine = options.engine or default_engine
-    claude_launch = parse_provider(engine) is Provider.CLAUDE and scout_launch(options, task_type)
-    return runs_per_role(engine, pipeline) or claude_launch
+    claude = parse_provider(engine) is Provider.CLAUDE
+    claude_launch = claude and scout_launch(options, task_type)
+    native = claude_native or (claude and task_type == INVESTIGATION)
+    return runs_per_role(engine, pipeline, native) or claude_launch
 
 
 def has_scout(applied: Applied | None) -> bool:

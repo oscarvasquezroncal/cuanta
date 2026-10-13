@@ -64,8 +64,11 @@ def provider_title(provider: Provider) -> Message:
     return msg(PROVIDER_TITLES[provider])
 
 
-def runs_per_role(engine: str, pipeline: bool) -> bool:
-    return pipeline and parse_provider(engine) is Provider.CODEX
+def runs_per_role(engine: str, pipeline: bool, claude_native: bool = False) -> bool:
+    provider = parse_provider(engine)
+    return pipeline and (
+        provider is Provider.CODEX or (provider is Provider.CLAUDE and not claude_native)
+    )
 
 
 def _team_provider(engines: set[str]) -> Provider | None:
@@ -98,7 +101,7 @@ def provider_attempts(
         provider = parse_provider(run.engine)
         if run.kind != MANDATE or provider is None or not run.outcome:
             continue
-        if shapes.get(run.id) != PIPELINE or runs_per_role(run.engine, True):
+        if shapes.get(run.id) != PIPELINE or runs_per_role(run.engine, True, True):
             continue
         found.append(
             ProviderAttempt(provider, run.task_type, run.cost_usd, run.outcome == ACCEPTED)

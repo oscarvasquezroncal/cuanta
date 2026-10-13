@@ -208,7 +208,7 @@ def test_cross_cli_passes_resolved_turn_limit_to_every_claude_role(
     if expected is None:
         assert all("--max-turns" not in call for call in launches)
         assert "Turn limit: enforced" not in result.stdout
-        assert "no limits" in result.stdout
+        assert "(forecast P90)" in result.stdout
     else:
         assert all(call[call.index("--max-turns") + 1] == str(expected) for call in launches)
         assert "Turn limit: enforced" in result.stdout
@@ -424,22 +424,27 @@ def test_a_gpt_team_is_capped_by_the_mandate_spend_cap(
     result = invoke([*args, *flags])
     assert result.exit_code == 0, result.stdout
     data = json.loads(result.stdout)
-    assert data["budget_usd"] == pytest.approx(cap)
+    expected = cap or round(2 * float(data["envelope"]["p90_usd"]), 2)
+    assert data["budget_usd"] == pytest.approx(expected)
     assert not fake_runner.stdins
 
 
-def test_a_default_gpt_team_runs_without_a_cap_unless_a_limit_is_set(
+def test_a_default_gpt_team_is_capped_by_its_forecast_unless_a_limit_is_set(
     tmp_path: Path, fake_runner: FakeRunner
 ) -> None:
     codex_ready(fake_runner)
     args = cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--dry-run", "--json")
     app = mandate_limits(MandateOptions(depth=DEFAULT_DEPTH.value), "bug", LimitSettings())
+    assert app.budget_usd == 0.0
     result = invoke(args)
     assert result.exit_code == 0, result.stdout
     data = json.loads(result.stdout)
-    assert data["budget_usd"] == 0.0 == app.budget_usd
-    assert data["limits"] == {"budget_usd": None, "max_turns": None, "wall_min": None}
-    assert "no limits" in data["team"]
+    p90 = float(data["envelope"]["p90_usd"])
+    assert data["budget_usd"] == pytest.approx(round(2 * p90, 2))
+    assert data["limits"]["soft_usd"] == pytest.approx(round(p90, 2))
+    assert any("(forecast P90)" in line for line in data["team"])
+    off = invoke([*args, "--max-budget-usd", "0"])
+    assert json.loads(off.stdout)["budget_usd"] == 0.0
     setting = invoke(args, env={"CUANTA_BUDGET_USD": "0.4"})
     assert setting.exit_code == 0, setting.stdout
     assert json.loads(setting.stdout)["budget_usd"] == pytest.approx(0.4)
@@ -455,13 +460,15 @@ def test_a_default_gpt_team_runs_without_a_cap_unless_a_limit_is_set(
     ("flags", "cap"),
     [((), 0.0), (("--depth", "deep"), 0.0), (("--max-budget-usd", "0.3"), 0.3)],
 )
-def test_a_claude_team_as_separate_launches_has_no_cap_unless_one_is_set(
+def test_a_claude_team_as_separate_launches_is_capped_by_its_forecast_unless_one_is_set(
     tmp_path: Path, fake_runner: FakeRunner, flags: tuple[str, ...], cap: float
 ) -> None:
     args = cross_args(tmp_path, "--cross-engine", "--route", "fixed", "--dry-run", "--json")
     result = invoke([*args, *flags])
     assert result.exit_code == 0, result.stdout
-    assert json.loads(result.stdout)["budget_usd"] == pytest.approx(cap)
+    data = json.loads(result.stdout)
+    expected = cap or round(2 * float(data["envelope"]["p90_usd"]), 2)
+    assert data["budget_usd"] == pytest.approx(expected)
 
 
 def test_a_gpt_team_launch_spends_within_the_max_budget(

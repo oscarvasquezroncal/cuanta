@@ -295,12 +295,14 @@ def role_steering(
     share: float,
     forecast: PlannedForecast | None,
     progress: ProgressSink,
+    soft_usd: float = 0.0,
 ) -> Steering | None:
     if setup is None or share <= 0 or not launcher.steerable():
         return None
     plan = claude_role_plan(
         setup, role, spec.model, share, spec.max_budget_usd, forecast, spec.change_plan
     )
+    plan = replace(plan, soft_usd=soft_usd)
     governor = Governor([plan], setup.clock, spec.cwd, setup.prices)
     return Steering(governor, role, launcher.send_turn, progress)
 

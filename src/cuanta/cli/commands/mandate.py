@@ -924,7 +924,7 @@ def _per_role(
 
     if args.cross_engine:
         return True
-    return per_role_run(options, task_type, container.config.engine)
+    return per_role_run(options, task_type, container.config.engine, container.claude_native)
 
 
 def team_limits(
@@ -990,7 +990,47 @@ def _team_plan(
     if options.pure:
         plan = container.pure_plan(plan, options.model)
     limits = team_limits(container, args, options, request.type, provider)
+    limits = team_caps(container, args, options, request, plan, provider, choice, limits)
     return options, plan, provider, limits, docs
+
+
+def team_caps(
+    container: "Container",
+    args: MandateArgs,
+    options: "MandateOptions",
+    request: "MandateRequest",
+    plan: "RoutePlan",
+    provider: "Provider",
+    choice: "ShapeChoice",
+    limits: "RunLimits",
+) -> "RunLimits":
+    from cuanta.domain.envelope import PIPELINE_SHAPE, SCOUT_SHAPE
+    from cuanta.domain.errors import CuantaError
+    from cuanta.domain.limits import LimitsMode, forecast_limits
+
+    explicit = (
+        args.budget is not None
+        or args.cross_budget is not None
+        or options.limits == LimitsMode.OFF.value
+    )
+    if explicit or limits.budget_usd > 0:
+        return limits
+    try:
+        planned = container.team_forecast(
+            request.type,
+            plan,
+            provider,
+            options.depth,
+            SCOUT_SHAPE if choice.scout else PIPELINE_SHAPE,
+            0.0,
+            container.change_plan(request),
+            max_turns=limits.max_turns,
+            request=request,
+        )
+    except (CuantaError, ValueError):
+        return limits
+    container.team_planned = planned
+    return forecast_limits(limits, False, planned.envelope.p90_usd, container.limit_settings())
 
 
 def per_role_title(provider: "Provider") -> str:
@@ -1109,6 +1149,7 @@ def run_cross_engine(
     from cuanta.domain.limits import limits_message
     from cuanta.domain.messages import msg
     from cuanta.domain.progress import Note, Status
+    from cuanta.domain.routing import Role
 
     options, plan, provider, limits, docs = _team_plan(container, args, request, choice)
     budget = limits.budget_usd
@@ -1147,6 +1188,7 @@ def run_cross_engine(
     from cuanta.cli.live_run import RunProgress
 
     with RunProgress(session.presenter, session.options.verbose) as progress:
+        progress.watch(container.spend_watch(container.team_planned))
         if args.sandbox:
             isolated = container.run_sandboxed_cross(
                 container.shared_ledger(),
@@ -1172,8 +1214,18 @@ def run_cross_engine(
                 depth=options.depth,
                 implementation=options,
                 wall_s=limits.wall_s,
+                soft_usd=limits.soft_usd,
             )
             report = pipeline.run(request, plan, progress, progress.observe)
+    senior = plan.route(Role.SENIOR)
+    publish_launch_record(
+        session,
+        container,
+        [step.run_id for step in report.steps],
+        container.advisor_choice(options.advisor, senior.model.resolved or senior.model.id)
+        if senior is not None and senior.model is not None
+        else "",
+    )
     if session.options.verbose:
         blocks = cross_blocks(report, budget, per_role_title(provider))
         blocks.extend(Line(line, Status.INFO) for line in scout_lines(cross_summary(report)))

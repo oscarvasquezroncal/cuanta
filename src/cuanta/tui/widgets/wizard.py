@@ -5,6 +5,7 @@ import secrets
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import replace
+from functools import cached_property
 
 from textual import work
 from textual.app import ComposeResult
@@ -1562,7 +1563,9 @@ class MandateWizard(Vertical):
             plan, estimate = self._services.team_plan(request, options)
             cards = self._services.team_cards(plan, estimate, options, request.type)
             per_role = runs_per_role(
-                options.engine, not options.simple and self.kind != INVESTIGATION
+                options.engine,
+                not options.simple and self.kind != INVESTIGATION,
+                self._native,
             )
             verify = self._services.change_plan(request).verify if per_role else ()
             advice = self._services.team_advice(request.type)
@@ -1882,11 +1885,17 @@ class MandateWizard(Vertical):
         variant = self.implementation_variant or choice.variant
         return f"{model} · {self._t(f'wizard.variant_{variant}')}"
 
+    @cached_property
+    def _native(self) -> bool:
+        return self._services.claude_native
+
     @property
     def per_role(self) -> bool:
         if self.fast_profile:
             return False
-        return runs_per_role(self.engine, self.pipeline) or (self.pipeline and self.scout_launch)
+        return runs_per_role(self.engine, self.pipeline, self._native) or (
+            self.pipeline and self.scout_launch
+        )
 
     @property
     def run_note(self) -> str:

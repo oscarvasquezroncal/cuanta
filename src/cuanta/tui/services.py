@@ -188,6 +188,9 @@ class LoopState:
 class Services(Protocol):
     def record_failure(self, error: BaseException) -> str: ...
 
+    @property
+    def claude_native(self) -> bool: ...
+
     def result_shown(self, run_id: str) -> None: ...
 
     @property
@@ -388,6 +391,14 @@ class ContainerServices:
     def build_warning(self, engine: str) -> Message | None:
         return msg("guarantee.codex_builds") if engine == "codex" and os.name == "nt" else None
 
+    @property
+    def claude_native(self) -> bool:
+        container = self._container()
+        try:
+            return container.claude_native
+        finally:
+            container.close()
+
     def __init__(self, project: Path) -> None:
         self._project = project
         self._flow: MandateFlow | CrossEnginePipeline | None = None
@@ -542,7 +553,9 @@ class ContainerServices:
         try:
             options, _ = container.shaped_options(request, options)
             engine = options.engine or container.config.engine
-            if per_role_run(options, request.type, container.config.engine):
+            if per_role_run(
+                options, request.type, container.config.engine, container.claude_native
+            ):
                 return role_preview(request, role_plan(container, request, options), engine)
             flow = container.mandate_flow(container.shared_ledger())
             return preview_of(flow.prepare(request, signatures, options, preview=True))
@@ -562,7 +575,9 @@ class ContainerServices:
         container.progress = sink
         try:
             options, _ = container.shaped_options(request, options)
-            if per_role_run(options, request.type, container.config.engine):
+            if per_role_run(
+                options, request.type, container.config.engine, container.claude_native
+            ):
                 return self._run_cross(container, request, options, progress, observer)
             if options.sandbox:
                 return self._run_sandboxed(
@@ -1026,7 +1041,9 @@ class ContainerServices:
             )
             docs = container.docs_choice(request, options)
             plan = container.shape_plan(plan, choice, docs)
-            per_role = per_role_run(options, request.type, container.config.engine)
+            per_role = per_role_run(
+                options, request.type, container.config.engine, container.claude_native
+            )
             if options.pure and not fast:
                 pinned = options.model or ("" if per_role else route_model(plan, Role.ORCHESTRATOR))
                 plan = container.pure_plan(plan, pinned)
@@ -1109,7 +1126,9 @@ class ContainerServices:
         container = self._container()
         try:
             launch = estimate.shape is not None and estimate.shape.launch
-            if launch or per_role_run(options, task_type, container.config.engine):
+            if launch or per_role_run(
+                options, task_type, container.config.engine, container.claude_native
+            ):
                 shares = {cost.role: cost.share for cost in estimate.roles if cost.share > 0}
                 limits = mandate_limits(options, task_type, limit_settings(container.config))
                 return team_cards(

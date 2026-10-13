@@ -586,6 +586,8 @@ def snapshot(
 
 @dataclass
 class FakeServices:
+    claude_native = True
+
     def record_failure(self, error: BaseException) -> str:
         return ".cuanta/logs/2026-10-04.log"
 
@@ -694,7 +696,7 @@ class FakeServices:
         if self.service_error is not None:
             raise self.service_error
         engine = options.engine or "claude"
-        per_role = per_role_run(options, request.type, "claude")
+        per_role = per_role_run(options, request.type, "claude", self.claude_native)
         single = single_context(request.type, options.simple, parse_shape(options.shape))
         native = engine == "claude" and not options.simple and not single
         roles = tuple(
@@ -1220,7 +1222,9 @@ class FakeServices:
         )
         if profile is ImplementationProfile.FAST:
             return plan
-        per_role = per_role_run(replace(options, profile=profile.value), request.type, "claude")
+        per_role = per_role_run(
+            replace(options, profile=profile.value), request.type, "claude", self.claude_native
+        )
         if options.pure:
             orchestrator = "" if per_role else route_model(plan, Role.ORCHESTRATOR)
             return pure_plan(plan, options.model or orchestrator, self.catalog)
@@ -1246,7 +1250,7 @@ class FakeServices:
     def team_cards(
         self, plan: RoutePlan, estimate: Estimate, options: MandateOptions, task_type: str
     ) -> tuple[RoleCard, ...]:
-        if per_role_run(options, task_type, "claude"):
+        if per_role_run(options, task_type, "claude", self.claude_native):
             shares = {cost.role: cost.share for cost in estimate.roles if cost.share > 0}
             limits = mandate_limits(options, task_type, self.limits)
             return team_cards(

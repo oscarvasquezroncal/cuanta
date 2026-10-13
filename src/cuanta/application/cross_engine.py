@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 
 from cuanta.application.engine_run import EngineLauncher, Launch, LaunchSpec
@@ -90,6 +92,7 @@ from cuanta.domain.mandate import (
     with_defaults,
 )
 from cuanta.domain.messages import Message, message_payload, msg
+from cuanta.domain.output_schema import JSON_SCHEMA_FLAG, role_output_schema
 from cuanta.domain.pack import ContextPack
 from cuanta.domain.progress import Status, finished, note, started
 from cuanta.domain.read_discipline import READ_LINE_LIMIT, discipline_prompt
@@ -119,7 +122,7 @@ from cuanta.domain.role_handoff import (
 )
 from cuanta.domain.role_tools import role_tools
 from cuanta.domain.routing import Provider, Role, parse_provider
-from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, docs_only
+from cuanta.domain.sandbox import SANDBOX_MODE, STATE_ROOT_ENV, SandboxLaunch, docs_only
 from cuanta.domain.scout import (
     SCOUT_TOOLS,
     DocsChoice,
@@ -134,8 +137,10 @@ from cuanta.domain.telemetry import unreadable_note
 from cuanta.ports.capsules import CapsuleStore
 from cuanta.ports.engine import Engine
 from cuanta.ports.progress import ProgressSink
+from cuanta.ports.sandbox import SandboxCopy
 
 CROSS_ORDER = (Role.ANALYST, Role.SENIOR, Role.TESTER, Role.DOCS)
+ABANDON_JOIN_S = 30.0
 SCOUT_ORDER = (Role.SCOUT, Role.SENIOR, Role.TESTER, Role.DOCS)
 TEAM_ROLES = frozenset({*CROSS_ORDER, *SCOUT_ORDER})
 READ_ONLY_ROLES = frozenset({Role.ANALYST, Role.SCOUT})
@@ -553,11 +558,42 @@ class _Turn:
     future: tuple[Role, ...]
 
 
+class CopyMaker(Protocol):
+    def create(self, origin: Path) -> SandboxCopy: ...
+
+    def manifest(self, copy: SandboxCopy) -> dict[str, str]: ...
+
+    def read(self, copy: SandboxCopy, relative: str) -> bytes | None: ...
+
+    def remove(self, copy: SandboxCopy) -> bool: ...
+
+
+def _ignored(_event: EngineEvent) -> None:
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class DocsBeside:
+    sandbox: CopyMaker
+    origin: Path
+    write: Callable[[str, bytes], None]
+
+
+@dataclass
+class _Beside:
+    turn: _Turn
+    copy: SandboxCopy
+    thread: threading.Thread
+    found: dict[str, Launch] = field(default_factory=dict)
+
+
 @dataclass(frozen=True, slots=True)
 class RoleTuning:
     efforts: Mapping[str, str] = field(default_factory=dict)
     advisor_for: Callable[[str], str] | None = None
     advisor_roles: frozenset[str] = frozenset()
+    soft_fraction: float = 0.0
+    beside: DocsBeside | None = None
 
     def advisor(self, role: Role, engine: str, model: str) -> str:
         if self.advisor_for is None or engine != "claude" or role.value not in self.advisor_roles:
@@ -973,24 +1009,9 @@ class CrossEnginePipeline:
             )
             progress.publish(note(Status.INFO, msg(key, cap=f"{reserve:.4f}")))
         self.completed = state.steps
-        for role in order:
-            halt = self._halt(state)
-            if halt is not None:
-                return halt
-            self._timing_run = ""
-            self._timing_role = role.value
-            with self._timing.measure("forecast_plan", role=role.value):
-                turn = self._admit(state, role, definitions)
-            if isinstance(turn, CrossReport):
-                return turn
-            if turn is None:
-                continue
-            try:
-                stop = self._perform(state, turn)
-            except _WallExpired:
-                return self._wall_stop(state)
-            if stop is not None:
-                return stop
+        stopped = self._roles(state, order, definitions)
+        if stopped is not None:
+            return stopped
         if not state.steps:
             return state.report(CompletionState.FAILED)
         salvaged = any(step.salvaged and step.role is Role.SENIOR for step in state.steps)
@@ -1100,7 +1121,160 @@ class CrossEnginePipeline:
         spec = self._spec(
             state, role, route.engine, model, definition_for(role, definitions), role_cap
         )
+        if route.engine == "claude" and launcher.accepts_flag(JSON_SCHEMA_FLAG):
+            spec = replace(spec, json_schema=role_output_schema())
         return _Turn(role, route.engine, model, launcher, spec, role_cap, read_only, future)
+
+    def _roles(
+        self, state: _Pass, order: Sequence[Role], definitions: Sequence[AgentDefinition]
+    ) -> CrossReport | None:
+        pending: _Beside | None = None
+        try:
+            for role in order:
+                if role is Role.DOCS and pending is not None:
+                    beside, pending = pending, None
+                    self._join_beside(state, beside)
+                    continue
+                halt = self._halt(state)
+                if halt is not None:
+                    return halt
+                self._timing_run = ""
+                self._timing_role = role.value
+                with self._timing.measure("forecast_plan", role=role.value):
+                    turn = self._admit(state, role, definitions)
+                if isinstance(turn, CrossReport):
+                    return turn
+                if turn is None:
+                    continue
+                if role is Role.TESTER:
+                    pending = self._start_beside(state, definitions)
+                try:
+                    stop = self._perform(state, turn)
+                except _WallExpired:
+                    return self._wall_stop(state)
+                if stop is not None:
+                    return stop
+        finally:
+            if pending is not None:
+                self._abandon(pending)
+        return None
+
+    def _start_beside(self, state: _Pass, definitions: Sequence[AgentDefinition]) -> _Beside | None:
+        beside = self._tuning.beside
+        left = self._wall_left()
+        if (
+            beside is None
+            or Role.DOCS not in state.routed
+            or state.docs is None
+            or not state.docs.on
+            or left == 0.0
+        ):
+            return None
+        turn = self._admit(state, Role.DOCS, definitions)
+        if not isinstance(turn, _Turn):
+            return None
+        try:
+            copy = beside.sandbox.create(beside.origin)
+        except OSError:
+            return None
+        cap = turn.role_cap
+        if self._budget > 0:
+            cap = min(cap, state.shares.get(Role.DOCS, cap))
+        spec = replace(
+            turn.spec,
+            cwd=str(copy.root),
+            temporary_copy=True,
+            role=Role.DOCS.value,
+            max_budget_usd=min(turn.spec.max_budget_usd, cap) if cap > 0 else 0.0,
+            env=(*turn.spec.env, (STATE_ROOT_ENV, str(beside.origin))),
+        )
+        if left is not None:
+            spec = replace(spec, max_wall_s=left, wall_limit_s=self._wall_s)
+        pending = _Beside(replace(turn, spec=spec, role_cap=cap), copy, threading.Thread())
+
+        def work() -> None:
+            pending.found["launch"] = turn.launcher.launch(spec, _ignored)
+
+        pending.thread = threading.Thread(target=work, daemon=True)
+        state.progress.publish(note(Status.INFO, msg("cross.docs_beside")))
+        pending.thread.start()
+        return pending
+
+    def _abandon(self, pending: _Beside) -> None:
+        beside = self._tuning.beside
+        pending.turn.launcher.engine.cancel()
+        pending.thread.join(timeout=ABANDON_JOIN_S)
+        if beside is not None:
+            beside.sandbox.remove(pending.copy)
+
+    def _join_beside(self, state: _Pass, pending: _Beside) -> None:
+        beside = self._tuning.beside
+        if beside is None:
+            return
+        pending.thread.join()
+        turn = pending.turn
+        try:
+            current = beside.sandbox.manifest(pending.copy)
+            base = pending.copy.hashes()
+            changed = sorted(path for path, digest in current.items() if base.get(path) != digest)
+            kept = tuple(path for path in changed if docs_only((path,)))
+            for path in kept:
+                data = beside.sandbox.read(pending.copy, path)
+                if data is not None:
+                    beside.write(path, data)
+        finally:
+            beside.sandbox.remove(pending.copy)
+        dropped = tuple(path for path in changed if path not in kept)
+        if dropped:
+            state.progress.publish(
+                note(Status.WARN, msg("cross.docs_outside", paths=", ".join(dropped)))
+            )
+        state.baseline = self._snap()
+        launch = pending.found.get("launch")
+        if launch is None:
+            state.progress.publish(finished("cross-docs", Status.FAIL, msg("cross.docs_lost")))
+            return
+        outcome = launch.outcome
+        ok = outcome is not None and outcome.ok
+        text = outcome.result.text if outcome is not None and outcome.result else ""
+        state.charge(launch.run, self._spend(launch.run))
+        clipped, capsule = self._capsule(text)
+        handoff = self._stamp(
+            build_handoff(
+                text,
+                Role.DOCS.value,
+                engine=turn.engine,
+                model=turn.model,
+                changed=kept,
+                run_id=launch.run.id,
+                capsule=capsule,
+            )
+        )
+        state.steps.append(
+            CrossStep(
+                Role.DOCS,
+                turn.engine,
+                turn.model,
+                launch.run.id,
+                ok,
+                launch.run.cost_usd,
+                clipped,
+                launch.run.cost_source,
+                turn.role_cap,
+                turn.spec.max_budget_usd,
+                changed_files=kept,
+                index_tools=turn.spec.index_tools is True,
+                partial=launch.run.partial,
+            )
+        )
+        state.handoffs.append(handoff)
+        state.progress.publish(
+            finished(
+                "cross-docs",
+                Status.OK if ok else Status.FAIL,
+                msg("cross.done", run=launch.run.id),
+            )
+        )
 
     def _held(self, state: _Pass) -> float:
         repairable = bool(state.verify) and self._verifier is not None
@@ -1405,8 +1579,18 @@ class CrossEnginePipeline:
     def _steering(self, state: _Pass, turn: _Turn) -> Steering | None:
         if turn.engine not in {"claude", "codex"}:
             return None
-        steer = role_steering if turn.engine == "claude" else codex_steering
-        return steer(
+        if turn.engine == "claude":
+            return role_steering(
+                self._governor,
+                turn.launcher,
+                turn.spec,
+                turn.role,
+                turn.role_cap,
+                state.forecast,
+                state.progress,
+                turn.role_cap * self._tuning.soft_fraction,
+            )
+        return codex_steering(
             self._governor,
             turn.launcher,
             turn.spec,

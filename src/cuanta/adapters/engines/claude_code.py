@@ -89,6 +89,8 @@ def build_command(binary: tuple[str, ...], request: EngineRequest) -> list[str]:
         command.extend(["--effort", effort])
     if request.advisor:
         command.extend(["--advisor", request.advisor])
+    if request.json_schema:
+        command.extend(["--json-schema", request.json_schema])
     if request.pure:
         command.extend(["--prompt-suggestions", "false"])
     if request.append_system_prompt:

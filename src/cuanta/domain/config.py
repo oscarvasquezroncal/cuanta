@@ -10,6 +10,8 @@ DEFAULT_PORT = 4318
 SCOUT_MODES = ("native", "launch")
 DOCS_MODES = ("auto", "on", "off")
 LIMITS_MODES = ("off", "depth")
+CLAUDE_TEAMS = ("roles", "native")
+CLAUDE_NATIVE = "native"
 LIMIT_ALIASES = (("budget.usd", "limits.budget_usd"), ("runs.max_turns", "limits.max_turns"))
 IMPLEMENTATION_TOOLS = frozenset(
     {
@@ -53,6 +55,7 @@ class Config:
     limits_mode: str = "off"
     soft_p90: float = 1.0
     hard_p90: float = 2.0
+    claude_team: str = "roles"
     cache_ttl_s: int = 0
     cache_auth: str = ""
     cache_engine_version: str = ""
@@ -130,6 +133,7 @@ KEY_MAP: dict[str, str] = {
     "limits.budget_usd": "budget_usd",
     "limits.max_turns": "max_turns",
     "limits.wall_min": "wall_min",
+    "runs.claude_team": "claude_team",
     "limits.soft_p90": "soft_p90",
     "limits.hard_p90": "hard_p90",
     "runs.limits": "limits_mode",
@@ -145,6 +149,7 @@ KEY_MAP: dict[str, str] = {
 
 ENV_MAP: dict[str, str] = {
     "CUANTA_ENGINE": "engine",
+    "CUANTA_CLAUDE_TEAM": "claude_team",
     "CUANTA_INSTINCT": "instinct",
     "CUANTA_EMOJI": "emoji",
     "CUANTA_THEME": "theme",
@@ -264,6 +269,8 @@ def _drop_invalid(layer: dict[str, object]) -> None:
         del layer["docs_mode"]
     if layer.get("limits_mode") not in (None, *LIMITS_MODES):
         del layer["limits_mode"]
+    if layer.get("claude_team") not in (None, *CLAUDE_TEAMS):
+        del layer["claude_team"]
     if layer.get("verify_mode") not in (None, "auto", "affected", "full", "off"):
         del layer["verify_mode"]
     for name in (

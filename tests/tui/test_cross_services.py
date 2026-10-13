@@ -174,6 +174,7 @@ def test_a_failed_team_forecast_leaves_the_team_step_with_a_warning(
         shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
         fast_ready=lambda name: True,
         routing_pinned=lambda mode: False,
+        claude_native=True,
         docs_choice=lambda request, options: None,
         shape_plan=lambda plan, shape, docs: plan,
         main_model_plan=lambda plan, model: plan,
@@ -231,6 +232,7 @@ def test_the_team_step_forecasts_the_auto_profile_with_the_default_of_its_kind(
         shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
         fast_ready=lambda name: ready,
         routing_pinned=lambda mode: pinned,
+        claude_native=True,
         claude_model=lambda alias: {"sonnet": "claude-sonnet-5-5"}.get(alias, alias),
         docs_choice=lambda request, options: None,
         shape_plan=lambda plan, shape, docs: plan,
@@ -255,6 +257,7 @@ def test_the_app_setup_says_whether_config_role_pins_keep_auto_balanced(
 
     container = SimpleNamespace(
         config=Config(engine="claude", implementation_profile="auto"),
+        claude_native=True,
         engine=lambda name: None,
         known_models=lambda: (),
         has_forge_agents=lambda: True,
@@ -290,6 +293,7 @@ def test_the_team_step_forecast_receives_the_whole_request(
         shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
         fast_ready=lambda name: True,
         routing_pinned=lambda mode: False,
+        claude_native=True,
         docs_choice=lambda request, options: None,
         shape_plan=lambda plan, shape, docs: plan,
         close=lambda: None,
@@ -343,6 +347,7 @@ def test_per_role_cards_show_the_guarantees_of_the_limits_each_launch_applies(
     found = estimate(team, (), PriceTable({}), "feature", "normal", options.budget_usd or 0.0)
     container = SimpleNamespace(
         config=Config(engine=engine),
+        claude_native=True,
         pipeline_index_tools=lambda name: True,
         build_blocked=frozenset,
         close=lambda: None,
@@ -420,6 +425,7 @@ def test_the_team_step_forecasts_the_balanced_model_variant_and_pure(
         shaped_options=lambda request, options: (options, ShapeChoice(Shape.PIPELINE)),
         fast_ready=lambda name: True,
         routing_pinned=lambda mode: False,
+        claude_native=True,
         docs_choice=lambda request, options: None,
         shape_plan=lambda plan, shape, docs: plan,
         pure_plan=pure_plan,

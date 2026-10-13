@@ -184,6 +184,7 @@ class Container:
     request_files: tuple[str, ...] = ()
     untyped_request: bool = False
     launch_decision: LaunchScope | None = None
+    team_planned: PlannedForecast | None = None
     _shared: Ledger | None = field(default=None, repr=False)
     _opened: list[Ledger] = field(default_factory=list, repr=False)
     decision_scope: DecisionScope = field(default_factory=_new_scope, repr=False)
@@ -1399,7 +1400,7 @@ class Container:
         refusal = scout_refusal(request.type, forced, options.simple, provider is not None, routed)
         if refusal is not None:
             raise DomainFailure(english(refusal[0]), refusal[1])
-        per_role = cross_engine or runs_per_role(engine, True)
+        per_role = cross_engine or runs_per_role(engine, True, self.claude_native)
         mode = ScoutMode.LAUNCH if per_role else parse_scout_mode(self.config.scout_mode)
         if forced is not None or provider is None:
             return choose_shape(request.type, forced, None, threshold, mode)
@@ -1912,8 +1913,10 @@ class Container:
         depth: str = "",
         implementation: MandateOptions | None = None,
         wall_s: float = 0.0,
+        soft_usd: float = 0.0,
     ) -> CrossEnginePipeline:
-        from cuanta.application.cross_engine import CrossEnginePipeline, RoleTuning
+        from cuanta.adapters.system.sandbox import LocalSandbox
+        from cuanta.application.cross_engine import CrossEnginePipeline, DocsBeside, RoleTuning
         from cuanta.application.run_reports import RunReports
         from cuanta.application.timing import PhaseRecorder
         from cuanta.domain.implementation import AUTO_PROFILE, ImplementationProfile
@@ -1947,6 +1950,14 @@ class Container:
                 dict(implementation.role_efforts) if implementation is not None else {},
                 lambda model: self.advisor_choice(advisor, model),
                 frozenset(role.value for role, default in TEAM_DEFAULTS.items() if default.advisor),
+                soft_usd / budget_usd if budget_usd > 0 else 0.0,
+                DocsBeside(
+                    LocalSandbox(now_iso=self.clock.now_iso),
+                    self.project,
+                    self.workspace().write_bytes,
+                )
+                if sandbox is None
+                else None,
             ),
             launchers=launcher,
             definitions=lambda: self.mandate_routing(ledger).definitions(),
@@ -2421,7 +2432,7 @@ class Container:
         )
         if arm is not None and arm.shape:
             options, _ = self.shaped_options(task.request, replace(options, shape=arm.shape))
-            if per_role_run(options, task.request.type, "claude"):
+            if per_role_run(options, task.request.type, "claude", self.claude_native):
                 raise DomainFailure(
                     "the bench runs the Claude team natively; this shape needs one launch per role",
                     "set runs.scout_mode = native for the bench",
@@ -3002,6 +3013,12 @@ class Container:
             neighbours=lambda: load_neighbours(self.project),
             remember=self.state_root is None,
         )
+
+    @property
+    def claude_native(self) -> bool:
+        from cuanta.domain.config import CLAUDE_NATIVE
+
+        return self.config.claude_team == CLAUDE_NATIVE
 
     def claude_version(self) -> str:
         claude = self.engine("claude")

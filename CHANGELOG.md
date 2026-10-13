@@ -24,6 +24,13 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   them. `--advisor auto|opus|fable|off` and `--fast` are new; Opus or Fable as the main model,
   `--pure`, xhigh effort, ultracode on a team and fast mode show their multiplier and need a
   confirmation or `--yes`.
+- **Claude teams that cuanta runs.** A Claude team now runs one launch per role, one after
+  another, with the per-role machinery GPT teams use: each role gets its share of the cap
+  (soft and hard caps from the forecast), runs once, sees only its tools and starts no
+  background agents. The docs role runs beside the tester in a copy and brings back only
+  documentation. Role outputs are asked with `--json-schema`, generated from the domain
+  dataclasses, with the text parser as the fallback. `[runs] claude_team = "native"` keeps the
+  orchestrator session.
 - **Context under control.** Cited ranges get their own 12k-token budget in the context pack.
   Sessions with the index refuse a Grep, Glob or Read before the first index query and ask
   Instinct whether a later one repeats what the index returned. Each agent and session gets

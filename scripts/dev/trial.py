@@ -54,7 +54,7 @@ def per_role(trial: Trial) -> bool:
     options = MandateOptions(
         engine=trial.engine, simple=trial.simple, shape=trial.shape, profile=trial.profile
     )
-    return trial.cross_engine or per_role_run(options, trial.type, trial.engine)
+    return trial.cross_engine or per_role_run(options, trial.type, trial.engine, True)
 
 
 def request_headroom(trial: Trial) -> float:
@@ -333,7 +333,12 @@ def run(spec: Spec, dry_run: bool, only: str | None, skip_accept: bool) -> int:
                 raise ValueError(f"Refusing {trial.name}: ${remaining:.4f} remains")
             reservation = budget.reserve(trial.name, trial.cap)
             unknown.append(trial.name)
-            launch = report.run(trial.name + "-mandate", arguments, timeout=3600)
+            launch = report.run(
+                trial.name + "-mandate",
+                arguments,
+                timeout=3600,
+                environment={**os.environ, "CUANTA_CLAUDE_TEAM": "native"},
+            )
             row = collect(report, spec, trial, payload(Path(launch.log)))
             budget.settle(reservation, row["cost_usd"], row["run_id"])
             rows.append(row)

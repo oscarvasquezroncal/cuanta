@@ -37,7 +37,7 @@ from cuanta.domain.plugins import FULL, LEAN
 from cuanta.domain.pricing import CostEstimate, PriceTable, estimate, estimate_cost
 from cuanta.domain.received import Received, ended_early, received_cost
 from cuanta.domain.telemetry import UNREADABLE_KIND, claude_env, run_env
-from cuanta.ports.engine import Engine, Resumable, RunStop, TurnInput
+from cuanta.ports.engine import Engine, FlagHelp, Resumable, RunStop, TurnInput
 from cuanta.ports.ledger import EventQuery, Ledger
 from cuanta.ports.listener import ListenerControl, ListenerStatus
 from cuanta.ports.system import Clock
@@ -86,6 +86,7 @@ class LaunchSpec:
     variant: str = ""
     pure: bool = False
     advisor: str = ""
+    json_schema: str = ""
     verify_commands: tuple[str, ...] = ()
     implementation_steps: bool = False
     max_wall_s: float = 0.0
@@ -206,6 +207,10 @@ class EngineLauncher:
     def preflight(self, spec: LaunchSpec) -> bool:
         return self._implementation(spec) is not None
 
+    def accepts_flag(self, flag: str) -> bool:
+        engine = self._engine
+        return isinstance(engine, FlagHelp) and flag in engine.help_text()
+
     def send_turn(self, text: str) -> bool:
         engine = self._engine
         sent = isinstance(engine, TurnInput) and engine.send_turn(text)
@@ -320,6 +325,7 @@ class EngineLauncher:
             pure=spec.pure,
             variant=spec.variant,
             advisor=spec.advisor,
+            json_schema=spec.json_schema,
         )
 
     def owns_profile(self, spec: LaunchSpec) -> bool:

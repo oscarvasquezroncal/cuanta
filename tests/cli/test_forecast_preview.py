@@ -81,9 +81,11 @@ def test_the_gpt_team_preview_forecasts_the_per_role_pipeline(
 ) -> None:
     codex_ready(fake_runner)
     args = cross_args(tmp_path, "--engine", "codex", "--route", "fixed", "--dry-run", "--json")
-    uncapped = json.loads(invoke(args).stdout)["envelope"]
+    uncapped = json.loads(invoke([*args, "--max-budget-usd", "0"]).stdout)["envelope"]
     assert uncapped["cap_usd"] is None and uncapped["margin_usd"] is None
     assert "no cap" in uncapped["lines"][0]
+    forecast = json.loads(invoke(args).stdout)
+    assert forecast["envelope"]["cap_usd"] == forecast["budget_usd"] > 0
     result = invoke([*args, "--max-budget-usd", "2"])
     assert result.exit_code == 0, result.stdout
     data = json.loads(result.stdout)

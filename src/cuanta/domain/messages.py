@@ -193,6 +193,11 @@ ENGLISH: dict[str, str] = {
     ),
     "instinct.launch_single": "one session (Sonnet)",
     "instinct.launch_team": "team (Haiku analyst and tester, Sonnet senior)",
+    "cross.docs_beside": "docs runs beside the tester in a copy of the project",
+    "cross.docs_outside": (
+        "docs changed files outside the documentation in its copy; not applied: {paths}"
+    ),
+    "cross.docs_lost": "docs ended without a result",
     "cache.role": (
         "cache {role}: {requests} requests, {share} read from cache, {misses} misses, "
         "first request {first} tokens"

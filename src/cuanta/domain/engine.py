@@ -150,6 +150,7 @@ class EngineRequest:
     variant: str = ""
     continue_results: bool = False
     advisor: str = ""
+    json_schema: str = ""
 
 
 @dataclass(frozen=True, slots=True)

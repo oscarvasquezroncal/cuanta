@@ -99,10 +99,12 @@ def test_a_team_has_one_provider_and_claude_is_the_default() -> None:
     assert Catalog("es").message(provider_title(Provider.CODEX)) == "Equipo GPT"
 
 
-def test_only_a_codex_pipeline_runs_one_launch_per_role() -> None:
+def test_codex_and_claude_pipelines_run_one_launch_per_role_unless_claude_is_native() -> None:
     assert runs_per_role("codex", True)
     assert not runs_per_role("codex", False)
-    assert not runs_per_role("claude", True)
+    assert runs_per_role("claude", True)
+    assert not runs_per_role("claude", True, claude_native=True)
+    assert runs_per_role("codex", True, claude_native=True)
     assert not runs_per_role("opencode", True)
     assert not runs_per_role("", True)
 
