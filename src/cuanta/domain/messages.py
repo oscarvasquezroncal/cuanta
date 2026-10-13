@@ -320,6 +320,14 @@ ENGLISH: dict[str, str] = {
         "PYTHONHOME={path} — other Pythons cuanta starts (graphify, test runners) inherit it "
         "and can load the wrong standard library; unset it unless they all use that Python"
     ),
+    "doctor.lsp.server": (
+        "pyright-langserver is not on PATH, so writing sessions get no LSP diagnostics after "
+        "each edit"
+    ),
+    "doctor.lsp.plugin": (
+        "pyright-langserver is on PATH but the pyright-lsp plugin is not installed in Claude Code"
+    ),
+    "doctor.lsp.ready": "pyright-lsp is enabled in writing sessions",
     "doctor.engine.missing": "not found",
     "doctor.engine.found": "{version}",
     "doctor.whiskers.strong": "VERIFY_TIER={tier} — {evidence}",

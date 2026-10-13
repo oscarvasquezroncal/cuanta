@@ -23,6 +23,7 @@ from cuanta.domain.sandbox import STATE_ROOT_ENV
 from cuanta.ports.progress import ProgressSink
 from cuanta.ports.system import Clock, ProcessRunner
 
+UNBOUNDED_CHECK_S = 86_400.0
 BUILTIN_TEST_RUNNERS = {
     "pytest": "cuanta.adapters.testing.pytest_runner:PytestRunner",
     "jest": "cuanta.adapters.testing.jest_runner:JestRunner",
@@ -731,8 +732,11 @@ class Container:
     def implementation_session(
         self, spec: LaunchSpec, ledger: Ledger
     ) -> ImplementationSession | None:
+        from cuanta.adapters.graph.file_graph import load_neighbours
         from cuanta.application.implementer import ImplementationSession, VerificationBaselines
+        from cuanta.application.scoped_checks import ScopedChecks
         from cuanta.application.timing import PhaseRecorder
+        from cuanta.domain.change_plan import ChangePlan
         from cuanta.domain.errors import DomainFailure
         from cuanta.domain.implementation import (
             DIAGNOSTICS_VERSION,
@@ -741,6 +745,8 @@ class Container:
             unusable_reasons,
             unusable_results,
         )
+        from cuanta.domain.scoped_checks import plan_sources
+        from cuanta.domain.verification import pytest_parallel
 
         if spec.read_only or spec.kind not in {"mandate", "cross"}:
             return None
@@ -763,18 +769,26 @@ class Container:
         verifier = self.verifier()
         timing = PhaseRecorder(self.clock, ledger)
         snapshot = self.project_snapshot()
+        scoped = ScopedChecks(
+            verifier,
+            commands,
+            plan_sources(spec.change_plan or ChangePlan()),
+            self.project_snapshot,
+            bool(pytest_parallel(self.workspace().read_text("pyproject.toml") or "", "pytest")),
+            load_neighbours(self.project),
+        )
         for name in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "uv.lock"):
             digest = self.workspace().sha256(name)
             if digest is not None:
                 snapshot[name] = digest
         context = baseline_key(
             dict(self.extra_env),
-            (stack.language_version, stack.framework_version),
+            (stack.language_version, stack.framework_version, scoped.signature),
             DIAGNOSTICS_VERSION,
         )
         with timing.measure("verification", spec.run_id, spec.role):
             baseline = VerificationBaselines(self.state_workspace()).get(
-                snapshot, commands, verifier.run_checks, lambda: False, context
+                snapshot, commands, scoped.baseline, lambda: False, context
             )
         reasons = unusable_reasons(baseline, commands)
         if reasons:
@@ -786,11 +800,12 @@ class Container:
                     for result in unusable_results(baseline)
                 ),
             )
+            scoped.close()
             raise UnusableVerification(reasons)
         return ImplementationSession(
             commands,
             baseline,
-            verifier.run_checks,
+            scoped,
             self.clock.monotonic,
             spec.max_budget_usd,
             self.config.repair_rounds,
@@ -799,6 +814,8 @@ class Container:
             spec.max_turns,
             measured=lambda phase, seconds: timing.seconds(phase, seconds, spec.run_id, spec.role),
             snapshot=self.project_snapshot,
+            final_verify=scoped.final,
+            close=scoped.close,
         )
 
     def guard_profile(self, spec: LaunchSpec) -> tuple[str, str]:
@@ -844,6 +861,18 @@ class Container:
             model=spec.model,
             pure=spec.pure,
             variant=spec.variant,
+            lsp=not plan.read_only and self.lsp_ready(),
+        )
+
+    def lsp_ready(self) -> bool:
+        import shutil
+
+        from cuanta.adapters.engines.claude_plugins import installed_plugins
+        from cuanta.domain.plugins import LSP_SERVER, lsp_ready
+
+        language = self.detector().run(with_engines=False).stack.language
+        return lsp_ready(
+            language, shutil.which(LSP_SERVER) is not None, installed_plugins(self.home)
         )
 
     def index_server_command(self) -> tuple[str, ...]:
@@ -1814,7 +1843,14 @@ class Container:
         from cuanta.application.verification import Verifier
 
         env = {name: value for name, value in self.extra_env if name != STATE_ROOT_ENV}
-        return Verifier(self.runner, self.project, os.name == "nt", env or None)
+        return Verifier(
+            self.runner,
+            self.project,
+            os.name == "nt",
+            env or None,
+            timeout_s=self.config.verify_timeout_s or UNBOUNDED_CHECK_S,
+            cores=os.cpu_count(),
+        )
 
     def project_lines(self, relative: str) -> list[str] | None:
         text = self.workspace().read_text(relative)
@@ -2893,12 +2929,14 @@ class Container:
         )
 
     def doctor(self) -> Doctor:
+        import shutil
         import sys
 
         from cuanta.adapters.engines.claude_plugins import installed_plugins
         from cuanta.adapters.instinct.jev import JevInstinct
         from cuanta.adapters.storage.migrations import LATEST_VERSION
         from cuanta.application import doctor
+        from cuanta.domain.plugins import LSP_SERVER
 
         workspace = self.workspace()
         jev = JevInstinct()
@@ -2910,6 +2948,10 @@ class Container:
                 doctor.engines_check,
                 doctor.verify_check,
                 doctor.graph_check,
+                doctor.lsp_check(
+                    lambda: shutil.which(LSP_SERVER) is not None,
+                    lambda: installed_plugins(self.home),
+                ),
                 doctor.engine_flags_check(self.engine),
                 doctor.forge_state_check(workspace),
                 doctor.forge_version_check(self.forge_kit()),

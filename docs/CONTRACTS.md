@@ -110,6 +110,13 @@ falls back to its owned observation; these measurements do not prove complete to
 
 | GR-03 | Bare `graphify update .` refreshes code through AST without a model call; manifest file mtimes identify source freshness | graphify 0.9.55 | verified | 2026-09-27 | Installed `cli.py` update branch invokes `watch._rebuild_code`; local graph updates succeed. Current graph uses `nodes` and `links` with unique IDs, file/line provenance, relation and confidence; manifest entries carry mtime. `adapters/graph/file_graph.py` imports both links/edges and rejects stale sources. Background workers verify executable health before update and never block the foreground index. Since H3 (2026-10-03) `cuanta init` relies on the detached worker for its graph update: on Windows 11 `cuanta --plain init <forged 120-file project> --yes --skip-telemetry` returned in 0.82 s and the bootstrap worker outlived the launcher (`graph-refresh.log` went from scheduled to updated about 5 s later); macOS and Linux (`start_new_session`) were not probed. |
 
+## Verification tools
+
+| ID | Contract | Engine / version | Status | Date | Evidence |
+|---|---|---|---|---|---|
+| VT-01 | `dmypy --status-file <file> run -- <mypy args>` starts the daemon when needed, prints mypy's diagnostics, and `stop`/`kill` end it; it works on Windows | mypy 2.3.1 | verified | 2026-10-13 | On Windows 11 in this repository: `uv run dmypy --status-file .cuanta/tmp/dmypy.json run -- --strict` took 17.3 s cold and 1.2 s warm over 704 files (`uv run mypy` about 26 s), and `stop` returned in 0.5 s. `application/scoped_checks.py` kills and retries a broken daemon once, then falls back to plain `mypy` for the session; the last green check always runs plain `mypy`. |
+| LSP-01 | The `pyright-lsp@claude-plugins-official` plugin gives Claude Code an `LSP` tool and diagnostics after each edit when `pyright-langserver` is on PATH | Claude Code 2.1.296 | unverified | 2026-10-13 | Documented plugin; not installed on the verification host (`pyright-langserver` absent), so no live run. cuanta enables it in a writing session's lean `enabledPlugins` only for Python projects when the plugin is installed and the server is on PATH; otherwise nothing changes and `cuanta doctor` suggests `npm install -g pyright` and `claude plugin install pyright-lsp@claude-plugins-official`. Fallback for any Claude Code version without plugin LSP support: the key is ignored and verification is unchanged. |
+
 ## uv
 
 | ID | Contract | Engine / version | Status | Date | Evidence |

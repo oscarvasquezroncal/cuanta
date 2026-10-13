@@ -103,6 +103,13 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   backups would bring the total under 500 MB or free at least a quarter of it.
 
 ### Changed
+- **Verification in seconds.** The writer's baseline and each same-session check run only the
+  tests of the change plan plus the test files the writer touched (pytest gets
+  `-x -q -p no:cacheprovider`), under the `[verify] timeout_s` wall instead of 900 s per
+  command; a `mypy` typecheck runs through `dmypy` (plain `mypy` confirms the last green check);
+  all checks run in parallel up to the number of cores. Python projects with
+  `pyright-langserver` and the `pyright-lsp` plugin get LSP diagnostics in writing sessions;
+  `cuanta doctor` says how to install them.
 - **`-V` is the global short for `--verbose` (surprising).** `-v` now means `--variant` on
   `cuanta mandate`, `pounce`, `run`, `feat`, `fix`, `audit` and `queue add`; `cuanta -v doctor` is
   refused with "No such option: -v". `-y` and `-V` are written on their own after a subcommand (a

@@ -155,5 +155,11 @@ progress, launch rows and live states go to stderr.
 
 `CUANTA_VERIFY_TIMEOUT_S` is an internal runner override for post-run verification only.
 `--verify auto|affected|full|off` overrides `[verify] mode = "auto"`; `timeout_s = 600`
-bounds verification after the agent finishes. Set `timeout_s = 0` to disable this wall.
+bounds verification after the agent finishes and each check of the writer's baseline and
+same-session verification (it replaces the old 900 s per command). Set `timeout_s = 0` to
+disable this wall. Inside the writer's session the test command runs only the tests of the
+change plan and the test files the writer changed (`-x -q -p no:cacheprovider`, `-n auto` with
+pytest-xdist above 200 files), a `mypy` typecheck runs as `dmypy run` with its status file in
+`.cuanta/tmp/dmypy.json` (killed and retried once, then plain `mypy`), the last green check is
+confirmed with plain `mypy`, and the checks run in parallel up to the number of cores.
 `[instinct] timeout_s = 3` bounds each remote instinct request.

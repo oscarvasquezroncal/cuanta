@@ -109,10 +109,14 @@ class ImplementationSession:
         max_turns: int = 0,
         measured: Callable[[str, float], None] | None = None,
         snapshot: Callable[[], Mapping[str, str]] | None = None,
+        final_verify: Verify | None = None,
+        close: Callable[[], None] | None = None,
     ) -> None:
         self.commands = commands
         self.baseline = baseline
         self._verify = verify
+        self._final = final_verify
+        self._close = close
         self._monotonic = monotonic
         self._started = monotonic()
         self._cap = cap_usd
@@ -201,6 +205,12 @@ class ImplementationSession:
         self._repair_started = None
         started = self._monotonic()
         results = self._verify(self.commands, _never_stopped)
+        if (
+            self._final is not None
+            and self._index + 1 >= len(self._steps)
+            and verification_delta(self.baseline, results, self.commands).passed
+        ):
+            results = self._final(self.commands, _never_stopped)
         verified = self._monotonic() - started
         if repairing:
             self._repair_spent += verified
@@ -267,6 +277,9 @@ class ImplementationSession:
         return "verification_failed"
 
     def settle(self, outcome: EngineOutcome) -> EngineOutcome:
+        if self._close is not None:
+            closing, self._close = self._close, None
+            closing()
         self._exit_code = outcome.exit_code
         yielding = outcome.cancelled and self._reason == SESSION_CLOSED
         if not self.report.passed and (not self._reason or yielding):

@@ -439,26 +439,24 @@ def test_verifier_retains_early_and_late_diagnostics_and_eslint_anchors(tmp_path
     )
 
 
-def test_typecheck_and_lint_overlap_then_build_runs(tmp_path: Path) -> None:
-    barrier = threading.Barrier(2)
-    finished = threading.Event()
+def test_typecheck_lint_and_build_overlap_within_the_cores(tmp_path: Path) -> None:
+    barrier = threading.Barrier(3)
 
     class Parallel(FakeStream):
         def lines(self) -> Iterator[str]:
             barrier.wait(timeout=2)
-            finished.set()
             yield "checked"
 
-    class Build(FakeStream):
-        def lines(self) -> Iterator[str]:
-            assert finished.is_set()
-            yield "built"
-
     runner = FakeRunner(
-        streams={COMMANDS[0]: Parallel([]), COMMANDS[1]: Parallel([]), "npm run build": Build([])}
+        streams={
+            COMMANDS[0]: Parallel([]),
+            COMMANDS[1]: Parallel([]),
+            "npm run build": Parallel([]),
+        }
     )
-    verified = Verifier(runner, tmp_path, False).run_checks((*COMMANDS, "npm run build"))
+    verified = Verifier(runner, tmp_path, False, cores=3).run_checks((*COMMANDS, "npm run build"))
     assert len(verified) == 3 and all(item.passed for item in verified)
+    assert [item.command for item in verified] == [*COMMANDS, "npm run build"]
 
 
 def test_eslint_paths_with_spaces_cannot_mask_a_new_failure(tmp_path: Path) -> None:
@@ -1367,7 +1365,7 @@ def test_a_broken_tool_baseline_names_its_exception_in_both_languages_and_logs_t
 ) -> None:
     from cuanta.bootstrap import Container
 
-    runner = FakeRunner(streams={"uv run mypy": FakeStream([], 1, error=error)})
+    runner = FakeRunner(streams={"uv run": FakeStream([], 1, error=error)})
     container = Container(tmp_path, Config(), runner=runner, home=tmp_path / "home")
     try:
         spec = LaunchSpec("mandate", "fix", str(tmp_path), (), verify_commands=("uv run mypy",))

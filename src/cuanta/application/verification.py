@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from cuanta.domain.implementation import without_duration
 from cuanta.domain.role_handoff import VerifyResult
+from cuanta.domain.scoped_checks import check_workers
 from cuanta.ports.system import ProcessRunner
 
 ERROR_LIMIT = 6
@@ -19,6 +20,7 @@ SCAN_LIMIT = 400
 TOKEN_LIMIT = 260
 KEPT_LINES = 400
 DEFAULT_TIMEOUT_S = 900.0
+CHECK_CORES = 2
 STOP_POLL_S = 0.2
 STOPPED_ERROR = "stopped before it finished"
 TRACEBACK = "Traceback (most recent call last):"
@@ -209,6 +211,7 @@ class Verifier:
         env: Mapping[str, str] | None = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         monotonic: Callable[[], float] = time.monotonic,
+        cores: int | None = CHECK_CORES,
     ) -> None:
         self._runner = runner
         self._cwd = cwd
@@ -216,16 +219,20 @@ class Verifier:
         self._env = env
         self._timeout = timeout_s
         self._monotonic = monotonic
+        self._cores = cores
 
     def run(
-        self, commands: Sequence[str], stopped: Callable[[], bool] = never
+        self,
+        commands: Sequence[str],
+        stopped: Callable[[], bool] = never,
+        actual: Mapping[str, str] | None = None,
     ) -> tuple[VerifyResult, ...]:
         results: list[VerifyResult] = []
         for command in commands:
             if stopped():
                 break
             try:
-                argv = command_argv(command, self._windows)
+                argv = command_argv((actual or {}).get(command, command), self._windows)
             except ValueError:
                 results.append(VerifyResult(command, None, 0.0, ("could not parse the command",)))
                 continue
@@ -234,18 +241,17 @@ class Verifier:
         return tuple(results)
 
     def run_checks(
-        self, commands: Sequence[str], stopped: Callable[[], bool] = never
+        self,
+        commands: Sequence[str],
+        stopped: Callable[[], bool] = never,
+        actual: Mapping[str, str] | None = None,
     ) -> tuple[VerifyResult, ...]:
-        parallel = tuple(
-            command
-            for command in commands
-            if any(word in command.lower() for word in ("typecheck", "tsc", "lint"))
-        )
-        serial = tuple(command for command in commands if command not in parallel)
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [executor.submit(self.run, (command,), stopped) for command in parallel]
-            results = tuple(result for future in futures for result in future.result())
-        return (*results, *self.run(serial, stopped))
+        workers = check_workers(len(commands), self._cores)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(self.run, (command,), stopped, actual) for command in commands
+            ]
+            return tuple(result for future in futures for result in future.result())
 
     def _one(self, command: str, argv: list[str], stopped: Callable[[], bool]) -> VerifyResult:
         started = self._monotonic()

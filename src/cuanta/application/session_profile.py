@@ -32,11 +32,12 @@ class LeanProfile:
         model: str = "",
         pure: bool = False,
         variant: str = "",
+        lsp: bool = False,
     ) -> tuple[str, str]:
         mcp = self._write(
             "lean-mcp", stable_json(owned_mcp if owned_mcp is not None else EMPTY_MCP)
         )
-        values = lean_settings(self._plugins(), permissions_deny, owned_hooks)
+        values = lean_settings(self._plugins(), permissions_deny, owned_hooks, lsp)
         pinned = pure and bool(model)
         if pinned or variant:
             values.update(variant_settings(model, variant, pinned))

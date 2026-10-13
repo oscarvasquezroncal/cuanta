@@ -34,7 +34,13 @@ from cuanta.domain.overhead import (
     session_overhead,
     startup_message,
 )
-from cuanta.domain.plugins import InstalledPlugin, older_forge
+from cuanta.domain.plugins import (
+    LSP_LANGUAGES,
+    LSP_PLUGIN,
+    InstalledPlugin,
+    lsp_ready,
+    older_forge,
+)
 from cuanta.domain.progress import Status
 from cuanta.domain.python_home import PYTHON_HOME, inherited_python_home
 from cuanta.domain.telemetry import WiringReport, WiringState
@@ -92,6 +98,33 @@ def python_home_check(environment: Mapping[str, str], base_prefix: str, windows:
         if not home or PYTHON_HOME in inherited_python_home(environment, base_prefix, windows):
             return []
         return [result(PYTHON_HOME, Status.WARN, msg("doctor.python_home.set", path=home))]
+
+    return check
+
+
+def lsp_rows(
+    language: str, server_found: bool, plugins: Sequence[InstalledPlugin]
+) -> list[CheckResult]:
+    if language not in LSP_LANGUAGES:
+        return []
+    if not server_found:
+        return [result("lsp", Status.WARN, msg("doctor.lsp.server"), "npm install -g pyright")]
+    if not lsp_ready(language, server_found, plugins):
+        return [
+            result(
+                "lsp", Status.WARN, msg("doctor.lsp.plugin"), f"claude plugin install {LSP_PLUGIN}"
+            )
+        ]
+    return [result("lsp", Status.OK, msg("doctor.lsp.ready"))]
+
+
+def lsp_check(
+    server_found: Callable[[], bool], plugins: Callable[[], Sequence[InstalledPlugin]]
+) -> Check:
+    def check(detection: Detection) -> Sequence[CheckResult]:
+        if detection.stack.language not in LSP_LANGUAGES:
+            return []
+        return lsp_rows(detection.stack.language, server_found(), plugins())
 
     return check
 

@@ -63,18 +63,31 @@ def older_forge(plugins: Sequence[InstalledPlugin], vendored: str) -> tuple[Inst
 
 
 BUILTIN_LEAN_OFF = ("agents-md@builtin",)
+LSP_PLUGIN = "pyright-lsp@claude-plugins-official"
+LSP_SERVER = "pyright-langserver"
+LSP_LANGUAGES = frozenset({"python"})
+
+
+def lsp_ready(language: str, server_found: bool, plugins: Sequence[InstalledPlugin]) -> bool:
+    return (
+        language in LSP_LANGUAGES
+        and server_found
+        and any(plugin.key == LSP_PLUGIN for plugin in plugins)
+    )
 
 
 def lean_settings(
     plugins: Sequence[InstalledPlugin],
     permissions_deny: tuple[str, ...] = (),
     owned_hooks: dict[str, object] | None = None,
+    lsp: bool = False,
 ) -> dict[str, object]:
     keys = sorted({*(plugin.key for plugin in plugins), *BUILTIN_LEAN_OFF})
     disabled: Mapping[str, bool] = dict.fromkeys(keys, False)
+    enabled = {key: lsp and key == LSP_PLUGIN for key in disabled}
     settings: dict[str, object] = {
         "disableAllHooks": owned_hooks is None,
-        "enabledPlugins": dict(disabled),
+        "enabledPlugins": enabled,
     }
     if permissions_deny:
         settings["permissions"] = {"deny": list(dict.fromkeys(permissions_deny))}
