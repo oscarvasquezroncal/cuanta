@@ -90,6 +90,7 @@ class ContextPack:
     budget: int
     cache_key: str = ""
     anchors: tuple[AnchorCheck, ...] = ()
+    anchor_budget: int = 0
 
     @property
     def text(self) -> str:
@@ -148,7 +149,25 @@ def _truncate(item: PackItem, available: int) -> PackItem | None:
     return replace(item, text=text)
 
 
-def compile_pack(items: tuple[PackItem, ...], budget: int, cache_key: str = "") -> ContextPack:
+ANCHOR_TOKENS = 12_000
+
+
+def _anchored(
+    optional: list[PackItem], anchor_budget: int, decisions: dict[str, PackDecision]
+) -> tuple[PackItem, ...]:
+    maximum = int(anchor_budget * BYTES_PER_TOKEN)
+    chosen: tuple[PackItem, ...] = ()
+    for item in optional:
+        if item.priority <= 0 or not item.text or _size((*chosen, item)) > maximum:
+            continue
+        chosen += (item,)
+        decisions[item.key] = _decision(item, True, "cited range within its own budget")
+    return chosen
+
+
+def compile_pack(
+    items: tuple[PackItem, ...], budget: int, cache_key: str = "", anchor_budget: int = 0
+) -> ContextPack:
     if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
         raise ValueError("A context pack requires a positive integer token budget")
     if len({item.key for item in items}) != len(items):
@@ -185,7 +204,10 @@ def compile_pack(items: tuple[PackItem, ...], budget: int, cache_key: str = "") 
             _identity(item),
         ),
     )
+    anchored = _anchored(optional, anchor_budget, decisions) if anchor_budget > 0 else ()
     for item in optional:
+        if item in anchored:
+            continue
         if not item.text:
             decisions[item.key] = _decision(item, False, "empty")
         elif _size((*selected, item)) <= maximum:
@@ -193,7 +215,7 @@ def compile_pack(items: tuple[PackItem, ...], budget: int, cache_key: str = "") 
             decisions[item.key] = _decision(item, True, "selected by value/token")
         else:
             decisions[item.key] = _decision(item, False, "omitted by budget")
-    selected = tuple(sorted(selected, key=_identity))
+    selected = tuple(sorted((*selected, *anchored), key=_identity))
     stable = _join(tuple(item for item in selected if item.layer in {Layer.L0, Layer.L1}))
     excerpts = _join(tuple(item for item in selected if item.layer == Layer.L2))
     volatile = _join(tuple(item for item in selected if item.layer == Layer.VOLATILE))
@@ -207,4 +229,5 @@ def compile_pack(items: tuple[PackItem, ...], budget: int, cache_key: str = "") 
         estimated_tokens(_bytes(text)),
         budget,
         cache_key,
+        anchor_budget=max(0, anchor_budget),
     )

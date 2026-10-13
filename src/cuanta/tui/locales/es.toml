@@ -1273,6 +1273,7 @@ improve = "Un modelo económico reescribe tu solicitud. Muestra el costo antes y
 "instinct.claude_missing" = "no se encontró claude"
 "instinct.llm_ready" = "claude -p --model {model}"
 "question.change_scope" = "¿Qué tan grande es este cambio: trivial, normal o complejo?"
+"question.redundant_call" = "¿Esta llamada repite lo que el índice ya devolvió en esta sesión?"
 "question.mandate_scope" = "¿Qué tan grande es este mandato: trivial, normal o complejo?"
 "question.network" = "¿Es probable que este fallo se deba a la red?"
 "question.rename_risk" = "¿Qué tan riesgoso es renombrar una función pública usada en {files} archivos (0-10)?"
@@ -1480,6 +1481,7 @@ improve = "Un modelo económico reescribe tu solicitud. Muestra el costo antes y
 "governor.trigger.projection" = "el tope llegaría antes de terminar el plan"
 "governor.trigger.fresh_session" = "una sesión nueva costaría menos"
 "governor.trigger.soft_cap" = "la corrida llegó a su P90 previsto"
+"governor.trigger.context_ceiling" = "su contexto llegó al techo"
 "governor.finish_session" = "sesión: el gobernador envió el turno de cierre ({trigger}) con ${spent} del tope de ${limit}"
 "governor.codex_stop" = "{role}: el gobernador detuvo Codex con unos ${spent} estimados de su parte de ${share}"
 "governor.codex_stop_unsent" = "{role}: el gobernador no pudo detener Codex (${spent} estimados de ${share}); sigue hasta el final y el exceso sale del resto"
@@ -1720,6 +1722,16 @@ launch = "Instinct ({backend}): cambio {scope}, p={probability} → {shape} · p
 launch_fallback = "Instinct ({backend}; {configured} no disponible): cambio {scope}, p={probability} → {shape} · plan de {files} archivos, {anchors} rangos citados, {history} corridas anteriores de este tipo"
 launch_single = "una sesión (Sonnet)"
 launch_team = "equipo (analista y tester en Haiku, senior en Sonnet)"
+
+[msg.cache]
+role = "caché de {role}: {requests} requests, {share} leído de la caché, {misses} fallos, primer request de {first} tokens"
+
+[msg.context]
+max = "contexto máximo de {role}: {tokens} tokens con un techo de {ceiling}"
+over = "contexto por encima de su techo: {role} llegó a {tokens} tokens con un techo de {ceiling}"
+
+[msg.index_first]
+ratio = "índice primero: {index} consultas al índice, {grep} Grep, {read} Read"
 
 [msg.advisor]
 spend = "advisor {advisor}: {requests} consultas, {cost} (cuentan en el gasto y el tope de la corrida)"

@@ -45,6 +45,7 @@ class Trigger(StrEnum):
     PROJECTION = "projection"
     FRESH_SESSION = "fresh_session"
     SOFT_CAP = "soft_cap"
+    CONTEXT_CEILING = "context_ceiling"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +66,7 @@ class RolePlan:
     cards_tokens: int = 0
     rotatable: bool = False
     soft_usd: float = 0.0
+    context_ceiling: int = 0
 
     @property
     def limit_usd(self) -> float:
@@ -418,6 +420,13 @@ def decide(plan: RolePlan, progress: RoleProgress, done: Set[ReactionKind]) -> D
         return Decision(stop, trigger, projection)
     if plan.provider is Provider.CODEX:
         return None
+    if (
+        plan.rotatable
+        and plan.context_ceiling > 0
+        and ReactionKind.ROTATE not in done
+        and progress.context_tokens >= plan.context_ceiling
+    ):
+        return Decision(ReactionKind.ROTATE, Trigger.CONTEXT_CEILING, projection)
     if (
         plan.rotatable
         and ReactionKind.ROTATE not in done

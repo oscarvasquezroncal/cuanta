@@ -134,6 +134,7 @@ if TYPE_CHECKING:
     from cuanta.domain.engine import EngineEvent
     from cuanta.domain.estimates import RunEstimate
     from cuanta.domain.governor_report import BlockedCalls
+    from cuanta.domain.index_first import IndexCall
     from cuanta.domain.instinct import Choice
     from cuanta.domain.launch_choice import LaunchScope
     from cuanta.domain.ledger import LedgerEvent, Run
@@ -729,7 +730,13 @@ class Container:
             index_tools=self.config.index_enabled and self.config.index_tools,
             index_server=self.index_server_command(),
             implementer=lambda spec: self.implementation_session(spec, ledger),
+            compact_window=self.compact_window,
         )
+
+    def compact_window(self, model: str) -> int:
+        from cuanta.domain.context_ceiling import compact_supported, context_ceiling
+
+        return context_ceiling(model) if compact_supported(self.claude_version()) else 0
 
     def implementation_session(
         self, spec: LaunchSpec, ledger: Ledger
@@ -825,6 +832,7 @@ class Container:
         import sys
 
         from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules
+        from cuanta.domain.index_first import INDEX_FLAG
         from cuanta.domain.read_discipline import READ_LINE_LIMIT
 
         plan = spec.change_plan or ChangePlan(read_only=spec.read_only)
@@ -841,21 +849,28 @@ class Container:
             self.config.read_discipline if spec.read_discipline is None else spec.read_discipline
         )
         limit = self.config.read_max_lines
-        extra = [str(limit)] if limit != READ_LINE_LIMIT else []
-        if disciplined:
+        wanted = self.config.index_tools if spec.index_tools is None else spec.index_tools
+        indexed = self.config.index_enabled and bool(wanted)
+        extra = [
+            *([str(limit)] if limit != READ_LINE_LIMIT else []),
+            *([INDEX_FLAG] if indexed else []),
+        ]
+        if disciplined or indexed:
             hooks = {}
-            for mode, event in (("pre", "PreToolUse"), ("post", "PostToolUse")):
+            events = (("pre", "PreToolUse"), ("post", "PostToolUse"))
+            for mode, event in events if disciplined else events[:1]:
                 command = shlex.join(
                     [Path(sys.executable).as_posix(), "-m", "cuanta.cli.hooks", mode, *extra]
                 )
                 hooks[event] = [
                     {
-                        "matcher": "Read|Grep|Bash|PowerShell",
+                        "matcher": "Read|Grep|Glob|Bash|PowerShell"
+                        if disciplined
+                        else "Read|Grep|Glob",
                         "hooks": [{"type": "command", "command": command, "timeout": 10}],
                     }
                 ]
-        wanted = self.config.index_tools if spec.index_tools is None else spec.index_tools
-        mcp = self.index_mcp_config() if self.config.index_enabled and wanted else None
+        mcp = self.index_mcp_config() if indexed else None
         return self.lean_profile().files(
             permissions_deny=denied,
             owned_hooks=hooks,
@@ -944,6 +959,7 @@ class Container:
         from cuanta.adapters.graph.file_graph import graph_path
         from cuanta.adapters.storage.sqlite_ledger import SqliteLedger
         from cuanta.domain.code_index import index_path
+        from cuanta.domain.index_first import query_key
         from cuanta.domain.ledger import LedgerEvent
         from cuanta.domain.spectrum import estimated_tokens
         from cuanta.domain.stable import stable_json
@@ -966,6 +982,12 @@ class Container:
             result, ensure_ascii=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
         metadata: dict[str, object] = {"returned_tokens_estimate": estimated_tokens(len(encoded))}
+        lines = arguments.get("lines")
+        if isinstance(lines, str | int) and not isinstance(lines, bool):
+            metadata["lines"] = str(lines)[:40]
+        query = arguments.get("query")
+        if isinstance(query, str) and query.strip():
+            metadata["query_key"] = query_key(query)
         if name == "initialize" and isinstance(result, dict):
             metadata.update(
                 {
@@ -1534,28 +1556,64 @@ class Container:
         )
         return replace(options, route=route, role_efforts=efforts)
 
+    def index_calls(self, run_id: str) -> tuple[IndexCall, ...]:
+        from cuanta.domain.index_first import index_calls
+        from cuanta.ports.ledger import EventQuery
+
+        return index_calls(self.ledger().events(EventQuery(run_id=run_id)))
+
     def record_launch(self, run_ids: Sequence[str], advisor: str) -> tuple[Message, ...]:
         from cuanta.application.run_reports import RunReports
         from cuanta.domain.advisor import advisor_message, advisor_spend
+        from cuanta.domain.context_ceiling import context_ceiling, context_message, max_context
+        from cuanta.domain.index_first import index_ratio
+        from cuanta.domain.index_metrics import exploration_counts
         from cuanta.domain.launch_choice import scope_payload
+        from cuanta.domain.role_tools import cache_message, cache_use
         from cuanta.ports.ledger import EventQuery
 
         reports = RunReports(self.state_workspace())
         ledger = self.shared_ledger()
         table = self.prices()
-        requests, cost = 0, 0.0
-        for run_id in run_ids if advisor else ():
-            found, spent = advisor_spend(ledger.events(EventQuery(run_id=run_id)), advisor, table)
-            requests += found
-            cost += spent
-        extra: dict[str, object] = {}
+        events = [event for run_id in run_ids for event in ledger.events(EventQuery(run_id=run_id))]
+        requests, cost = advisor_spend(events, advisor, table) if advisor else (0, 0.0)
+        index, greps, reads = exploration_counts(events)
+        contexts = max_context(events)
+        caches = cache_use(events)
+        extra_contexts = {
+            role: {"tokens": tokens, "ceiling": context_ceiling(model)}
+            for role, (tokens, model) in contexts.items()
+        }
+        extra: dict[str, object] = {
+            "index_first": {"index": index, "grep": greps, "read": reads},
+            "context_max": extra_contexts,
+            "cache": {
+                role: {
+                    "requests": use.requests,
+                    "read_share": round(use.read_share, 4),
+                    "misses": use.misses,
+                    "first_request_tokens": use.first_tokens,
+                }
+                for role, use in caches.items()
+            },
+        }
         if self.launch_decision is not None:
             extra["instinct"] = scope_payload(self.launch_decision)
         if advisor:
             extra["advisor"] = {"model": advisor, "requests": requests, "cost_usd": round(cost, 6)}
-        for run_id in run_ids if extra else ():
+        for run_id in run_ids:
             reports.save_meta(run_id, {**(reports.meta(run_id) or {}), **extra})
-        return (advisor_message(advisor, requests, cost),) if advisor else ()
+        ratio = (index_ratio(index, greps, reads),) if index or greps or reads else ()
+        shown = tuple(
+            context_message(role, tokens, context_ceiling(model))
+            for role, (tokens, model) in contexts.items()
+        )
+        return (
+            *ratio,
+            *shown,
+            *(cache_message(role, use) for role, use in caches.items()),
+            *((advisor_message(advisor, requests, cost),) if advisor else ()),
+        )
 
     def prices(self) -> PriceTable:
         from cuanta.adapters.system.prices import load_prices
@@ -1941,12 +1999,18 @@ class Container:
     def governor_setup(self, ledger: Ledger | None = None) -> GovernorSetup:
         from cuanta.adapters.system.prices import load_prices
         from cuanta.application.steering import GovernorSetup
+        from cuanta.domain.context_ceiling import compact_supported, context_ceiling
         from cuanta.domain.governor import seconds_rate
 
         def per_second(model: str) -> float:
             return seconds_rate(ledger.runs(), model) if ledger is not None else 0.0
 
-        return GovernorSetup(self.clock.monotonic, load_prices(), per_second)
+        def ceiling(model: str) -> int:
+            if compact_supported(self.claude_version()):
+                return 0
+            return context_ceiling(model)
+
+        return GovernorSetup(self.clock.monotonic, load_prices(), per_second, ceiling)
 
     def pipeline_read_discipline(self, engine: str) -> bool:
         return self.config.pipeline_read_discipline and engine in {"claude", "codex"}
@@ -2494,6 +2558,7 @@ class Container:
     def mandate_routing(self, ledger: Ledger) -> MandateRouting:
         from cuanta.adapters.models.claude_catalog import settings_env
         from cuanta.application.route_apply import MandateRouting
+        from cuanta.domain.context_ceiling import compact_supported
 
         return MandateRouting(
             advisor=self.route_advisor(ledger),
@@ -2504,6 +2569,7 @@ class Container:
             settings_env=lambda: settings_env(self.home, self.project),
             blast_radius=self.blast_radius,
             clock_iso=self.clock.now_iso,
+            compact_windows=lambda: compact_supported(self.claude_version()),
             index_tools=self.config.index_enabled
             and (self.config.index_tools or self.config.pipeline_index_tools),
             default_session=self.config.run_session,

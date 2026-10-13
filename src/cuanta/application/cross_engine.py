@@ -117,6 +117,7 @@ from cuanta.domain.role_handoff import (
     render_chain,
     schema_instruction,
 )
+from cuanta.domain.role_tools import role_tools
 from cuanta.domain.routing import Provider, Role, parse_provider
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, docs_only
 from cuanta.domain.scout import (
@@ -1187,6 +1188,7 @@ class CrossEnginePipeline:
             prompt=prompt,
             cwd=self._cwd,
             allowed_tools=tools if engine == "claude" else (),
+            tools=role_tools(role) if engine == "claude" else None,
             model=model,
             max_budget_usd=native,
             max_turns=self._max_turns if engine == "claude" else 0,

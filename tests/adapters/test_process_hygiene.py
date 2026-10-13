@@ -56,8 +56,8 @@ def test_run_timeout_or_interrupt_kills_the_parent_and_grandchild(
         assert result.returncode == 124
     parent, child = (int(value) for value in marker.read_text(encoding="utf-8").split(","))
     try:
-        assert not _alive(parent)
-        assert not _alive(child)
+        assert _gone(parent)
+        assert _gone(child)
     finally:
         if _alive(child):
             if sys.platform == "win32":
@@ -70,6 +70,15 @@ def test_run_timeout_or_interrupt_kills_the_parent_and_grandchild(
 
 def _alive(pid: int) -> bool:
     return pid in process_table()
+
+
+def _gone(pid: int, within: float = 3.0) -> bool:
+    deadline = time.monotonic() + within
+    while _alive(pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
 
 
 def test_engine_run_kills_orphaned_grandchildren(

@@ -165,6 +165,13 @@ def _exploration(events: Sequence[LedgerEvent]) -> list[tuple[str, LedgerEvent]]
     return selected
 
 
+def exploration_counts(events: Sequence[LedgerEvent]) -> tuple[int, int, int]:
+    found = _exploration(events)
+    index = sum(kind == "index" for kind, _ in found)
+    greps = sum(kind != "index" and event.tool_name.lower() == "grep" for kind, event in found)
+    return index, greps, len(found) - index - greps
+
+
 def execution_tool_name(event: LedgerEvent) -> str:
     if event.source == "cuanta_mcp" and not event.tool_name.startswith("mcp__"):
         return f"mcp__cuanta__{event.tool_name}"

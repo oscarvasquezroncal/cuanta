@@ -30,11 +30,11 @@ from cuanta.domain.index_cards import handling_card
 from cuanta.domain.index_facts import revalidate_fact
 from cuanta.domain.index_search import rule_applies
 from cuanta.domain.mandate import MandateRequest
-from cuanta.domain.pack import ContextPack, Layer, PackItem, compile_pack
+from cuanta.domain.pack import ANCHOR_TOKENS, ContextPack, Layer, PackItem, compile_pack
 from cuanta.domain.spectrum import BYTES_PER_TOKEN
 from cuanta.domain.stable import stable_json
 
-PACK_VERSION = 2
+PACK_VERSION = 3
 QUERY_TERMS = 256
 REQUEST_SHARE = 4
 LINE_LIMIT = 400
@@ -208,7 +208,7 @@ class IndexContextPack:
         items, placed = self._items(
             request, protection, chosen.depth, chosen.read_budget, role, chosen.pack_tokens
         )
-        result = compile_pack(items, chosen.pack_tokens, key)
+        result = compile_pack(items, chosen.pack_tokens, key, ANCHOR_TOKENS)
         result = replace(result, anchors=_settled(placed, {item.key for item in result.items}))
         if len(self._cache) >= 32:
             self._cache.pop(next(iter(self._cache)))

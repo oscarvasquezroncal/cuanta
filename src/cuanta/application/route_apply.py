@@ -143,7 +143,9 @@ class MandateRouting:
         clock_iso: Callable[[], str],
         index_tools: bool = False,
         default_session: str = LEAN,
+        compact_windows: Callable[[], bool] = lambda: False,
     ) -> None:
+        self._compact_windows = compact_windows
         self._advisor = advisor
         self._policy = policy
         self._workspace = workspace
@@ -262,7 +264,7 @@ class MandateRouting:
             if route.model is not None and route.role is not Role.ORCHESTRATOR
         }
         definitions = with_scout(self.definitions()) if options.scout else self.definitions()
-        agents = build_agents(definitions, routes, graph_available)
+        agents = build_agents(definitions, routes, graph_available, self._compact_windows())
         orchestrator = plan.route(Role.ORCHESTRATOR) or plan.route(Role.ANALYST)
         return Applied(
             plan,

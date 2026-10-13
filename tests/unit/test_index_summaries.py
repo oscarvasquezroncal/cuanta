@@ -291,7 +291,7 @@ def test_composed_summaries_choose_capped_claude_without_tools_when_codex_is_def
     try:
         result = container.index_summaries(service, confirmed=True)
         assert result.model == "claude:haiku" and result.ran and result.generated == 1
-        (command,) = runner.calls
+        (command,) = [call for call in runner.calls if call[1:] != ("--version",)]
         assert command[0] == "claude"
         assert command[command.index("--model") + 1] == "claude-haiku-test"
         assert command[command.index("--tools") + 1] == ""

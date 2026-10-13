@@ -24,6 +24,14 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   them. `--advisor auto|opus|fable|off` and `--fast` are new; Opus or Fable as the main model,
   `--pure`, xhigh effort, ultracode on a team and fast mode show their multiplier and need a
   confirmation or `--yes`.
+- **Context under control.** Cited ranges get their own 12k-token budget in the context pack.
+  Sessions with the index refuse a Grep, Glob or Read before the first index query and ask
+  Instinct whether a later one repeats what the index returned. Each agent and session gets
+  an auto-compact window (120k for Sonnet and Opus, 100k for Haiku, from Claude Code
+  2.1.296; older versions rotate a role at its ceiling). Roles see only the built-in tools they
+  need, which cut the first request of a probe from 28k to 8k tokens. The result reports index
+  use, the largest context per role and the cache use per role. `--bare` was tried and
+  dropped: it cannot use subscription auth and skips the hooks.
 - **Tiered prices.** Sonnet 5.5 and Haiku 5.5 are priced, Haiku 5.5 with its long-prompt tier
   (each request picks its tier by its own prompt size, cache included), and Opus 5.5 has its
   fast-mode price.

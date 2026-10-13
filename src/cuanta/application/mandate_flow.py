@@ -86,6 +86,7 @@ from cuanta.domain.progress import (
     note,
     started,
 )
+from cuanta.domain.role_tools import SESSION_TOOLS
 from cuanta.domain.routing import Provider, Role, RoleRoute, parse_provider
 from cuanta.domain.sandbox import SANDBOX_MODE, SandboxLaunch, sandbox_launch
 from cuanta.domain.scout import (
@@ -655,8 +656,8 @@ class MandateFlow:
             max_turns=limits.max_turns,
             max_wall_s=limits.wall_s,
             tools=(
-                self._implementation_tools
-                if fast and self._implementation_tools
+                (self._implementation_tools or SESSION_TOOLS)
+                if fast
                 else investigation_builtin_tools(options.simple, shape, graph_available)
                 if claude and investigation
                 else None
@@ -675,7 +676,9 @@ class MandateFlow:
             stable_prefix=pack is not None,
             index_tools=(
                 True
-                if claude and applied is not None and applied.agents and self._pipeline_index_tools
+                if claude
+                and self._pipeline_index_tools
+                and ((applied is not None and applied.agents) or (fast and not investigation))
                 else None
             ),
             read_discipline=(

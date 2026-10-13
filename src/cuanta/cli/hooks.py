@@ -12,6 +12,16 @@ from pathlib import Path
 from typing import cast
 
 from cuanta.application.session_profile import record_hook_event
+from cuanta.domain.index_first import (
+    ASK_ABOVE,
+    INDEX_FLAG,
+    RECENT_CALLS,
+    SEARCH_TOOLS,
+    IndexCall,
+    index_first,
+    redundancy_prior,
+    redundant_decision,
+)
 from cuanta.domain.ledger import LedgerEvent
 from cuanta.domain.python_home import drop_inherited_python_home
 from cuanta.domain.read_discipline import (
@@ -91,7 +101,11 @@ def hook_decision(
 
 
 def _log(
-    payload: Mapping[str, object], decision: ReadDisciplineDecision, root: Path, relative: str
+    payload: Mapping[str, object],
+    decision: ReadDisciplineDecision,
+    root: Path,
+    relative: str,
+    kind: str = "read_discipline",
 ) -> None:
     run_id = os.environ.get("CUANTA_RUN_ID", "")
     if not run_id or not decision.permission:
@@ -105,7 +119,7 @@ def _log(
             source="cuanta_hook",
             session_id=_string(payload, "session_id"),
             agent=_string(payload, "agent_type", "orchestrator"),
-            kind="read_discipline",
+            kind=kind,
             tool_name=_string(payload, "tool_name"),
             tool_use_id=_string(payload, "tool_use_id"),
             file_path=relative,
@@ -118,8 +132,57 @@ def _log(
         container.close()
 
 
+def _index_state(root: Path, run_id: str) -> tuple[int, tuple[IndexCall, ...]]:
+    from cuanta.bootstrap import Container
+
+    container = Container.for_project(root)
+    try:
+        calls = container.index_calls(run_id)
+    finally:
+        container.close()
+    return len(calls), calls[-RECENT_CALLS:]
+
+
+def _redundancy(root: Path, tool: str, relative: str, prior: float) -> float:
+    from cuanta.bootstrap import Container
+    from cuanta.domain.messages import english, msg
+
+    container = Container.for_project(root)
+    try:
+        decisions = container.decisions(container.ledger())
+        answer, _ = decisions.noul(
+            english(msg("question.redundant_call")),
+            {"kind": "redundancy", "tool": tool, "path": relative, "prior": prior},
+        )
+    finally:
+        container.close()
+    return answer.p_yes
+
+
+def _index_decision(
+    data: Mapping[str, object], root: Path, relative: str
+) -> ReadDisciplineDecision:
+    run_id = os.environ.get("CUANTA_RUN_ID", "")
+    tool = _string(data, "tool_name")
+    if not run_id or tool not in SEARCH_TOOLS:
+        return ReadDisciplineDecision()
+    inputs = _object(data.get("tool_input"))
+    count, recent = _index_state(root, run_id)
+    refused = index_first(tool, inputs, relative, count)
+    if refused.permission:
+        return refused
+    prior = redundancy_prior(tool, inputs, relative, recent)
+    if prior < ASK_ABOVE:
+        return ReadDisciplineDecision()
+    return redundant_decision(tool, relative, _redundancy(root, tool, relative, prior))
+
+
 def hook_output(
-    payload: object, root: Path, mode: str, line_limit: int = READ_LINE_LIMIT
+    payload: object,
+    root: Path,
+    mode: str,
+    line_limit: int = READ_LINE_LIMIT,
+    index: bool = False,
 ) -> dict[str, object]:
     if mode not in {"pre", "post"}:
         raise ValueError("Hook mode must be pre or post")
@@ -136,10 +199,15 @@ def hook_output(
         data, relative = {}, ""
     if mode == "post":
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": POST_CONTEXT}}
+    kind = "read_discipline"
+    if not decision.permission and index:
+        with suppress(OSError, ValueError, sqlite3.Error):
+            decision = _index_decision(data, root.resolve(), relative)
+            kind = "index_first"
     if not decision.permission:
         return {}
     with suppress(OSError, ValueError, sqlite3.Error):
-        _log(data, decision, root, relative)
+        _log(data, decision, root, relative, kind)
     specific: dict[str, object] = {
         "hookEventName": event,
         "permissionDecision": decision.permission,
@@ -151,6 +219,7 @@ def hook_output(
 
 
 def line_limit(arguments: list[str]) -> int | None:
+    arguments = [argument for argument in arguments if argument != INDEX_FLAG]
     if not arguments:
         return READ_LINE_LIMIT
     if len(arguments) != 1 or re.fullmatch(r"[0-9]+", arguments[0]) is None:
@@ -170,7 +239,7 @@ def main() -> int:
         payload: object = json.load(sys.stdin)
     except (ValueError, OSError):
         payload = None
-    result = hook_output(payload, Path.cwd(), sys.argv[1], limit)
+    result = hook_output(payload, Path.cwd(), sys.argv[1], limit, INDEX_FLAG in sys.argv[2:])
     if result:
         sys.stdout.write(stable_json(result))
     return 0

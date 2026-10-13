@@ -39,7 +39,11 @@ def test_owned_mcp_profile_has_only_cuanta_with_an_absolute_runtime(tmp_path: Pa
     assert INDEX_CONTRACT in request.append_system_prompt
     assert request.setting_sources == ()
     settings = json.loads(Path(request.settings_file).read_text(encoding="utf-8"))
-    assert settings["disableAllHooks"] is True
+    assert settings["disableAllHooks"] is False
+    pre = settings["hooks"]["PreToolUse"][0]
+    assert pre["matcher"] == "Read|Grep|Glob"
+    assert pre["hooks"][0]["command"].endswith("cuanta.cli.hooks pre index")
+    assert "PostToolUse" not in settings["hooks"]
     assert "Write" in settings["permissions"]["deny"]
     assert not runner.calls
 

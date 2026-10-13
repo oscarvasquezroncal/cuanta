@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules, strict_tools
+from cuanta.domain.context_ceiling import context_ceiling
 from cuanta.domain.graph_policy import GRAPH_REFERENCE, graphless_prompt
 from cuanta.domain.routing import Role
 from cuanta.domain.scout import (
@@ -142,6 +143,7 @@ def build_agents(
     definitions: Sequence[AgentDefinition],
     routes: Mapping[Role, AgentRoute],
     graph_available: bool = True,
+    compact: bool = False,
 ) -> AgentsPlan:
     agents: dict[str, dict[str, object]] = {}
     roles: dict[str, Role] = {}
@@ -173,6 +175,8 @@ def build_agents(
         spec["model"] = route.model
         if route.effort:
             spec["effort"] = route.effort
+        if compact:
+            spec["autoCompactWindow"] = context_ceiling(route.model)
         agents[definition.name] = spec
         roles[definition.name] = role
     return AgentsPlan(agents, roles)

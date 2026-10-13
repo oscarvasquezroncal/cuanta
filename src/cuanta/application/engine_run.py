@@ -12,6 +12,7 @@ from cuanta.application.run_reports import RunReports
 from cuanta.application.timing import PhaseRecorder
 from cuanta.domain.change_plan import EXECUTION, ChangePlan, deny_rules, strict_tools
 from cuanta.domain.claude_variants import pure_environment
+from cuanta.domain.context_ceiling import COMPACT_ENV
 from cuanta.domain.engine import (
     CANCELLED_SUBTYPE,
     GOVERNOR_STOP_SUBTYPE,
@@ -143,7 +144,9 @@ class EngineLauncher:
         index_tools: bool = False,
         index_server: tuple[str, ...] = (),
         implementer: Callable[[LaunchSpec], ImplementationSession | None] | None = None,
+        compact_window: Callable[[str], int] | None = None,
     ) -> None:
+        self._compact_window = compact_window
         self._index_server = index_server
         self._implementer = implementer
         self._lean_files = lean_files
@@ -249,6 +252,13 @@ class EngineLauncher:
         if port is not None and self._engine.name == "claude":
             env.update(claude_env(port, self._project, run_id, parent))
         env.update(dict(spec.env))
+        window = (
+            self._compact_window(spec.model)
+            if self._compact_window is not None and self._engine.name == "claude" and spec.model
+            else 0
+        )
+        if window > 0:
+            env.setdefault(COMPACT_ENV, str(window))
         if spec.pure:
             env.update(pure_environment(spec.model))
         mcp_config, settings_file = "", ""

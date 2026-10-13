@@ -193,6 +193,18 @@ ENGLISH: dict[str, str] = {
     ),
     "instinct.launch_single": "one session (Sonnet)",
     "instinct.launch_team": "team (Haiku analyst and tester, Sonnet senior)",
+    "cache.role": (
+        "cache {role}: {requests} requests, {share} read from cache, {misses} misses, "
+        "first request {first} tokens"
+    ),
+    "context.max": "context max {role}: {tokens} tokens of a {ceiling} ceiling",
+    "context.over": (
+        "context over its ceiling: {role} reached {tokens} tokens of a {ceiling} ceiling"
+    ),
+    "index_first.ratio": "index first: {index} index calls, {grep} Grep, {read} Read",
+    "question.redundant_call": (
+        "Is this tool call redundant with what the index already returned in this session?"
+    ),
     "advisor.spend": (
         "advisor {advisor}: {requests} consultations, {cost} (counted in the run's spend and cap)"
     ),
@@ -898,6 +910,7 @@ ENGLISH: dict[str, str] = {
     "governor.trigger.projection": "the cap would arrive before the plan is done",
     "governor.trigger.fresh_session": "a fresh session would cost less",
     "governor.trigger.soft_cap": "the run reached its forecast P90",
+    "governor.trigger.context_ceiling": "its context reached the ceiling",
     "governor.finish_session": (
         "session: the governor sent the finish turn ({trigger}) at ${spent} of the ${limit} cap"
     ),

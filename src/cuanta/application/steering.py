@@ -74,6 +74,7 @@ class GovernorSetup:
     clock: Callable[[], float]
     prices: PriceTable | None = None
     usd_per_second: Callable[[str], float] | None = None
+    context_ceiling: Callable[[str], int] | None = None
 
     def price(self, model: str) -> Price | None:
         return self.prices.lookup(model) if self.prices is not None and model else None
@@ -124,7 +125,8 @@ def claude_role_plan(
         ttl_s=forecast.inputs.cache_ttl_s,
         rotatable=True,
     )
-    return replace(planned, model=model)
+    ceiling = setup.context_ceiling(model) if setup.context_ceiling is not None else 0
+    return replace(planned, model=model, context_ceiling=ceiling)
 
 
 def codex_role_plan(
