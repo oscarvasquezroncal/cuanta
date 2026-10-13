@@ -56,7 +56,9 @@ from cuanta.domain.limits import (
     NO_LIMITS,
     LimitRequest,
     LimitSettings,
+    LimitsMode,
     RunLimits,
+    forecast_limits,
     resolve_limits,
 )
 from cuanta.domain.mandate import (
@@ -280,6 +282,24 @@ def limit_request(options: MandateOptions) -> LimitRequest:
 def mandate_limits(options: MandateOptions, task_type: str, settings: LimitSettings) -> RunLimits:
     chosen = profile(parse_depth(options.depth), task_type)
     return resolve_limits(limit_request(options), settings, chosen)
+
+
+def forecast_capped(
+    prepared: Prepared, settings: LimitSettings, options: MandateOptions
+) -> Prepared:
+    explicit = options.budget_usd is not None or options.limits == LimitsMode.OFF.value
+    p90 = prepared.forecast.envelope.p90_usd if prepared.forecast is not None else None
+    limits = forecast_limits(prepared.limits, explicit, p90, settings)
+    if limits == prepared.limits:
+        return prepared
+    return replace(
+        prepared,
+        limits=limits,
+        requested_limits=replace(
+            prepared.requested_limits, budget_usd=limits.budget_usd, soft_usd=limits.soft_usd
+        ),
+        spec=replace(prepared.spec, max_budget_usd=limits.budget_usd),
+    )
 
 
 def launch_turns(limits: RunLimits, engine: str) -> int:
@@ -721,7 +741,7 @@ class MandateFlow:
             pack_notes=pack_notes(request, protection, pack),
             requested_limits=requested,
         )
-        return stepped_prepared(prepared, large)
+        return stepped_prepared(forecast_capped(prepared, self._limits, options), large)
 
     def _launch_models(
         self, applied: Applied | None, options: MandateOptions, single: bool, fast: bool
@@ -926,7 +946,12 @@ class MandateFlow:
                 progress.publish(told)
             self._record_forecast(prepared, progress)
             steering = session_steering(
-                self._governor, prepared.launcher, prepared.spec, prepared.forecast, progress
+                self._governor,
+                prepared.launcher,
+                prepared.spec,
+                prepared.forecast,
+                progress,
+                prepared.limits.soft_usd if self._governor is not None else 0.0,
             )
             if prepared.docs is not None and prepared.docs.reason is not DocsReason.FORCED_ON:
                 progress.publish(note(Status.INFO, prepared.docs.message))

@@ -183,7 +183,15 @@ ENGLISH: dict[str, str] = {
     "limits.none": "no limits",
     "limits.active": "limits: {items}",
     "limits.join": "{first} · {rest}",
+    "launch.self_edit": (
+        "cuanta runs from an editable install inside this project, so the run can change the "
+        "cuanta that runs it; use --sandbox, or run an installed cuanta (npm or uv tool)"
+    ),
+    "live.over_p50": "spend passed the forecast median: {spent} of {mark}",
+    "live.over_p90": "spend passed the forecast P90: {spent} over {mark}",
     "limits.spend": "spend cap {cap}",
+    "limits.spend_forecast": "spend cap {cap}, closing turn at {soft} (forecast P90)",
+    "limits.soft_forecast": "closing turn at {soft} (forecast P90)",
     "limits.turns": "{turns} turns",
     "limits.turns_one": "1 turn",
     "limits.wall": "{minutes} min",
@@ -852,6 +860,10 @@ ENGLISH: dict[str, str] = {
     "governor.trigger.headroom": "two more steps would reach its limit",
     "governor.trigger.projection": "the cap would arrive before the plan is done",
     "governor.trigger.fresh_session": "a fresh session would cost less",
+    "governor.trigger.soft_cap": "the run reached its forecast P90",
+    "governor.finish_session": (
+        "session: the governor sent the finish turn ({trigger}) at ${spent} of the ${limit} cap"
+    ),
     "governor.codex_stop": (
         "{role}: the governor stopped Codex at an estimated ${spent} of its ${share} share"
     ),

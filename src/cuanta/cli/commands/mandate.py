@@ -638,6 +638,7 @@ def run_mandate_core(
     from cuanta.cli.live_run import RunProgress
 
     with RunProgress(session.presenter, session.options.verbose) as progress:
+        progress.watch(container.spend_watch(prepared.forecast))
         report = flow.run(prepared, progress, observer=progress.observe, verdict=verdict)
     status = Status.OK if report.ok else Status.FAIL
     session.presenter.publish(
@@ -658,7 +659,7 @@ def run_mandate(
     from cuanta.cli.document import Document, Line, Verbatim
     from cuanta.domain.limits import limits_payload
     from cuanta.domain.messages import english
-    from cuanta.domain.progress import Note, Status
+    from cuanta.domain.progress import Note, Status, note
 
     args, sourced = from_source(args)
     stated = [session.catalog.message(message) for message in (*request_notes, *sourced)]
@@ -667,6 +668,7 @@ def run_mandate(
     container.progress = session.presenter
     container.use_request_files(request_files(args))
     container.untyped_request = not args.type_stated
+    warned = None if args.sandbox else container.self_edit_note()
     try:
         options = _options(args)
         built = _build_request(session, container.mandate_service(container.shared_ledger()), args)
@@ -682,7 +684,10 @@ def run_mandate(
             _, prepared = _prepare(session, container, args, built)
             composed = prepared.composed
             shown = display_command(composed.command, composed.prompt)
-            notes = [english(message) for message in prepared.pack_notes]
+            notes = [
+                english(message)
+                for message in (*prepared.pack_notes, *((warned,) if warned is not None else ()))
+            ]
             planned = template_note(prepared)
             setup = [planned] if planned is not None else []
             told = [*stated, *team_lines(prepared), *shape_lines(choice, prepared.docs)]
@@ -727,6 +732,8 @@ def run_mandate(
             )
         for line in stated:
             session.presenter.publish(Note(Status.INFO, line))
+        if warned is not None:
+            session.presenter.publish(note(Status.WARN, warned))
         if per_role:
             return run_cross_engine(session, container, args, request, choice)
         if args.sandbox:
@@ -770,6 +777,7 @@ def run_sandbox(
     request, signatures = built
 
     def started(_: "MandateFlow", prepared: "Prepared") -> None:
+        progress.watch(container.spend_watch(prepared.forecast))
         publish_team(session, prepared, shape)
         label = session.catalog("run_output.start")
         session.presenter.publish(StepStarted("mandate", label))

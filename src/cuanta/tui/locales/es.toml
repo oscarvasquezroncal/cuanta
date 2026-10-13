@@ -1475,6 +1475,8 @@ improve = "Un modelo económico reescribe tu solicitud. Muestra el costo antes y
 "governor.trigger.headroom" = "dos pasos más llegarían a su límite"
 "governor.trigger.projection" = "el tope llegaría antes de terminar el plan"
 "governor.trigger.fresh_session" = "una sesión nueva costaría menos"
+"governor.trigger.soft_cap" = "la corrida llegó a su P90 previsto"
+"governor.finish_session" = "sesión: el gobernador envió el turno de cierre ({trigger}) con ${spent} del tope de ${limit}"
 "governor.codex_stop" = "{role}: el gobernador detuvo Codex con unos ${spent} estimados de su parte de ${share}"
 "governor.codex_stop_unsent" = "{role}: el gobernador no pudo detener Codex (${spent} estimados de ${share}); sigue hasta el final y el exceso sale del resto"
 "governor.resuming" = "{role}: un turno de cierre breve reanuda el hilo detenido"
@@ -1709,11 +1711,20 @@ cap_warning = "{engine} no puede aplicar el tope de gasto. El costo se comprueba
 step_cap_warning = "OpenCode se detiene cuando el costo declarado de los pasos alcanza el tope. Un paso en curso puede superarlo; un paso sin costo declarado detiene la ejecución."
 opencode_refused = "Las investigaciones y los roles de analista no están disponibles en OpenCode: esta integración no puede garantizar solo lectura y permitir comandos de graphify a la vez. Elige Codex o Claude para este rol."
 
+[msg.launch]
+self_edit = "cuanta se ejecuta desde una instalación editable dentro de este proyecto, así que la corrida puede cambiar el cuanta que la ejecuta; usa --sandbox o un cuanta instalado (npm o uv tool)"
+
+[msg.live]
+over_p50 = "el gasto pasó la mediana prevista: {spent} de {mark}"
+over_p90 = "el gasto pasó el P90 previsto: {spent} sobre {mark}"
+
 [msg.limits]
 none = "sin límites"
 active = "límites: {items}"
 join = "{first} · {rest}"
 spend = "tope de gasto {cap}"
+spend_forecast = "tope de gasto {cap}, turno de cierre a {soft} (P90 previsto)"
+soft_forecast = "turno de cierre a {soft} (P90 previsto)"
 turns = "{turns} turnos"
 turns_one = "1 turno"
 wall = "{minutes} min"
@@ -2007,6 +2018,7 @@ partial = "parcial"
 route = "El modelo cambió: {agent}: previsto {planned}, usado {actual}"
 main = "principal"
 live = "{elapsed} · {tokens} tokens · {role} · {tool} · {file}"
+live_forecast = "{spent} (previsto {forecast})"
 start = "En ejecución"
 tools = "{count} llamadas a herramientas"
 engine_default = "predeterminado del motor"

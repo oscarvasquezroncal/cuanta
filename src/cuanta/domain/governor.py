@@ -44,6 +44,7 @@ class Trigger(StrEnum):
     HEADROOM = "headroom"
     PROJECTION = "projection"
     FRESH_SESSION = "fresh_session"
+    SOFT_CAP = "soft_cap"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,11 +64,12 @@ class RolePlan:
     fixed_tokens: int = 0
     cards_tokens: int = 0
     rotatable: bool = False
+    soft_usd: float = 0.0
 
     @property
     def limit_usd(self) -> float:
         caps = [value for value in (self.share_usd, self.hard_cap_usd) if value > 0]
-        return min(caps) if caps else 0.0
+        return min(caps) if caps else self.soft_usd
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +384,8 @@ def stop_trigger(plan: RolePlan, projection: Projection) -> Trigger | None:
     spent = projection.spent_usd
     if spent is None or projection.limit_usd <= 0:
         return None
+    if plan.soft_usd > 0 and spent >= plan.soft_usd:
+        return Trigger.SOFT_CAP
     if plan.share_usd > 0 and spent >= FINISH_SHARE * plan.share_usd:
         return Trigger.SHARE
     upcoming = projection.next_usd

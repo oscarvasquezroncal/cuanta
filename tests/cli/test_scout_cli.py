@@ -476,7 +476,7 @@ def test_read_only_words_never_freeze_a_typed_writing_mandate_and_an_instruction
     evidence = backend_preview(
         root, *BALANCED, "--why", "Solo lectura: revisar app/services/interpreter.py:287"
     )
-    assert not any("read-only, because" in line for line in listed(evidence["pack_notes"]))
+    assert not any("read-only, because" in str(line) for line in listed(evidence["pack_notes"]))
     assert "Write" not in listed(agents_of(evidence)["python-senior"].get("disallowedTools", []))
     stopped = invoke(
         [

@@ -6,8 +6,8 @@ from types import TracebackType
 
 from cuanta.cli.presenters.base import Presenter
 from cuanta.domain.engine import EngineEvent
-from cuanta.domain.live_run import LiveRun
-from cuanta.domain.progress import Note, ProgressEvent, Status
+from cuanta.domain.live_run import LiveRun, SpendWatch
+from cuanta.domain.progress import Note, ProgressEvent, Status, note
 
 
 class RunProgress:
@@ -37,6 +37,10 @@ class RunProgress:
             return
         self._sink.publish(event)
 
+    def watch(self, spend: SpendWatch | None) -> None:
+        with self._lock:
+            self._live.spend = spend
+
     def observe(self, event: EngineEvent) -> None:
         with self._lock:
             self._live.observe(event)
@@ -45,6 +49,9 @@ class RunProgress:
         while not self._stop.is_set():
             with self._lock:
                 state = self._live.take(time.monotonic())
+                crossed = self._live.crossed()
+            for message in crossed:
+                self._sink.publish(note(Status.WARN, message))
             if state is not None:
                 self._sink.publish(state)
             self._stop.wait(0.5)

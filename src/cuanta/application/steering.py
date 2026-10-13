@@ -29,6 +29,7 @@ ROLE_FINISH = (
     f"{FINISH_TURN}. End with the JSON handoff and set its status to partial if anything remains."
 )
 TEAM_FINISH = f"{FINISH_TURN}. Start no more subagents; end with your report and list what remains."
+SESSION_FINISH = f"{FINISH_TURN}. End with your report and list what remains."
 THREAD_ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z._:-]{0,127}")
 CHECKPOINT_TURN = (
     "checkpoint: stop here and call no more tools. A fresh session of you continues this task "
@@ -151,6 +152,7 @@ def session_plan(
     cap: float,
     forecast: PlannedForecast | None,
     change: ChangePlan | None,
+    soft_usd: float = 0.0,
 ) -> RolePlan:
     plan = change if change is not None else ChangePlan()
     edits = () if plan.read_only else tuple(target.path for target in plan.edit)
@@ -164,15 +166,18 @@ def session_plan(
         price=model_price(setup, model, forecast, Role.ORCHESTRATOR),
         hard_cap_usd=cap,
         ttl_s=forecast.inputs.cache_ttl_s if forecast is not None else 0,
+        soft_usd=soft_usd,
     )
 
 
-def finish_message(reaction: Reaction, team: bool) -> Message:
+def finish_message(reaction: Reaction, team: bool, single: bool = False) -> Message:
     values = {
         "trigger": keyed("governor.trigger", reaction.trigger.value),
         "spent": f"{reaction.projection.spent_usd or 0.0:.4f}",
         "limit": f"{reaction.projection.limit_usd:.4f}",
     }
+    if single:
+        return msg("governor.finish_session", **values)
     if team:
         return msg("governor.finish_team", **values)
     return msg("governor.finish", role=reaction.role.value, **values)
@@ -188,12 +193,14 @@ class Steering:
         team: bool = False,
         run_id: str = "",
         halt: Callable[[Callable[[], float | None]], bool] | None = None,
+        single: bool = False,
     ) -> None:
         self._governor = governor
         self._role = role
         self._send = send
         self._progress = progress
         self._team = team
+        self._single = single
         self._halt = halt
         self._finished = False
         self.run_id = run_id
@@ -242,9 +249,11 @@ class Steering:
             self._record(reaction, sent, msg(key, **values))
         elif reaction.kind is ReactionKind.FINISH_NOW:
             self._finished = True
-            sent = self._send(TEAM_FINISH if self._team else ROLE_FINISH)
+            sent = self._send(
+                SESSION_FINISH if self._single else TEAM_FINISH if self._team else ROLE_FINISH
+            )
             shown = (
-                finish_message(reaction, self._team)
+                finish_message(reaction, self._team, self._single)
                 if sent
                 else msg("governor.finish_unsent", role=reaction.role.value)
             )
@@ -318,16 +327,27 @@ def session_steering(
     spec: LaunchSpec,
     forecast: PlannedForecast | None,
     progress: ProgressSink,
+    soft_usd: float = 0.0,
 ) -> Steering | None:
+    if setup is None:
+        return None
+    team = bool(spec.agents_file)
     if (
-        setup is None
-        or not spec.agents_file
-        or spec.max_budget_usd <= 0
-        or not launcher.steerable()
+        not launcher.steerable()
+        or (not team and soft_usd <= 0)
+        or (spec.max_budget_usd <= 0 and soft_usd <= 0)
     ):
         return None
-    plan = session_plan(setup, spec.model, spec.max_budget_usd, forecast, spec.change_plan)
+    plan = session_plan(
+        setup, spec.model, spec.max_budget_usd, forecast, spec.change_plan, soft_usd
+    )
     governor = Governor([plan], setup.clock, spec.cwd, setup.prices)
     return Steering(
-        governor, Role.ORCHESTRATOR, launcher.send_turn, progress, team=True, run_id=spec.run_id
+        governor,
+        Role.ORCHESTRATOR,
+        launcher.send_turn,
+        progress,
+        team=team,
+        run_id=spec.run_id,
+        single=not team,
     )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from cuanta.domain.config import Config
@@ -9,6 +9,8 @@ from cuanta.domain.messages import Message, counted, msg
 from cuanta.domain.pricing import dollars
 
 SECONDS_PER_MINUTE = 60.0
+DEFAULT_SOFT_P90 = 1.0
+DEFAULT_HARD_P90 = 2.0
 
 
 class LimitsMode(StrEnum):
@@ -21,6 +23,7 @@ class RunLimits:
     budget_usd: float = 0.0
     max_turns: int = 0
     wall_min: float = 0.0
+    soft_usd: float = 0.0
 
     @property
     def wall_s(self) -> float:
@@ -28,7 +31,7 @@ class RunLimits:
 
     @property
     def active(self) -> bool:
-        return self.budget_usd > 0 or self.max_turns > 0 or self.wall_min > 0
+        return self.budget_usd > 0 or self.max_turns > 0 or self.wall_min > 0 or self.soft_usd > 0
 
 
 NO_LIMITS = RunLimits()
@@ -46,6 +49,8 @@ class LimitRequest:
 class LimitSettings:
     mode: LimitsMode = LimitsMode.OFF
     fixed: RunLimits = NO_LIMITS
+    soft_p90: float = DEFAULT_SOFT_P90
+    hard_p90: float = DEFAULT_HARD_P90
 
 
 def parse_limits_mode(text: str) -> LimitsMode:
@@ -59,6 +64,8 @@ def limit_settings(config: Config) -> LimitSettings:
     return LimitSettings(
         parse_limits_mode(config.limits_mode),
         RunLimits(max(0.0, config.budget_usd), max(0, config.max_turns), max(0.0, config.wall_min)),
+        max(0.0, config.soft_p90),
+        max(0.0, config.hard_p90),
     )
 
 
@@ -84,6 +91,16 @@ def resolve_limits(
     return RunLimits(max(0.0, budget), max(0, turns), max(0.0, wall))
 
 
+def forecast_limits(
+    limits: RunLimits, explicit: bool, p90: float | None, settings: LimitSettings
+) -> RunLimits:
+    if explicit or limits.budget_usd > 0 or p90 is None or p90 <= 0:
+        return limits
+    hard = round(p90 * settings.hard_p90, 2) if settings.hard_p90 > 0 else 0.0
+    soft = round(p90 * settings.soft_p90, 2) if settings.soft_p90 > 0 else 0.0
+    return replace(limits, budget_usd=hard, soft_usd=min(soft, hard) if hard > 0 else soft)
+
+
 def _joined(parts: list[Message]) -> Message:
     if len(parts) == 1:
         return parts[0]
@@ -92,7 +109,17 @@ def _joined(parts: list[Message]) -> Message:
 
 def limits_message(limits: RunLimits) -> Message:
     parts: list[Message] = []
-    if limits.budget_usd > 0:
+    if limits.soft_usd > 0 and limits.budget_usd > 0:
+        parts.append(
+            msg(
+                "limits.spend_forecast",
+                cap=dollars(limits.budget_usd),
+                soft=dollars(limits.soft_usd),
+            )
+        )
+    elif limits.soft_usd > 0:
+        parts.append(msg("limits.soft_forecast", soft=dollars(limits.soft_usd)))
+    elif limits.budget_usd > 0:
         parts.append(msg("limits.spend", cap=dollars(limits.budget_usd)))
     if limits.max_turns > 0:
         parts.append(counted("limits.turns", "turns", limits.max_turns))
@@ -104,8 +131,11 @@ def limits_message(limits: RunLimits) -> Message:
 
 
 def limits_payload(limits: RunLimits) -> dict[str, float | int | None]:
-    return {
+    found: dict[str, float | int | None] = {
         "budget_usd": limits.budget_usd or None,
         "max_turns": limits.max_turns or None,
         "wall_min": limits.wall_min or None,
     }
+    if limits.soft_usd > 0:
+        found["soft_usd"] = limits.soft_usd
+    return found

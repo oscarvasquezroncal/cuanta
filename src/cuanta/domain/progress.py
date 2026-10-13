@@ -60,6 +60,9 @@ class LiveStatus:
     file: str
     phase: str = ""
     runner: str = ""
+    spent_usd: float | None = None
+    p50_usd: float | None = None
+    p90_usd: float | None = None
 
 
 ProgressEvent = StepStarted | StepFinished | Note | Metric | LiveStatus

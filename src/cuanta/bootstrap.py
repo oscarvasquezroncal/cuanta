@@ -136,6 +136,7 @@ if TYPE_CHECKING:
     from cuanta.domain.instinct import Choice
     from cuanta.domain.ledger import LedgerEvent, Run
     from cuanta.domain.limits import LimitSettings, RunLimits
+    from cuanta.domain.live_run import SpendWatch
     from cuanta.domain.mandate import MandateRequest
     from cuanta.domain.messages import Message
     from cuanta.domain.overhead import SessionOverhead
@@ -418,6 +419,24 @@ class Container:
             reports = RunReports(self.state_workspace())
             meta = reports.meta(run_id) or {}
             reports.save_meta(run_id, {**meta, "index_learning_error": type(error).__name__})
+
+    def self_edit_note(self) -> Message | None:
+        import cuanta
+        from cuanta.domain.self_edit import self_edit_note
+
+        package = Path(cuanta.__file__).resolve().parent
+        return self_edit_note(str(package), str(self.project.resolve()), os.name == "nt")
+
+    def spend_watch(self, forecast: PlannedForecast | None) -> SpendWatch:
+        from cuanta.adapters.system.prices import load_prices
+        from cuanta.domain.live_run import SpendWatch
+
+        envelope = forecast.envelope if forecast is not None else None
+        return SpendWatch(
+            envelope.p50_usd if envelope is not None else None,
+            envelope.p90_usd if envelope is not None else None,
+            load_prices(),
+        )
 
     def change_plan(self, request: MandateRequest) -> ChangePlan:
         from cuanta.domain.change_plan import evidence_frozen

@@ -22,6 +22,7 @@ from cuanta.bootstrap import Container
 from cuanta.domain.change_plan import ChangePlan, EditTarget
 from cuanta.domain.config import Config
 from cuanta.domain.engine import EngineEvent, EngineRequest
+from cuanta.domain.limits import NO_LIMITS
 from cuanta.domain.mandate import request_text
 from cuanta.domain.messages import msg
 from cuanta.domain.models import ModelEntry, Tier
@@ -257,6 +258,7 @@ def prepared(ledger: MemoryLedger, run_id: str) -> Prepared:
             docs=None,
             read_hooks=False,
             pack_notes=(),
+            limits=NO_LIMITS,
             preparation_seconds=None,
         ),
     )
@@ -330,6 +332,7 @@ def test_a_failed_native_forecast_is_reported_and_the_launch_goes_ahead() -> Non
             docs=None,
             read_hooks=False,
             pack_notes=(),
+            limits=NO_LIMITS,
             preparation_seconds=None,
         ),
     )

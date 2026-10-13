@@ -51,6 +51,8 @@ class Config:
     max_turns: int = 0
     wall_min: float = 0.0
     limits_mode: str = "off"
+    soft_p90: float = 1.0
+    hard_p90: float = 2.0
     cache_ttl_s: int = 0
     cache_auth: str = ""
     cache_engine_version: str = ""
@@ -128,6 +130,8 @@ KEY_MAP: dict[str, str] = {
     "limits.budget_usd": "budget_usd",
     "limits.max_turns": "max_turns",
     "limits.wall_min": "wall_min",
+    "limits.soft_p90": "soft_p90",
+    "limits.hard_p90": "hard_p90",
     "runs.limits": "limits_mode",
     "cache.ttl_s": "cache_ttl_s",
     "cache.auth": "cache_auth",
@@ -262,7 +266,15 @@ def _drop_invalid(layer: dict[str, object]) -> None:
         del layer["limits_mode"]
     if layer.get("verify_mode") not in (None, "auto", "affected", "full", "off"):
         del layer["verify_mode"]
-    for name in ("budget_usd", "max_turns", "wall_min", "verify_timeout_s", "instinct_timeout_s"):
+    for name in (
+        "budget_usd",
+        "max_turns",
+        "wall_min",
+        "soft_p90",
+        "hard_p90",
+        "verify_timeout_s",
+        "instinct_timeout_s",
+    ):
         amount = layer.get(name)
         if isinstance(amount, int | float) and amount < 0:
             del layer[name]

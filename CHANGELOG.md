@@ -7,6 +7,16 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
 ## [Unreleased]
 
 ### Added
+- **A cap from the forecast.** Without a spend cap, a run with a forecast P90 gets a soft cap
+  at the P90, where the governor sends the closing turn so the role finishes and hands over,
+  and a hard cap at 2×P90, sent as Claude Code's native `--max-budget-usd`. `[limits] soft_p90`
+  and `hard_p90` set the factors (0 turns either off); `--max-budget-usd`, `[limits]
+  budget_usd` and `--limits off` still win. The launch card shows both caps. This partly
+  reverts H1's no-cap default (CC-05).
+- **Dollars on the live line.** The live line shows the spend in dollars beside the forecast
+  P50–P90 and warns once when the spend passes each.
+- **Editable install warning.** When cuanta runs from an editable install inside the project it
+  is about to change, the launch warns and suggests `--sandbox` or an installed cuanta.
 - **Readable runs in both languages.** Console runs follow `ui.language` and global `--lang`.
   A six-row launch card and a short result lead with scope, effective limits, stop reason,
   partial accounting and executed roles. Engine guarantees, context-pack details and route

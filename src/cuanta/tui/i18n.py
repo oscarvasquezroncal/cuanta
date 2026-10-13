@@ -109,7 +109,7 @@ class Catalog:
             return self.message(
                 msg("verify.live", runner=state.runner, elapsed=f"{minutes}:{seconds:02d}")
             )
-        return self(
+        line = self(
             "run_output.live",
             elapsed=f"{minutes}:{seconds:02d}",
             tokens=f"{state.tokens:,}",
@@ -117,6 +117,17 @@ class Catalog:
             tool=state.tool or "–",
             file=state.file or "–",
         )
+        if state.spent_usd is None:
+            return line
+        spent = f"${state.spent_usd:.2f}"
+        if state.p50_usd is not None and state.p90_usd is not None:
+            spent = self(
+                "run_output.live_forecast",
+                spent=spent,
+                forecast=f"${state.p50_usd:.2f}–${state.p90_usd:.2f}",
+            )
+        elapsed, _, rest = line.partition(" · ")
+        return f"{elapsed} · {spent} · {rest}"
 
     def keyed(self, prefix: str, value: str) -> str:
         found = keyed(prefix, value)
