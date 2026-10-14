@@ -232,6 +232,13 @@ claude-agent-forge keeps its own changelog in `src/cuanta/assets/forge/CHANGELOG
   finished with problems`.
 
 ### Fixed
+- Two launches of the same run that overlap (docs beside the tester) no longer share
+  `.cuanta/listener.json`: each launch opens its own listener with its own record,
+  `listener-<run id>.json`, and only that launch closes it. The second launch used to reuse the
+  first one's listener, lost its telemetry when the first ended, and on Windows could stop with
+  `WinError 32` while that record was being deleted. `listener.json` is now only the background
+  listener's. Deleting a listener record never fails a finished run: a locked record is retried
+  briefly, then left in place and logged.
 - A check whose own Python module is not installed (`python -m build` without `build`, found by
   the acceptance bench) is skipped and logged instead of refusing the writer; a broken tool still
   refuses it.

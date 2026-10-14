@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator, Sequence
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -159,12 +160,14 @@ def test_scoped_listener_starts_and_stops(tmp_path: Path) -> None:
         tmp_path / ".cuanta", tmp_path, lambda: SqliteLedger(tmp_path / "l.db"), linger_s=0.0
     )
     assert not control.status().running
-    with control.scoped(next_free_port(47100)) as status:
+    with control.scoped(next_free_port(47100), "01SCOPED") as status:
         assert status.running
         assert status.owned
-        assert control.status().running
+        record = json.loads(control.run_record("01SCOPED").read_text(encoding="utf-8"))
+        assert record["port"] == status.port
+        assert not control.pidfile.exists()
     assert not control.status().running
-    assert not control.pidfile.exists()
+    assert not control.run_record("01SCOPED").exists()
 
 
 def test_scoped_listener_moves_on_when_a_free_looking_port_is_taken(
@@ -178,10 +181,10 @@ def test_scoped_listener_moves_on_when_a_free_looking_port_is_taken(
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as holder:
         holder.bind(("127.0.0.1", taken))
         holder.listen()
-        with control.scoped(taken) as status:
+        with control.scoped(taken, "01TAKEN") as status:
             assert status.running
             assert status.port != taken
-    assert not control.pidfile.exists()
+    assert not control.run_record("01TAKEN").exists()
 
 
 def test_stop_without_listener_is_false(tmp_path: Path) -> None:
@@ -291,7 +294,7 @@ def test_an_unmappable_record_is_dropped_counted_and_logged(
         linger_s=0.0,
         verbose=verbose,
     )
-    with control.scoped(next_free_port(47300)) as status:
+    with control.scoped(next_free_port(47300), "01UNMAPPABLE") as status:
         base = f"http://127.0.0.1:{status.port}"
         response = httpx.post(f"{base}/v1/logs", json=_redaction(), timeout=5)
         health = httpx.get(f"{base}/health", timeout=5).json()
@@ -356,7 +359,7 @@ def test_container_verbose_reaches_the_listener_log(
     _break_bash_records(monkeypatch)
     container = Container.for_project(tmp_path, verbose=True)
     try:
-        with container.listener(linger_s=0.0).scoped(next_free_port(47400)) as status:
+        with container.listener(linger_s=0.0).scoped(next_free_port(47400), "01VERBOSE") as status:
             response = httpx.post(
                 f"http://127.0.0.1:{status.port}/v1/logs", json=_redaction(), timeout=5
             )
@@ -661,10 +664,62 @@ def test_a_run_served_by_the_background_listener_names_its_log_when_verbose(
         verbose=verbose,
     )
     monkeypatch.setattr(control, "status", lambda: ListenerStatus(True, 4318, 4242))
-    with control.scoped(4318) as status:
+    with control.scoped(4318, "01BACKGROUND") as status:
         assert status.running
         assert not status.owned
     err = capfd.readouterr().err
     assert ("background listener on 127.0.0.1:4318" in err) is verbose
     assert (str(control.log_path) in err) is verbose
     assert not control.log_path.exists()
+
+
+def _locked_run_records(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    attempts: list[Path] = []
+    unlink = Path.unlink
+
+    def locked(path: Path, missing_ok: bool = False) -> None:
+        if path.name.startswith("listener-"):
+            attempts.append(path)
+            raise PermissionError(13, "in use by another process", str(path))
+        unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", locked)
+    return attempts
+
+
+def test_overlapping_launches_keep_their_own_listener_until_each_ends(tmp_path: Path) -> None:
+    control = LocalListenerControl(
+        tmp_path / ".cuanta", tmp_path, lambda: SqliteLedger(tmp_path / "l.db"), linger_s=0.0
+    )
+    payload = json.loads((OTLP / "claude_logs.json").read_text(encoding="utf-8"))
+    port = next_free_port(47500)
+    later = ExitStack()
+    with control.scoped(port, "01TESTER") as tester:
+        docs = later.enter_context(control.scoped(port, "01DOCS"))
+        assert tester.owned and docs.owned and docs.port != tester.port
+        assert control.run_record("01TESTER").exists() and control.run_record("01DOCS").exists()
+        assert not control.pidfile.exists() and not control.status().running
+    assert not control.run_record("01TESTER").exists()
+    with later:
+        response = httpx.post(f"http://127.0.0.1:{docs.port}/v1/logs", json=payload, timeout=5)
+    assert response.status_code == 200
+    assert not control.run_record("01DOCS").exists()
+    ledger = SqliteLedger(tmp_path / "l.db")
+    assert ledger.events(EventQuery(run_id="01TESTRUN"))
+    ledger.close()
+
+
+def test_a_locked_run_record_is_retried_briefly_then_left_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control = LocalListenerControl(
+        tmp_path / ".cuanta", tmp_path, lambda: SqliteLedger(tmp_path / "l.db"), linger_s=0.0
+    )
+    monkeypatch.setattr(listener_control, "UNLINK_PAUSE_S", 0.0)
+    attempts = _locked_run_records(monkeypatch)
+    with control.scoped(next_free_port(47600), "01LOCKED") as status:
+        assert status.running
+    assert attempts == [control.run_record("01LOCKED")] * listener_control.UNLINK_ATTEMPTS
+    assert control.run_record("01LOCKED").exists()
+    assert not control.status().running
+    assert "01LOCKED" in control.log_path.read_text(encoding="utf-8")

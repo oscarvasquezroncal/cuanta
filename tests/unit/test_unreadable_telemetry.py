@@ -154,10 +154,10 @@ class DrainingListener:
         return None
 
     @contextmanager
-    def scoped(self, port: int) -> Iterator[ListenerStatus]:
+    def scoped(self, port: int, run_id: str) -> Iterator[ListenerStatus]:
         yield ListenerStatus(True, port, 1, owned=True)
-        for run_id in self.runs:
-            self.ledger.add_events(_markers(run_id, 2))
+        for launched in self.runs:
+            self.ledger.add_events(_markers(launched, 2))
 
 
 class RecordingEngine(ReportingEngine):

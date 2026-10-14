@@ -346,12 +346,12 @@ class EngineLauncher:
         )
 
     @contextmanager
-    def _telemetry(self) -> Iterator[ListenerStatus | None]:
+    def _telemetry(self, run_id: str) -> Iterator[ListenerStatus | None]:
         if self._listener is None:
             with nullcontext(None) as nothing:
                 yield nothing
             return
-        with self._listener.scoped(self._port) as status:
+        with self._listener.scoped(self._port, run_id) as status:
             yield status
 
     def _save_metadata(self, run_id: str, spec: LaunchSpec) -> None:
@@ -436,7 +436,7 @@ class EngineLauncher:
             self._save_metadata(run_id, spec)
             if before is not None:
                 before(run_id)
-            with self._telemetry() as status:
+            with self._telemetry(run_id) as status:
                 implementation = self._implementation(replace(spec, run_id=run_id))
                 port = status.port if status is not None and status.running else None
                 request = self._steered(self.request(spec, run_id, parent, port), spec)

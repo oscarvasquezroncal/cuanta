@@ -24,9 +24,24 @@ from cuanta.ports.ledger import Ledger
 from cuanta.ports.listener import ListenerStatus
 
 PIDFILE = "listener.json"
+RUN_RECORD = "listener-{run_id}.json"
+UNLINK_ATTEMPTS = 5
+UNLINK_PAUSE_S = 0.1
 OUT_LOG_NAME = "listener.out.log"
 HEALTH_TIMEOUT_S = 1.0
 START_TIMEOUT_S = 15.0
+
+
+def discard(path: Path) -> bool:
+    for attempt in range(UNLINK_ATTEMPTS):
+        try:
+            path.unlink(missing_ok=True)
+        except PermissionError:
+            if attempt + 1 < UNLINK_ATTEMPTS:
+                time.sleep(UNLINK_PAUSE_S)
+        else:
+            return True
+    return False
 
 
 class LocalListenerControl:
@@ -51,6 +66,9 @@ class LocalListenerControl:
     def pidfile(self) -> Path:
         return self._dir / PIDFILE
 
+    def run_record(self, run_id: str) -> Path:
+        return self._dir / RUN_RECORD.format(run_id=run_id)
+
     @property
     def log_path(self) -> Path:
         return self._dir / LOGS_DIR / LISTENER_LOG_NAME
@@ -66,9 +84,9 @@ class LocalListenerControl:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def _write_record(self, port: int, pid: int, token: str) -> None:
+    def _write_record(self, port: int, pid: int, token: str, path: Path | None = None) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
-        self.pidfile.write_text(
+        (path or self.pidfile).write_text(
             json.dumps({"port": port, "pid": pid, "token": token}), encoding="utf-8"
         )
 
@@ -168,7 +186,7 @@ class LocalListenerControl:
             time.sleep(0.1)
         stopped = not self._probe(port).running
         if stopped:
-            self.pidfile.unlink(missing_ok=True)
+            self._discard(self.pidfile)
         return stopped
 
     def serve(self, port: int, on_ready: Callable[[ListenerStatus], None]) -> None:
@@ -183,10 +201,10 @@ class LocalListenerControl:
         finally:
             record = self._record()
             if record.get("pid") == os.getpid():
-                self.pidfile.unlink(missing_ok=True)
+                self._discard(self.pidfile)
 
     @contextmanager
-    def scoped(self, port: int) -> Iterator[ListenerStatus]:
+    def scoped(self, port: int, run_id: str) -> Iterator[ListenerStatus]:
         current = self.status()
         if current.running:
             self._notice.write(
@@ -200,12 +218,15 @@ class LocalListenerControl:
             port, self._ledger_factory, self._keep_prompts, token, log=self._log
         )
         listener.start()
-        self._write_record(listener.port, os.getpid(), token)
+        record = self.run_record(run_id)
+        self._write_record(listener.port, os.getpid(), token, record)
         try:
             yield ListenerStatus(True, listener.port, os.getpid(), owned=True)
         finally:
             time.sleep(self._linger)
             listener.stop()
-            record = self._record()
-            if record.get("token") == token:
-                self.pidfile.unlink(missing_ok=True)
+            self._discard(record)
+
+    def _discard(self, path: Path) -> None:
+        if not discard(path):
+            self._log.write(f"listener record left in place, still locked: {path.name}")
